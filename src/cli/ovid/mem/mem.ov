@@ -1,0 +1,131 @@
+package ovid/mem
+
+import ovid/io
+
+type Buf struct {
+  data i64
+  len i64
+  cap i64
+}
+
+func Eq(a i64, an i64, b i64, bn i64) bool {
+  if an != bn {
+    return false
+  }
+  var i i64 = 0
+  while i < an {
+    if load8(a + i) != load8(b + i) {
+      return false
+    }
+    i = i + 1
+  }
+  return true
+}
+
+func EqC(p i64, lit i64, n i64) bool {
+  return Eq(p, ovid/io.CLen(p), lit, n)
+}
+
+func Copy(dst i64, src i64, n i64) i64 {
+  var i i64 = 0
+  while i < n {
+    store8(dst + i, load8(src + i))
+    i = i + 1
+  }
+  return n
+}
+
+func New(io *ovid/io.Cap, cap i64) *Buf {
+  var raw i64 = ovid/io.Alloc(io, 24)
+  var b *Buf = raw as *Buf
+  b.data = ovid/io.Alloc(io, cap)
+  b.len = 0
+  b.cap = cap
+  return b
+}
+
+func Grow(io *ovid/io.Cap, b *Buf, need i64) i64 {
+  if (b.len + need) <= b.cap {
+    return 0
+  }
+  var nc i64 = b.cap * 2
+  if nc < 64 {
+    nc = 64
+  }
+  while (b.len + need) > nc {
+    nc = nc * 2
+  }
+  var nd i64 = ovid/io.Alloc(io, nc)
+  if nd == 0 {
+    return -1
+  }
+  Copy(nd, b.data, b.len)
+  b.data = nd
+  b.cap = nc
+  return 0
+}
+
+func WByte(io *ovid/io.Cap, b *Buf, c i64) i64 {
+  if Grow(io, b, 1) != 0 {
+    return -1
+  }
+  store8(b.data + b.len, c)
+  b.len = b.len + 1
+  return 0
+}
+
+func WBytes(io *ovid/io.Cap, b *Buf, p i64, n i64) i64 {
+  if Grow(io, b, n) != 0 {
+    return -1
+  }
+  Copy(b.data + b.len, p, n)
+  b.len = b.len + n
+  return 0
+}
+
+func FormatI64(dst i64, v i64) i64 {
+  if v == 0 {
+    store8(dst, 48)
+    return 1
+  }
+  var neg bool = false
+  var x i64 = v
+  if v < 0 {
+    neg = true
+    x = 0 - v
+  }
+  var tmp i64 = dst + 32
+  var n i64 = 0
+  while x > 0 {
+    var d i64 = x % 10
+    store8(tmp + n, 48 + d)
+    n = n + 1
+    x = x / 10
+  }
+  var o i64 = 0
+  if neg {
+    store8(dst, 45)
+    o = 1
+  }
+  var i i64 = 0
+  while i < n {
+    store8((dst + o) + i, load8(((tmp + n) - 1) - i))
+    i = i + 1
+  }
+  return o + n
+}
+
+func HexOut(dst i64, v i64, width i64) i64 {
+  var i i64 = width - 1
+  while i >= 0 {
+    var nib i64 = v & 15
+    var ch i64 = 48 + nib
+    if nib >= 10 {
+      ch = 87 + nib
+    }
+    store8(dst + i, ch)
+    v = v >> 4
+    i = i - 1
+  }
+  return width
+}

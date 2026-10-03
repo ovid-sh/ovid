@@ -1,0 +1,187 @@
+package ovid/sha
+
+import ovid/io
+import ovid/mem
+
+func Add(a i64, b i64) i64 {
+  return (a + b) & 0xFFFFFFFF
+}
+
+func Not32(x i64) i64 {
+  return (x ^ 0xFFFFFFFF) & 0xFFFFFFFF
+}
+
+func Rotr(x i64, n i64) i64 {
+  var v i64 = x & 0xFFFFFFFF
+  if n == 0 {
+    return v
+  }
+  var r i64 = (v >> n) & 0xFFFFFFFF
+  var l i64 = (v << (32 - n)) & 0xFFFFFFFF
+  return (r | l) & 0xFFFFFFFF
+}
+
+func Shr(x i64, n i64) i64 {
+  return (x >> n) & 0xFFFFFFFF
+}
+
+func LoadBE(p i64) i64 {
+  var b0 i64 = load8(p)
+  var b1 i64 = load8(p + 1)
+  var b2 i64 = load8(p + 2)
+  var b3 i64 = load8(p + 3)
+  return (((b0 << 24) | (b1 << 16)) | ((b2 << 8) | b3)) & 0xFFFFFFFF
+}
+
+func StoreBE(p i64, v i64) i64 {
+  store8(p, (v >> 24) & 255)
+  store8(p + 1, (v >> 16) & 255)
+  store8(p + 2, (v >> 8) & 255)
+  store8(p + 3, v & 255)
+  return 0
+}
+
+func HexDig(c i64) i64 {
+  if c >= 48 && c <= 57 {
+    return c - 48
+  }
+  if c >= 97 && c <= 102 {
+    return (c - 97) + 10
+  }
+  if c >= 65 && c <= 70 {
+    return (c - 65) + 10
+  }
+  return 0
+}
+
+func KWord(i i64) i64 {
+  var p i64 = strptr("428a2f9871374491b5c0fbcfe9b5dba53956c25b59f111f1923f82a4ab1c5ed5d807aa9812835b01243185be550c7dc372be5d7480deb1fe9bdc06a7c19bf174e49b69c1efbe47860fc19dc6240ca1cc2de92c6f4a7484aa5cb0a9dc76f988da983e5152a831c66db00327c8bf597fc7c6e00bf3d5a7914706ca63511429296727b70a852e1b21384d2c6dfc53380d13650a7354766a0abb81c2c92e92722c85a2bfe8a1a81a664bc24b8b70c76c51a3d192e819d6990624f40e3585106aa07019a4c1161e376c082748774c34b0bcb5391c0cb34ed8aa4a5b9cca4f682e6ff3748f82ee78a5636f84c878148cc7020890befffaa4506cebbef9a3f7c67178f2")
+  var o i64 = i * 8
+  var v i64 = 0
+  var k i64 = 0
+  while k < 8 {
+    v = (v * 16) + HexDig(load8((p + o) + k))
+    k = k + 1
+  }
+  return v & 0xFFFFFFFF
+}
+
+func Block(h i64, chunk i64, w i64) i64 {
+  var i i64 = 0
+  while i < 16 {
+    store64(w + (i * 8), LoadBE(chunk + (i * 4)))
+    i = i + 1
+  }
+  while i < 64 {
+    var w15 i64 = load64(w + ((i - 15) * 8))
+    var w2 i64 = load64(w + ((i - 2) * 8))
+    var s0 i64 = (Rotr(w15, 7) ^ Rotr(w15, 18)) ^ Shr(w15, 3)
+    var s1 i64 = (Rotr(w2, 17) ^ Rotr(w2, 19)) ^ Shr(w2, 10)
+    var acc i64 = Add(load64(w + ((i - 16) * 8)), s0)
+    acc = Add(acc, load64(w + ((i - 7) * 8)))
+    acc = Add(acc, s1)
+    store64(w + (i * 8), acc)
+    i = i + 1
+  }
+  var a i64 = load64(h + 0)
+  var b i64 = load64(h + 8)
+  var c i64 = load64(h + 16)
+  var d i64 = load64(h + 24)
+  var e i64 = load64(h + 32)
+  var f i64 = load64(h + 40)
+  var g i64 = load64(h + 48)
+  var hh i64 = load64(h + 56)
+  i = 0
+  while i < 64 {
+    var sig1 i64 = (Rotr(e, 6) ^ Rotr(e, 11)) ^ Rotr(e, 25)
+    var ch i64 = ((e & f) ^ (Not32(e) & g)) & 0xFFFFFFFF
+    var t1 i64 = Add(hh, sig1)
+    t1 = Add(t1, ch)
+    t1 = Add(t1, KWord(i))
+    t1 = Add(t1, load64(w + (i * 8)))
+    var sig0 i64 = (Rotr(a, 2) ^ Rotr(a, 13)) ^ Rotr(a, 22)
+    var maj i64 = (((a & b) ^ (a & c)) ^ (b & c)) & 0xFFFFFFFF
+    var t2 i64 = Add(sig0, maj)
+    hh = g
+    g = f
+    f = e
+    e = Add(d, t1)
+    d = c
+    c = b
+    b = a
+    a = Add(t1, t2)
+    i = i + 1
+  }
+  store64(h + 0, Add(load64(h + 0), a))
+  store64(h + 8, Add(load64(h + 8), b))
+  store64(h + 16, Add(load64(h + 16), c))
+  store64(h + 24, Add(load64(h + 24), d))
+  store64(h + 32, Add(load64(h + 32), e))
+  store64(h + 40, Add(load64(h + 40), f))
+  store64(h + 48, Add(load64(h + 48), g))
+  store64(h + 56, Add(load64(h + 56), hh))
+  return 0
+}
+
+func Init(h i64) i64 {
+  store64(h + 0, 0x6a09e667)
+  store64(h + 8, 0xbb67ae85)
+  store64(h + 16, 0x3c6ef372)
+  store64(h + 24, 0xa54ff53a)
+  store64(h + 32, 0x510e527f)
+  store64(h + 40, 0x9b05688c)
+  store64(h + 48, 0x1f83d9ab)
+  store64(h + 56, 0x5be0cd19)
+  return 0
+}
+
+func Sum(io *ovid/io.Cap, data i64, n i64, out i64) i64 {
+  var h i64 = ovid/io.Alloc(io, 64)
+  var w i64 = ovid/io.Alloc(io, 512)
+  var pad i64 = ovid/io.Alloc(io, 128)
+  Init(h)
+  var off i64 = 0
+  while (off + 64) <= n {
+    Block(h, data + off, w)
+    off = off + 64
+  }
+  var tlen i64 = n - off
+  ovid/mem.Copy(pad, data + off, tlen)
+  store8(pad + tlen, 128)
+  tlen = tlen + 1
+  if tlen > 56 {
+    while tlen < 64 {
+      store8(pad + tlen, 0)
+      tlen = tlen + 1
+    }
+    Block(h, pad, w)
+    tlen = 0
+  }
+  while tlen < 56 {
+    store8(pad + tlen, 0)
+    tlen = tlen + 1
+  }
+  var bits i64 = n * 8
+  var bi i64 = 7
+  while bi >= 0 {
+    store8((pad + 56) + bi, bits & 255)
+    bits = bits >> 8
+    bi = bi - 1
+  }
+  Block(h, pad, w)
+  var i i64 = 0
+  while i < 8 {
+    StoreBE(out + (i * 4), load64(h + (i * 8)))
+    i = i + 1
+  }
+  return 0
+}
+
+func Hex(dst i64, raw i64) i64 {
+  var i i64 = 0
+  while i < 32 {
+    ovid/mem.HexOut(dst + (i * 2), load8(raw + i), 2)
+    i = i + 1
+  }
+  return 64
+}

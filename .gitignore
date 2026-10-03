@@ -1,0 +1,6 @@
+bin/
+*.exe
+/ovid
+/ovid-self
+/tmpbin/
+agent-tools/
