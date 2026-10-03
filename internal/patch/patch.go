@@ -3,7 +3,6 @@ package patch
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 
 	"ovid/internal/ir"
 )
@@ -20,15 +19,18 @@ type File struct {
 }
 
 type Response struct {
-	Ok               bool   `json:"ok"`
-	Error            string `json:"error,omitempty"`
-	Revision         string `json:"revision,omitempty"`
-	BaseRevision     string `json:"baseRevision,omitempty"`
-	CurrentRevision  string `json:"currentRevision,omitempty"`
-	Detail           string `json:"detail,omitempty"`
+	Ok              bool   `json:"ok"`
+	Error           string `json:"error,omitempty"`
+	Revision        string `json:"revision,omitempty"`
+	BaseRevision    string `json:"baseRevision,omitempty"`
+	CurrentRevision string `json:"currentRevision,omitempty"`
+	Detail          string `json:"detail,omitempty"`
 }
 
 func Apply(prog *ir.Program, current string, raw []byte) (*ir.Program, Response) {
+	if err := ir.ValidateJSON(raw); err != nil {
+		return nil, Response{Error: "bad_patch", Detail: err.Error()}
+	}
 	var f File
 	if err := json.Unmarshal(raw, &f); err != nil {
 		return nil, Response{Ok: false, Error: "bad_patch", Detail: err.Error()}
@@ -42,18 +44,34 @@ func Apply(prog *ir.Program, current string, raw []byte) (*ir.Program, Response)
 			Error:           "stale_patch",
 			BaseRevision:    f.BaseRevision,
 			CurrentRevision: current,
+			Revision:        current,
 		}
 	}
 	if len(f.Ops) == 0 {
 		return nil, Response{Ok: false, Error: "bad_patch", Detail: "no ops"}
 	}
+	encoded, err := ir.Marshal(prog)
+	if err != nil {
+		return nil, Response{Error: "bad_patch", Detail: err.Error()}
+	}
+	prog, err = ir.Unmarshal(encoded)
+	if err != nil {
+		return nil, Response{Error: "bad_patch", Detail: err.Error()}
+	}
 	for _, op := range f.Ops {
 		if op.Op != "replace" {
-			return nil, Response{Ok: false, Error: "bad_patch", Detail: "unsupported op " + op.Op}
+			return nil, Response{Ok: false, Error: "bad_patch", Detail: "unsupported op"}
 		}
 		if err := prog.Replace(op.ID, op.Node); err != nil {
-			return nil, Response{Ok: false, Error: "bad_patch", Detail: fmt.Sprintf("%s: %s", op.ID, err.Error())}
+			return nil, Response{Ok: false, Error: "bad_patch", Detail: err.Error()}
 		}
+	}
+	encoded, err = ir.Marshal(prog)
+	if err == nil {
+		err = ir.ValidateStructure(encoded)
+	}
+	if err != nil {
+		return nil, Response{Error: "bad_patch", Detail: err.Error()}
 	}
 	return prog, Response{Ok: true}
 }

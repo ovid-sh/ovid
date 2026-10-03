@@ -1,105 +1,175 @@
 # Ovid
 
-Ovid v0 is a compiler that can compile its own command-line tool. The tool is one static Linux x86-64 binary named `ovid`, with four commands: `query`, `patch`, `check`, and `build`.
+Ovid is a small self-hosting language and compiler built around an agent editing
+loop: discover a program, inspect exact nodes, submit a revision-checked patch,
+and verify the result. The canonical program is plain JSON (`ovid.json`).
+The CLI produces structured JSON and builds one static Linux x86-64 executable.
 
-The program on disk is plain JSON (`ovid.json`). That file is the source an agent reads and writes. `PROJECTION` is a plain-text view for a person. Agents do not need it. There is no private binary program format and no agent protocol beyond the JSON file and these four commands.
+Agent usage experiments and remaining limitations are recorded in
+[docs/AGENT_FEEDBACK.md](docs/AGENT_FEEDBACK.md). The command and program contract
+is described in [docs/PROTOCOL.md](docs/PROTOCOL.md).
 
-## v0 is done when
-
-1. `check` is faster than a cold `go build` with an empty build cache, and prints one JSON fact per line.
-2. An agent can fix a broken program without reading the projection: `query`, `patch`, `check`. `query` returns stable ids. `patch` addresses those ids and is rejected when the file's revision changed.
-3. `build` emits one static binary, and that binary compiles this CLI once, without invoking `go`.
-
-Measured on this tree (wall clock, `date +%s%3N`):
-
-- Cold `GOCACHE=$(mktemp -d) go build -o /tmp/ovid-cold ./cmd/ovid`: 2681 ms. The standard library in `GOROOT` was already built.
-- `ovid check prog` from the binary that `ovid` itself emitted: 318 ms, 292 JSON facts, exit 0.
-- That same binary, with `PATH` pointing at an empty directory, compiled `prog` to a 172920-byte static executable. `check` of that result matches.
-
-## Build
-
-The first compiler is Go. Go builds the machine. The machine's first program is this CLI, written in Ovid under `src/cli`.
+## Build the tool
 
 ```sh
 go build -o bin/ovid-boot ./cmd/ovid
 bin/ovid-boot build prog -o bin/ovid
-```
-
-`bin/ovid` is a static `ET_EXEC` ELF. It does not link libc and it does not call `go`. Compile the CLI again with it:
-
-```sh
 bin/ovid build prog -o bin/ovid2
 bin/ovid2 check prog
 ```
 
-Regenerate `prog/` after editing `src/cli` (one `.ov` file per package directory):
+Go builds the first compiler. The generated `ovid` compiles the CLI again without
+invoking Go, linking libc, or requiring another tool on `PATH`.
+
+## Start an agent workspace
+
+```sh
+bin/ovid init demo
+bin/ovid query demo
+bin/ovid query demo --name main --kind func
+bin/ovid check demo
+bin/ovid build demo -o bin/demo
+```
+
+`init` creates a valid entry function returning zero and the required runtime
+ABI. It refuses to overwrite an existing `ovid.json`, including a symlink.
+Only `ovid.json` is a program input; `PROJECTION` and package marker directories
+are optional. `.ovid.lock` coordinates writers and must not be deleted while
+tools are operating on the module.
+
+## Discover, inspect, edit, verify
+
+```text
+ovid init <dir>
+ovid query <dir> [--id ID] [--name NAME] [--pkg PATH] [--kind KIND]
+                 [--calls-to FUNCTION_ID] [--full] [--limit N] [--offset N]
+ovid patch <dir> <patch.json|->
+ovid check <dir> [--facts]
+ovid build <dir> -o <file>
+```
+
+Discovery returns compact declaration summaries, including when selecting a
+package. It defaults to 50 matches per page. `--id` retrieves a full node;
+`--full` explicitly includes payloads for other selections. `--name`, `--kind`,
+and `--calls-to` also search nested nodes. `--limit 0` requests all matches.
+
+Every query includes the module revision, total match count, page information,
+and `nextOffset` if another page exists. Consume pages only while their revisions
+agree. Nested matches identify their enclosing function with `funcId` and `func`.
+
+To rename a function, query its ID, query `--calls-to ID --full`, and replace the
+definition and all affected calls in one patch. IDs are opaque identities: retain
+them when changing a name or body, and use fresh unique IDs for newly added nodes.
+Never reconstruct an ID from a current name or source position.
+
+`patch` accepts a file or standard input (`-`). Use the revision and target ID
+returned by `query`; a replacement must retain the target object's ID:
+
+```json
+{
+  "baseRevision": "<revision returned by query>",
+  "ops": [
+    {
+      "op": "replace",
+      "id": "<expression ID>",
+      "node": {"id": "<expression ID>", "op": "int", "value": 42}
+    }
+  ]
+}
+```
+
+All addressable object kinds can be replaced, including packages, types, fields,
+constants, functions, parameters, statements, and expressions. To add or remove
+an item, replace its containing node's list while retaining unaffected IDs.
+There is currently no dedicated insert, delete, or automatic rename operation.
+
+The complete patch holds a module lock and publishes the new file by atomic
+rename. Invalid or stale patches do not modify the program. A stale patch exits
+2 and returns `baseRevision`, `currentRevision`, and `revision` (the current one).
+Query again and re-evaluate the edit before retrying. The lock is shared by the
+Go and self-hosted implementations.
+
+Patch validation checks structure and identity, and permits type-invalid drafts
+so an agent can repair them. Run `check` after editing. Type errors identify the
+offending expression and include `expected` and `actual` types. The default
+output is one JSON diagnostic per line followed by a summary with the checked
+revision. Success produces only the summary. `--facts` additionally emits
+implementation-specific semantic facts.
+
+`build` checks the program first. Success emits exactly one object:
+`{"ok":true,"output":"...","bytes":N}`. An unsuccessful build emits diagnostics
+or a structured command error and exits 1.
+
+## Program storage and source authoring
+
+`prog/ovid.json` is the checked-in canonical CLI program. `src/cli` contains the
+bootstrap authoring form, one `.ov` file per package directory. The runtime CLI
+reads JSON, not `.ov` files.
+
+After editing the compiler's `.ov` source:
 
 ```sh
 go run ./bootstrap/front -root src/cli -out prog -entry ovid/cli
+bin/ovid-boot build prog -o bin/ovid
 bin/ovid check prog
 ```
 
-`src/` is authoring input for the bootstrap. `ovid` reads the module directory (`prog/`), not the `.ov` files.
+The frontend records the last generated revision in `BOOTSTRAP.json`, under the
+same module lock as patches. It refuses to overwrite a canonical program changed
+by an agent since the last import. To intentionally discard those canonical
+changes, rerun the import with `-replace`. Importing over a pre-existing module
+without bootstrap provenance also requires that explicit flag.
 
-Tests for the Go bootstrap:
+Reimport preserves matching declaration IDs and unambiguous AST identities across
+common insertions, reordering, and scalar edits. Ambiguous matches get fresh
+opaque IDs. Arbitrary text edits cannot guarantee identity preservation; canonical
+patches retain exact identities. An unchanged reimport retains the same IDs and
+canonical bytes.
+
+The bootstrap emits a human `PROJECTION` stamped with its revision, plus legacy
+package markers. Patches update only `ovid.json`; a projection can therefore be
+stale. Neither projections, markers, nor bootstrap provenance affect `check` or
+`build`. If an interrupted import leaves provenance behind the canonical file,
+the next import refuses it; inspect the files before explicitly using `-replace`.
+
+The revision is SHA-256 of the file bytes with the 64 hexadecimal digits after
+the first `"revision": "` replaced by zeros. It protects an exact byte snapshot,
+including formatting. Query and patch reject a mismatching stored revision;
+use the tools to stamp changes rather than manually rewriting the canonical file.
+
+## Language and runtime
+
+The language has `i64`, `bool`, and one level of pointer (`*Struct`). Struct
+fields occupy 8 bytes. There are no struct values as locals, parameters, or
+results; no globals, function pointers, methods, macros, generics, or implicit
+allocation. Functions take at most six parameters and return one value.
+
+Operators follow Go precedence; `>>` is arithmetic. Strings use interned,
+NUL-terminated bytes (`strptr`, `strlen`). Memory operations are `load8`, `load32`,
+`load64`, `store8`, `store64`, and `ovid/io.Alloc`. The runtime currently uses a
+fixed 128 MiB bump heap. Raw pointers and allocation failure require care.
+
+`main` has signature `(io *ovid/io.Cap) i64`. The `Cap` ABI is exactly five `i64`
+fields in order: `argc`, `argv`, `heap`, `used`, `size`. Only package `ovid/io` can
+use the `syscall` intrinsic. This package boundary is not yet a fine-grained
+resource permission system.
+
+Import paths identify packages included in the JSON document. There is no
+registry or network fetching. [COMMITMENTS.md](COMMITMENTS.md) records the later
+HTTP work; it is not implemented.
+
+## Validation
 
 ```sh
 go test ./...
 ```
 
-## Commands
+The suite builds both public CLIs from current sources, including a self-compiled
+second generation. It exercises canonical-only initialization, diagnosis and
+repair, caller-guided rename, pagination, malformed input, revision conflicts,
+and competing Go/Ovid writers. Source-reimport tests check identity preservation
+and protection of canonical edits. JSON tests cover escaping, Unicode surrogate
+pairs, duplicate keys, trailing input, and signed integer boundaries.
 
-```text
-ovid check <dir>
-ovid query <dir> [--id ID] [--name NAME] [--pkg PATH] [--kind KIND]
-ovid patch <dir> <patch.json>
-ovid build <dir> -o <file>
-```
-
-`check` writes one JSON object per line. The last line is a summary. A type error is an `"fact":"error"` line and a non-zero exit. `build` runs the same check first and, on success, writes one JSON object: `{"ok":true,"output":"...","bytes":N}`.
-
-`query` with no filters lists packages, types, consts, and funcs. Any filter also returns statements, expressions, and the raw JSON `node` for each match. The object starts with the computed revision:
-
-```json
-{"revision": "<64 hex>", "matches": [{"id": "ex:demo.main:2", "kind": "expr", "pkg": "demo", "name": "", "node": {}}]}
-```
-
-Ids come from source order: `pkg:`, `im:`, `ty:`, `fld:`, `cn:`, `fn:`, `pa:`, `st:`, `ex:`. They stay put as long as that order stays put.
-
-`patch` applies `replace` ops. The patch names the revision `query` returned. If the file has moved on, the command exits 2 and does not write:
-
-```json
-{"ok":false,"error":"stale_patch","revision":"<current 64 hex>"}
-```
-
-```json
-{"baseRevision":"<64 hex>","ops":[{"op":"replace","id":"ex:demo.main:2","node":{"id":"ex:demo.main:2","op":"int","value":2}}]}
-```
-
-A successful patch rewrites `ovid.json` and stamps a new revision. It does not rewrite `PROJECTION`. The projection is not an input to the compiler.
-
-## What a module looks like
-
-```text
-prog/ovid.json          canonical program
-prog/PROJECTION         human text, required to exist
-prog/<import path>/PACKAGE
-```
-
-The revision is the SHA-256 of the file bytes with the 64 hex digits after the first `"revision": "` replaced by zeros. `check` and `patch` recompute that hash. A stored revision that does not match is an error.
-
-`build` emits one static binary. `main` is `(io *ovid/io.Cap) i64`. The runtime maps a heap and passes the capability in. There is no global allocator. `syscall` exists only in package `ovid/io`.
-
-## Imports
-
-The import path is the package name. One directory is one package. There are no header files.
-
-v0 resolves those paths on the local filesystem, relative to the module root. There is no package registry and no network fetch. See `COMMITMENTS.md` for the later HTTP lookup.
-
-## Language, briefly
-
-`i64`, `bool`, and one level of pointer (`*Struct`). Struct fields are 8 bytes. No struct values as locals, parameters, or results. No globals, function pointers, methods, macros, generics, or implicit allocation. At most six parameters. The result is one type. Operators follow Go precedence. `>>` is arithmetic. Strings are interned, NUL-terminated bytes (`strptr`, `strlen`). Memory is `load8`, `load32`, `load64`, `store8`, `store64`, and `ovid/io.Alloc`.
-
-## Not in v0
-
-No HTTP client, no URL imports, no package server, no language server. Those are recorded in `COMMITMENTS.md` and are not implemented here.
+The test harness discovers this checkout instead of requiring `/workspace`.
+Executable tests target Linux x86-64.

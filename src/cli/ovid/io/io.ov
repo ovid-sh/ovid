@@ -103,6 +103,10 @@ func FstatAt(path i64, buf i64) i64 {
   return syscall(SYS_FSTATAT, AT_FDCWD, path, buf, 0, 0, 0)
 }
 
+func LstatAt(path i64, buf i64) i64 {
+  return syscall(SYS_FSTATAT, AT_FDCWD, path, buf, 256, 0, 0)
+}
+
 func ReadFile(io *Cap, path i64, pathn i64, outp i64, outn i64) i64 {
   var cs i64 = CStr(io, path, pathn)
   var fd i64 = Open(cs, O_RDONLY, 0)
@@ -163,4 +167,153 @@ func IsDir(io *Cap, path i64, pathn i64) i64 {
     return 1
   }
   return 0
+}
+
+// Hold this descriptor until the complete module transaction has finished.
+// The lock file's inode is permanent so independently launched tools agree.
+func Lock(path i64) i64 {
+  var fd i64 = Open(path, 66, 420)
+  if fd < 0 {
+    return -1
+  }
+  var rc i64 = syscall(73, fd, 2, 0, 0, 0, 0)
+  while rc == -4 {
+    rc = syscall(73, fd, 2, 0, 0, 0, 0)
+  }
+  if rc < 0 {
+    Close(fd)
+    return -1
+  }
+  return fd
+}
+
+func Sync(fd i64) i64 {
+  return syscall(74, fd, 0, 0, 0, 0, 0)
+}
+
+func Unlink(path i64) i64 {
+  return syscall(87, path, 0, 0, 0, 0, 0)
+}
+
+func Rename(old i64, new i64) i64 {
+  return syscall(82, old, new, 0, 0, 0, 0)
+}
+
+func AppendDecimal(dst i64, n i64) i64 {
+  var divisor i64 = 1
+  while (n / divisor) >= 10 {
+    divisor = divisor * 10
+  }
+  var count i64 = 0
+  while divisor > 0 {
+    store8(dst + count, 48 + ((n / divisor) % 10))
+    count = count + 1
+    divisor = divisor / 10
+  }
+  return count
+}
+
+// Write and sync a new inode before exposing it to readers. The caller holds
+// .ovid.lock; a unique O_EXCL temporary avoids following an existing symlink.
+func AtomicFile(io *Cap, dir i64, path i64, data i64, n i64) i64 {
+  var pathn i64 = CLen(path)
+  var temp i64 = Alloc(io, pathn + 80)
+  var i i64 = 0
+  while i < pathn {
+    store8(temp + i, load8(path + i))
+    i = i + 1
+  }
+  var suffix i64 = strptr(".tmp-")
+  i = 0
+  while i < 5 {
+    store8(temp + pathn + i, load8(suffix + i))
+    i = i + 1
+  }
+  var pos i64 = pathn + 5
+  pos = pos + AppendDecimal(temp + pos, syscall(39, 0, 0, 0, 0, 0, 0))
+  store8(temp + pos, 45)
+  pos = pos + 1
+  var attempt i64 = 0
+  var fd i64 = -1
+  while attempt < 100 && fd < 0 {
+    var end i64 = pos + AppendDecimal(temp + pos, attempt)
+    store8(temp + end, 0)
+    fd = Open(temp, 193, 420)
+    if fd < 0 && fd != -17 {
+      return -1
+    }
+    attempt = attempt + 1
+  }
+  if fd < 0 {
+    return -1
+  }
+  var stat i64 = Alloc(io, 256)
+  var mode i64 = 420
+  if FstatAt(path, stat) == 0 {
+    mode = load32(stat + 24) & 511
+  }
+  var rc i64 = syscall(91, fd, mode, 0, 0, 0, 0)
+  if rc == 0 {
+    rc = Write(fd, data, n)
+  }
+  if rc == 0 {
+    rc = Sync(fd)
+  }
+  var closed i64 = Close(fd)
+  if rc != 0 || closed != 0 {
+    Unlink(temp)
+    return -1
+  }
+  var dfd i64 = Open(dir, 65536, 0)
+  if dfd < 0 {
+    Unlink(temp)
+    return -1
+  }
+  if Rename(temp, path) != 0 {
+    Close(dfd)
+    Unlink(temp)
+    return -1
+  }
+  rc = Sync(dfd)
+  Close(dfd)
+  return rc
+}
+
+func ReadAll(io *Cap, fd i64, outp i64, outn i64) i64 {
+  var cap i64 = 4096
+  var buf i64 = Alloc(io, cap + 1)
+  var n i64 = 0
+  while true {
+    if buf == 0 {
+      return -1
+    }
+    if n == cap {
+      cap = cap * 2
+      var next i64 = Alloc(io, cap + 1)
+      if next == 0 {
+        return -1
+      }
+      var i i64 = 0
+      while i < n {
+        store8(next + i, load8(buf + i))
+        i = i + 1
+      }
+      buf = next
+    }
+    var got i64 = Read(fd, buf + n, cap - n)
+    if got == 0 {
+      store8(buf + n, 0)
+      store64(outp, buf)
+      store64(outn, n)
+      return 0
+    }
+    if got < 0 {
+      if got != -4 {
+        return -1
+      }
+    } else {
+      n = n + got
+    }
+  }
+  return -1
 }

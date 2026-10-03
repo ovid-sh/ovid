@@ -153,7 +153,22 @@ func PushCP(io *ovid/io.Cap, meta i64, cp i64) i64 {
     return PushB(io, meta, cp)
   }
   if cp >= 0xD800 && cp <= 0xDFFF {
-    return PushB(io, meta, 63)
+    return -1
+  }
+  if cp > 0x10FFFF {
+    return -1
+  }
+  if cp >= 0x10000 {
+    if PushB(io, meta, 240 + (cp >> 18)) != 0 {
+      return -1
+    }
+    if PushB(io, meta, 128 + ((cp >> 12) & 63)) != 0 {
+      return -1
+    }
+    if PushB(io, meta, 128 + ((cp >> 6) & 63)) != 0 {
+      return -1
+    }
+    return PushB(io, meta, 128 + (cp & 63))
   }
   if cp < 2048 {
     if PushB(io, meta, 192 + (cp >> 6)) != 0 {
@@ -214,6 +229,28 @@ func ParseString(io *ovid/io.Cap, d *Doc) i64 {
           cp = (cp * 16) + hv
           k = k + 1
         }
+        if cp >= 0xD800 && cp <= 0xDBFF {
+          if d.pos + 6 > d.n {
+            return Fail(d)
+          }
+          if Bump(d) != 92 || Bump(d) != 117 {
+            return Fail(d)
+          }
+          var low i64 = 0
+          var j i64 = 0
+          while j < 4 {
+            var hv i64 = HexVal(Bump(d))
+            if hv < 0 {
+              return Fail(d)
+            }
+            low = low * 16 + hv
+            j = j + 1
+          }
+          if low < 0xDC00 || low > 0xDFFF {
+            return Fail(d)
+          }
+          cp = 0x10000 + ((cp - 0xD800) * 1024) + (low - 0xDC00)
+        }
         if PushCP(io, meta, cp) != 0 {
           return Fail(d)
         }
@@ -245,6 +282,9 @@ func ParseString(io *ovid/io.Cap, d *Doc) i64 {
         }
       }
     } else {
+      if c < 32 {
+        return Fail(d)
+      }
       if PushB(io, meta, c) != 0 {
         return Fail(d)
       }
@@ -256,21 +296,53 @@ func ParseString(io *ovid/io.Cap, d *Doc) i64 {
 func ParseNum(io *ovid/io.Cap, d *Doc) i64 {
   var src i64 = d.pos
   var neg bool = false
-  if Peek(d) == 45 {
+  if load8(d.data + d.pos) == 45 {
     neg = true
     Bump(d)
   }
-  if Peek(d) < 48 || Peek(d) > 57 {
+  if d.pos >= d.n {
     return Fail(d)
   }
-  var val i64 = 0
-  while Peek(d) >= 48 && Peek(d) <= 57 {
-    val = (val * 10) + (Bump(d) - 48)
+  var first i64 = load8(d.data + d.pos)
+  if first < 48 || first > 57 {
+    return Fail(d)
   }
+  var limit i64 = 0 - 9223372036854775807
   if neg {
+    limit = limit - 1
+  }
+  var cutoff i64 = limit / 10
+  var val i64 = 0
+  var digits i64 = 0
+  var scanning bool = true
+  while d.pos < d.n && scanning {
+    var ch i64 = load8(d.data + d.pos)
+    if ch < 48 || ch > 57 {
+      scanning = false
+    } else {
+      if first == 48 && digits > 0 {
+        return Fail(d)
+      }
+      var digit i64 = ch - 48
+      if val < cutoff {
+        return Fail(d)
+      }
+      val = val * 10
+      if val < limit + digit {
+        return Fail(d)
+      }
+      val = val - digit
+      digits = digits + 1
+      Bump(d)
+    }
+  }
+  if !neg {
     val = 0 - val
   }
   var v i64 = NewVal(io, 2, src)
+  if v == 0 {
+    return Fail(d)
+  }
   store64(v + 8, val)
   EndVal(v, d)
   return v
@@ -385,6 +457,9 @@ func ParseObj(io *ovid/io.Cap, d *Doc) i64 {
     if key == 0 {
       return Fail(d)
     }
+    if Get(v, StrP(key), StrN(key)) != 0 {
+      return Fail(d)
+    }
     if Peek(d) != 58 {
       return Fail(d)
     }
@@ -422,7 +497,35 @@ func Parse(io *ovid/io.Cap, data i64, n i64) i64 {
   if v == 0 || d.err != 0 {
     return 0
   }
+  Skip(d)
+  if d.pos != d.n {
+    return 0
+  }
   return v
+}
+
+// Quote writes one JSON string, including quotes and every control escape.
+func Quote(io *ovid/io.Cap, b *ovid/mem.Buf, p i64, n i64) i64 {
+  ovid/mem.WByte(io, b, 34)
+  var i i64 = 0
+  var hex i64 = strptr("0123456789abcdef")
+  while i < n {
+    var ch i64 = load8(p + i)
+    if ch == 34 || ch == 92 {
+      ovid/mem.WByte(io, b, 92)
+      ovid/mem.WByte(io, b, ch)
+    } else {
+      if ch < 32 {
+        ovid/mem.WBytes(io, b, strptr("\\u00"), strlen("\\u00"))
+        ovid/mem.WByte(io, b, load8(hex + (ch >> 4)))
+        ovid/mem.WByte(io, b, load8(hex + (ch & 15)))
+      } else {
+        ovid/mem.WByte(io, b, ch)
+      }
+    }
+    i = i + 1
+  }
+  return ovid/mem.WByte(io, b, 34)
 }
 
 func Get(obj i64, key i64, kn i64) i64 {

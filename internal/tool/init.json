@@ -1,0 +1,79 @@
+{
+  "revision": "0000000000000000000000000000000000000000000000000000000000000000",
+  "module": "app",
+  "entry": "app",
+  "packages": [
+    {
+      "id": "pkg:app",
+      "path": "app",
+      "imports": [
+        {
+          "id": "im:app:ovid/io",
+          "path": "ovid/io"
+        }
+      ],
+      "funcs": [
+        {
+          "id": "fn:app.main",
+          "name": "main",
+          "params": [
+            {
+              "id": "pa:app.main.io",
+              "name": "io",
+              "type": "*ovid/io.Cap"
+            }
+          ],
+          "result": "i64",
+          "body": [
+            {
+              "id": "st:app.main:1",
+              "op": "return",
+              "val": {
+                "id": "ex:app.main:1",
+                "op": "int",
+                "value": 0
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "pkg:ovid/io",
+      "path": "ovid/io",
+      "types": [
+        {
+          "id": "ty:ovid/io.Cap",
+          "name": "Cap",
+          "fields": [
+            {
+              "id": "fd:ovid/io.Cap.argc",
+              "name": "argc",
+              "type": "i64"
+            },
+            {
+              "id": "fd:ovid/io.Cap.argv",
+              "name": "argv",
+              "type": "i64"
+            },
+            {
+              "id": "fd:ovid/io.Cap.heap",
+              "name": "heap",
+              "type": "i64"
+            },
+            {
+              "id": "fd:ovid/io.Cap.used",
+              "name": "used",
+              "type": "i64"
+            },
+            {
+              "id": "fd:ovid/io.Cap.size",
+              "name": "size",
+              "type": "i64"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"ovid/internal/compile"
@@ -11,11 +12,20 @@ import (
 
 func mustSrc(t *testing.T, rel string) string {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join("/workspace/src/cli", rel))
+	b, err := os.ReadFile(filepath.Join(repositoryRoot(t), "src", "cli", rel))
 	if err != nil {
 		t.Fatal(err)
 	}
 	return string(b)
+}
+
+func repositoryRoot(t *testing.T) string {
+	t.Helper()
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("locate repository sources")
+	}
+	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
 }
 
 func runFiles(t *testing.T, files map[string]string, args []string) (string, int) {
@@ -73,7 +83,7 @@ func main(io *ovid/io.Cap) i64 {
 }
 
 func TestAsmExit(t *testing.T) {
-	outPath := "/tmp/ovid-exit.elf"
+	outPath := filepath.Join(t.TempDir(), "ovid-exit.elf")
 	_, code := runFiles(t, map[string]string{
 		"ovid/io":  mustSrc(t, "ovid/io/io.ov"),
 		"ovid/mem": mustSrc(t, "ovid/mem/mem.ov"),

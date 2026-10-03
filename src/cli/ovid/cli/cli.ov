@@ -22,6 +22,17 @@ type Q struct {
   gkn i64
   full i64
   first i64
+  deep i64
+  funcv i64
+  funcidv i64
+  callsp i64
+  callsn i64
+  callpkgv i64
+  callnamev i64
+  limit i64
+  offset i64
+  total i64
+  returned i64
 }
 
 func SGet(obj i64, lit i64, n i64) i64 {
@@ -61,22 +72,18 @@ func Join(io *ovid/io.Cap, dir i64, dirn i64, suf i64, sufn i64) i64 {
 }
 
 func Usage(io *ovid/io.Cap) i64 {
-  ovid/io.Stdout(strptr("{\"ok\":false,\"error\":\"usage\",\"detail\":\"ovid check <dir> | query <dir> [--id|--name|--pkg|--kind] | patch <dir> <file> | build <dir> -o <file>\"}\n"), strlen("{\"ok\":false,\"error\":\"usage\",\"detail\":\"ovid check <dir> | query <dir> [--id|--name|--pkg|--kind] | patch <dir> <file> | build <dir> -o <file>\"}\n"))
+  ovid/io.Stdout(strptr("{\"ok\":false,\"error\":\"usage\",\"detail\":\"ovid init <dir> | check <dir> | query <dir> [--id ID] [--name NAME] [--pkg PATH] [--kind KIND] [--calls-to ID] [--full] [--limit N] [--offset N] | patch <dir> <file> | build <dir> -o <file>\"}\n"), strlen("{\"ok\":false,\"error\":\"usage\",\"detail\":\"ovid init <dir> | check <dir> | query <dir> [--id ID] [--name NAME] [--pkg PATH] [--kind KIND] [--calls-to ID] [--full] [--limit N] [--offset N] | patch <dir> <file> | build <dir> -o <file>\"}\n"))
   return 1
 }
 
 func Fail(io *ovid/io.Cap, code i64, coden i64, detail i64, dn i64) i64 {
   ovid/io.Stdout(strptr("{\"ok\":false,\"error\":"), strlen("{\"ok\":false,\"error\":"))
   var b *ovid/mem.Buf = ovid/mem.New(io, 1024)
-  ovid/mem.WByte(io, b, 34)
-  ovid/mem.WBytes(io, b, code, coden)
-  ovid/mem.WByte(io, b, 34)
+  ovid/json.Quote(io, b, code, coden)
   ovid/io.Stdout(b.data, b.len)
   ovid/io.Stdout(strptr(",\"detail\":"), strlen(",\"detail\":"))
   b.len = 0
-  ovid/mem.WByte(io, b, 34)
-  ovid/mem.WBytes(io, b, detail, dn)
-  ovid/mem.WByte(io, b, 34)
+  ovid/json.Quote(io, b, detail, dn)
   ovid/mem.WByte(io, b, 125)
   ovid/mem.WByte(io, b, 10)
   ovid/io.Stdout(b.data, b.len)
@@ -98,7 +105,12 @@ func CmdCheck(io *ovid/io.Cap, dir i64) i64 {
   if root == 0 {
     return Fail(io, strptr("parse"), strlen("parse"), strptr("ovid.json"), strlen("ovid.json"))
   }
-  var nerr i64 = ovid/check.Run(io, root, load64(pp), load64(nn), dir, ovid/io.CLen(dir))
+  var nerr i64 = 0
+  if ovid/io.Argc(io) == 4 {
+    nerr = ovid/check.RunFacts(io, root, load64(pp), load64(nn))
+  } else {
+    nerr = ovid/check.Run(io, root, load64(pp), load64(nn), dir, ovid/io.CLen(dir))
+  }
   if nerr != 0 {
     return 1
   }
@@ -110,27 +122,7 @@ func WLitQ(q *Q, p i64, n i64) i64 {
 }
 
 func WStrQ(q *Q, v i64) i64 {
-  ovid/mem.WByte(q.io, q.b, 34)
-  var p i64 = JStrP(v)
-  var n i64 = JStrN(v)
-  var i i64 = 0
-  while i < n {
-    var ch i64 = load8(p + i)
-    if ch == 34 || ch == 92 {
-      ovid/mem.WByte(q.io, q.b, 92)
-      ovid/mem.WByte(q.io, q.b, ch)
-    } else {
-      if ch == 10 {
-        ovid/mem.WByte(q.io, q.b, 92)
-        ovid/mem.WByte(q.io, q.b, 110)
-      } else {
-        ovid/mem.WByte(q.io, q.b, ch)
-      }
-    }
-    i = i + 1
-  }
-  ovid/mem.WByte(q.io, q.b, 34)
-  return 0
+  return ovid/json.Quote(q.io, q.b, JStrP(v), JStrN(v))
 }
 
 func SetKind(q *Q, p i64, n i64) i64 {
@@ -139,7 +131,7 @@ func SetKind(q *Q, p i64, n i64) i64 {
   return 0
 }
 
-func Pass(q *Q, idv i64, namev i64, pkgv i64) bool {
+func Pass(q *Q, idv i64, namev i64, pkgv i64, node i64) bool {
   if q.idn != 0 {
     if !ovid/json.IsLit(idv, q.idp, q.idn) {
       return false
@@ -160,7 +152,7 @@ func Pass(q *Q, idv i64, namev i64, pkgv i64) bool {
       return false
     }
   }
-  if q.full == 0 {
+  if q.deep == 0 {
     if ovid/mem.Eq(q.gkp, q.gkn, strptr("stmt"), strlen("stmt")) {
       return false
     }
@@ -177,13 +169,41 @@ func Pass(q *Q, idv i64, namev i64, pkgv i64) bool {
       return false
     }
   }
+  if q.callsn != 0 {
+    if q.callnamev == 0 {
+      return false
+    }
+    if !ovid/json.IsLit(SGet(node, strptr("op"), strlen("op")), strptr("call"), strlen("call")) {
+      return false
+    }
+    var target i64 = SGet(node, strptr("pkg"), strlen("pkg"))
+    if JStrN(target) == 0 {
+      target = pkgv
+    }
+    if !ovid/mem.Eq(JStrP(target), JStrN(target), JStrP(q.callpkgv), JStrN(q.callpkgv)) {
+      return false
+    }
+    if !ovid/json.IsLit(SGet(node, strptr("func"), strlen("func")), JStrP(q.callnamev), JStrN(q.callnamev)) {
+      return false
+    }
+  }
   return true
 }
 
 func Emit(q *Q, idv i64, namev i64, pkgv i64, node i64) i64 {
-  if !Pass(q, idv, namev, pkgv) {
+  if !Pass(q, idv, namev, pkgv, node) {
     return 0
   }
+  q.total = q.total + 1
+  if q.total <= q.offset {
+    return 0
+  }
+  if q.limit != 0 {
+    if q.returned >= q.limit {
+      return 0
+    }
+  }
+  q.returned = q.returned + 1
   if q.first == 0 {
     ovid/io.Stdout(strptr(","), strlen(","))
   }
@@ -197,8 +217,21 @@ func Emit(q *Q, idv i64, namev i64, pkgv i64, node i64) i64 {
   ovid/mem.WByte(q.io, q.b, 34)
   WLitQ(q, strptr(",\"pkg\":"), strlen(",\"pkg\":"))
   WStrQ(q, pkgv)
-  WLitQ(q, strptr(",\"name\":"), strlen(",\"name\":"))
-  WStrQ(q, namev)
+  if JStrN(namev) != 0 {
+    WLitQ(q, strptr(",\"name\":"), strlen(",\"name\":"))
+    WStrQ(q, namev)
+  }
+  if q.funcv != 0 {
+    WLitQ(q, strptr(",\"func\":"), strlen(",\"func\":"))
+    WStrQ(q, q.funcv)
+    WLitQ(q, strptr(",\"funcId\":"), strlen(",\"funcId\":"))
+    WStrQ(q, q.funcidv)
+  }
+  var op i64 = SGet(node, strptr("op"), strlen("op"))
+  if op != 0 {
+    WLitQ(q, strptr(",\"op\":"), strlen(",\"op\":"))
+    WStrQ(q, op)
+  }
   if q.full != 0 {
     if node != 0 {
       WLitQ(q, strptr(",\"node\":"), strlen(",\"node\":"))
@@ -287,6 +320,8 @@ func QueryProg(q *Q, root i64) i64 {
   }
   var p i64 = ovid/json.Child(pkgs)
   while p != 0 {
+    q.funcv = 0
+    q.funcidv = 0
     var path i64 = SGet(p, strptr("path"), strlen("path"))
     SetKind(q, strptr("package"), strlen("package"))
     Emit(q, SGet(p, strptr("id"), strlen("id")), path, path, p)
@@ -330,8 +365,12 @@ func QueryProg(q *Q, root i64) i64 {
     if fns != 0 {
       var f i64 = ovid/json.Child(fns)
       while f != 0 {
+        q.funcv = 0
+        q.funcidv = 0
         SetKind(q, strptr("func"), strlen("func"))
         Emit(q, SGet(f, strptr("id"), strlen("id")), SGet(f, strptr("name"), strlen("name")), path, f)
+        q.funcv = SGet(f, strptr("name"), strlen("name"))
+        q.funcidv = SGet(f, strptr("id"), strlen("id"))
         var params i64 = SGet(f, strptr("params"), strlen("params"))
         if params != 0 {
           var pa i64 = ovid/json.Child(params)
@@ -341,7 +380,7 @@ func QueryProg(q *Q, root i64) i64 {
             pa = ovid/json.Next(pa)
           }
         }
-        if q.full != 0 {
+        if q.deep != 0 {
           WalkArr(q, SGet(f, strptr("body"), strlen("body")), path)
         }
         f = ovid/json.Next(f)
@@ -350,6 +389,80 @@ func QueryProg(q *Q, root i64) i64 {
     p = ovid/json.Next(p)
   }
   return 0
+}
+
+func QueryNumber(p i64) i64 {
+  var n i64 = ovid/io.CLen(p)
+  if n == 0 {
+    return -1
+  }
+  var value i64 = 0
+  var i i64 = 0
+  while i < n {
+    var digit i64 = load8(p + i) - 48
+    if digit < 0 || digit > 9 {
+      return -1
+    }
+    value = (value * 10) + digit
+    if value > 2147483647 {
+      return -1
+    }
+    i = i + 1
+  }
+  return value
+}
+
+func ResolveCalls(q *Q, root i64) i64 {
+  if q.callsn == 0 {
+    return 0
+  }
+  var pkgs i64 = SGet(root, strptr("packages"), strlen("packages"))
+  if pkgs == 0 {
+    return 0
+  }
+  var p i64 = ovid/json.Child(pkgs)
+  while p != 0 {
+    var fns i64 = SGet(p, strptr("funcs"), strlen("funcs"))
+    if fns != 0 {
+      var f i64 = ovid/json.Child(fns)
+      while f != 0 {
+        if ovid/json.IsLit(SGet(f, strptr("id"), strlen("id")), q.callsp, q.callsn) {
+          q.callpkgv = SGet(p, strptr("path"), strlen("path"))
+          q.callnamev = SGet(f, strptr("name"), strlen("name"))
+        }
+        f = ovid/json.Next(f)
+      }
+    }
+    p = ovid/json.Next(p)
+  }
+  return 0
+}
+
+func WNumQ(q *Q, n i64) i64 {
+  var p i64 = ovid/io.Alloc(q.io, 64)
+  var size i64 = ovid/mem.FormatI64(p, n)
+  return ovid/mem.WBytes(q.io, q.b, p, size)
+}
+
+func QueryMeta(q *Q) i64 {
+  q.b.len = 0
+  WLitQ(q, strptr("],\"total\":"), strlen("],\"total\":"))
+  WNumQ(q, q.total)
+  WLitQ(q, strptr(",\"offset\":"), strlen(",\"offset\":"))
+  WNumQ(q, q.offset)
+  WLitQ(q, strptr(",\"limit\":"), strlen(",\"limit\":"))
+  WNumQ(q, q.limit)
+  WLitQ(q, strptr(",\"returned\":"), strlen(",\"returned\":"))
+  WNumQ(q, q.returned)
+  WLitQ(q, strptr(",\"hasMore\":"), strlen(",\"hasMore\":"))
+  if (q.offset + q.returned) < q.total {
+    WLitQ(q, strptr("true,\"nextOffset\":"), strlen("true,\"nextOffset\":"))
+    WNumQ(q, q.offset + q.returned)
+  } else {
+    WLitQ(q, strptr("false"), strlen("false"))
+  }
+  WLitQ(q, strptr("}\n"), strlen("}\n"))
+  return ovid/io.Stdout(q.b.data, q.b.len)
 }
 
 func CmdQuery(io *ovid/io.Cap, dir i64) i64 {
@@ -368,75 +481,93 @@ func CmdQuery(io *ovid/io.Cap, dir i64) i64 {
   if ovid/check.Hash(io, load64(pp), load64(nn), stored, comp) < 0 {
     return Fail(io, strptr("revision"), strlen("revision"), strptr("missing revision"), strlen("missing revision"))
   }
-  var raw i64 = ovid/io.Alloc(io, 128)
+  if !ovid/mem.Eq(stored, 64, comp, 64) {
+    return Fail(io, strptr("revision_mismatch"), strlen("revision_mismatch"), strptr("stored revision does not match file bytes"), strlen("stored revision does not match file bytes"))
+  }
+  var raw i64 = ovid/io.Alloc(io, 208)
   var i i64 = 0
-  while i < 128 {
+  while i < 208 {
     store8(raw + i, 0)
     i = i + 1
   }
   var q *Q = raw as *Q
   q.io = io
-  q.b = ovid/mem.New(io, 1048576)
+  q.b = ovid/mem.New(io, 4096)
   q.file = load64(pp)
   q.first = 1
+  q.limit = 50
   i = 3
   while i < ovid/io.Argc(io) {
-    if ArgEq(io, i, strptr("--id"), strlen("--id")) {
-      i = i + 1
-      if i >= ovid/io.Argc(io) {
+    if ArgEq(io, i, strptr("--full"), strlen("--full")) {
+      q.full = 1
+    } else {
+      if (i + 1) >= ovid/io.Argc(io) {
         return Usage(io)
       }
-      q.idp = ovid/io.Arg(io, i)
-      q.idn = ovid/io.CLen(q.idp)
-    } else {
+      var value i64 = ovid/io.Arg(io, i + 1)
+      var n i64 = ovid/io.CLen(value)
+      if n == 0 {
+        return Usage(io)
+      }
+      var known i64 = 0
+      if ArgEq(io, i, strptr("--id"), strlen("--id")) {
+        q.idp = value
+        q.idn = n
+        known = 1
+      }
       if ArgEq(io, i, strptr("--name"), strlen("--name")) {
-        i = i + 1
-        if i >= ovid/io.Argc(io) {
+        q.namep = value
+        q.namen = n
+        known = 1
+      }
+      if ArgEq(io, i, strptr("--pkg"), strlen("--pkg")) {
+        q.pkgp = value
+        q.pkgn = n
+        known = 1
+      }
+      if ArgEq(io, i, strptr("--kind"), strlen("--kind")) {
+        q.kindp = value
+        q.kindn = n
+        known = 1
+      }
+      if ArgEq(io, i, strptr("--calls-to"), strlen("--calls-to")) {
+        q.callsp = value
+        q.callsn = n
+        known = 1
+      }
+      if ArgEq(io, i, strptr("--limit"), strlen("--limit")) {
+        q.limit = QueryNumber(value)
+        if q.limit < 0 {
           return Usage(io)
         }
-        q.namep = ovid/io.Arg(io, i)
-        q.namen = ovid/io.CLen(q.namep)
-      } else {
-        if ArgEq(io, i, strptr("--pkg"), strlen("--pkg")) {
-          i = i + 1
-          if i >= ovid/io.Argc(io) {
-            return Usage(io)
-          }
-          q.pkgp = ovid/io.Arg(io, i)
-          q.pkgn = ovid/io.CLen(q.pkgp)
-        } else {
-          if ArgEq(io, i, strptr("--kind"), strlen("--kind")) {
-            i = i + 1
-            if i >= ovid/io.Argc(io) {
-              return Usage(io)
-            }
-            q.kindp = ovid/io.Arg(io, i)
-            q.kindn = ovid/io.CLen(q.kindp)
-          } else {
-            return Usage(io)
-          }
-        }
+        known = 1
       }
+      if ArgEq(io, i, strptr("--offset"), strlen("--offset")) {
+        q.offset = QueryNumber(value)
+        if q.offset < 0 {
+          return Usage(io)
+        }
+        known = 1
+      }
+      if known == 0 {
+        return Usage(io)
+      }
+      i = i + 1
     }
     i = i + 1
   }
   if q.idn != 0 {
     q.full = 1
   }
-  if q.namen != 0 {
-    q.full = 1
+  if q.idn != 0 || q.namen != 0 || q.kindn != 0 || q.callsn != 0 {
+    q.deep = 1
   }
-  if q.pkgn != 0 {
-    q.full = 1
-  }
-  if q.kindn != 0 {
-    q.full = 1
-  }
-  ovid/io.Stdout(strptr("{\"revision\": \""), strlen("{\"revision\": \""))
+  ResolveCalls(q, root)
+  ovid/io.Stdout(strptr("{\"revision\":\""), strlen("{\"revision\":\""))
   ovid/io.Stdout(comp, 64)
   ovid/io.Stdout(strptr("\",\"matches\":["), strlen("\",\"matches\":["))
   QueryProg(q, root)
-  ovid/io.Stdout(strptr("]}\n"), strlen("]}\n"))
+  QueryMeta(q)
   return 0
 }
 
@@ -507,7 +638,187 @@ func MkParent(io *ovid/io.Cap, path i64) i64 {
   return 0
 }
 
+// Schema kinds: program=0, package=1, import=2, const=3, type=4,
+// field/param=5, function=6, statement/expression=7.
+func PatchKey(kind i64, p i64, n i64) i64 {
+  if kind != 0 && ovid/mem.Eq(p, n, strptr("id"), strlen("id")) {
+    return 1
+  }
+  if kind == 0 {
+    if ovid/mem.Eq(p, n, strptr("revision"), strlen("revision")) || ovid/mem.Eq(p, n, strptr("module"), strlen("module")) || ovid/mem.Eq(p, n, strptr("entry"), strlen("entry")) { return 1 }
+    if ovid/mem.Eq(p, n, strptr("packages"), strlen("packages")) { return 101 }
+  }
+  if kind == 1 || kind == 2 {
+    if ovid/mem.Eq(p, n, strptr("path"), strlen("path")) { return 1 }
+  }
+  if kind == 1 {
+    if ovid/mem.Eq(p, n, strptr("imports"), strlen("imports")) { return 102 }
+    if ovid/mem.Eq(p, n, strptr("consts"), strlen("consts")) { return 103 }
+    if ovid/mem.Eq(p, n, strptr("types"), strlen("types")) { return 104 }
+    if ovid/mem.Eq(p, n, strptr("funcs"), strlen("funcs")) { return 106 }
+  }
+  if kind >= 3 && kind <= 7 {
+    if ovid/mem.Eq(p, n, strptr("name"), strlen("name")) { return 1 }
+  }
+  if kind == 3 || kind == 5 || kind == 7 {
+    if ovid/mem.Eq(p, n, strptr("type"), strlen("type")) { return 1 }
+  }
+  if kind == 3 {
+    if ovid/mem.Eq(p, n, strptr("value"), strlen("value")) { return 2 }
+  }
+  if kind == 4 {
+    if ovid/mem.Eq(p, n, strptr("fields"), strlen("fields")) { return 105 }
+  }
+  if kind == 6 {
+    if ovid/mem.Eq(p, n, strptr("result"), strlen("result")) { return 1 }
+    if ovid/mem.Eq(p, n, strptr("params"), strlen("params")) { return 105 }
+    if ovid/mem.Eq(p, n, strptr("body"), strlen("body")) { return 107 }
+  }
+  if kind == 7 {
+    if ovid/mem.Eq(p, n, strptr("op"), strlen("op")) || ovid/mem.Eq(p, n, strptr("pkg"), strlen("pkg")) || ovid/mem.Eq(p, n, strptr("func"), strlen("func")) { return 1 }
+    if ovid/mem.Eq(p, n, strptr("value"), strlen("value")) { return 3 }
+    if ovid/mem.Eq(p, n, strptr("left"), strlen("left")) || ovid/mem.Eq(p, n, strptr("right"), strlen("right")) || ovid/mem.Eq(p, n, strptr("arg"), strlen("arg")) || ovid/mem.Eq(p, n, strptr("base"), strlen("base")) || ovid/mem.Eq(p, n, strptr("addr"), strlen("addr")) || ovid/mem.Eq(p, n, strptr("val"), strlen("val")) || ovid/mem.Eq(p, n, strptr("cond"), strlen("cond")) { return 207 }
+    if ovid/mem.Eq(p, n, strptr("args"), strlen("args")) || ovid/mem.Eq(p, n, strptr("then"), strlen("then")) || ovid/mem.Eq(p, n, strptr("else"), strlen("else")) || ovid/mem.Eq(p, n, strptr("body"), strlen("body")) { return 107 }
+  }
+  return 0
+}
+
+func PatchString(obj i64, p i64, n i64) bool {
+  var v i64 = SGet(obj, p, n)
+  if v == 0 { return false }
+  return ovid/json.Kind(v) == 3
+}
+
+func PatchWalk(node i64, kind i64, table i64) i64 {
+  if node == 0 { return 1 }
+  if ovid/json.Kind(node) != 5 { return 1 }
+  if kind == 0 {
+    if !PatchString(node, strptr("revision"), strlen("revision")) || !PatchString(node, strptr("module"), strlen("module")) || !PatchString(node, strptr("entry"), strlen("entry")) { return 1 }
+  }
+  if kind == 1 || kind == 2 {
+    if !PatchString(node, strptr("path"), strlen("path")) { return 1 }
+  }
+  if kind >= 3 && kind <= 6 {
+    if !PatchString(node, strptr("name"), strlen("name")) { return 1 }
+  }
+  if kind == 3 || kind == 5 {
+    if !PatchString(node, strptr("type"), strlen("type")) { return 1 }
+  }
+  if kind == 3 {
+    var v i64 = SGet(node, strptr("value"), strlen("value"))
+    if v == 0 { return 1 }
+    if ovid/json.Kind(v) != 2 { return 1 }
+  }
+  if kind == 6 {
+    if !PatchString(node, strptr("result"), strlen("result")) { return 1 }
+  }
+  if kind == 7 {
+    if !PatchString(node, strptr("op"), strlen("op")) { return 1 }
+  }
+  if kind != 0 {
+    var id i64 = SGet(node, strptr("id"), strlen("id"))
+    if !PatchString(node, strptr("id"), strlen("id")) { return 2 }
+    if JStrN(id) == 0 { return 2 }
+    if table != 0 {
+      var slot i64 = ovid/check.HashStr(JStrP(id), JStrN(id))
+      var probes i64 = 0
+      var rec i64 = table + (slot * 16)
+      while load64(rec) != 0 {
+        if ovid/mem.Eq(load64(rec), load64(rec + 8), JStrP(id), JStrN(id)) { return 3 }
+        probes = probes + 1
+        if probes >= 262144 { return 1 }
+        slot = (slot + 1) & 262143
+        rec = table + (slot * 16)
+      }
+      store64(rec, JStrP(id))
+      store64(rec + 8, JStrN(id))
+    }
+  }
+  var child i64 = ovid/json.Child(node)
+  while child != 0 {
+    var cls i64 = PatchKey(kind, load64(child + 40), load64(child + 48))
+    var ck i64 = ovid/json.Kind(child)
+    if cls == 0 { return 1 }
+    if cls == 1 && ck != 3 { return 1 }
+    if cls == 2 && ck != 2 { return 1 }
+    if cls == 3 && (ck < 1 || ck > 3) { return 1 }
+    if cls >= 100 && cls < 200 && ck != 0 {
+      if ck != 4 { return 1 }
+      var item i64 = ovid/json.Child(child)
+      while item != 0 {
+        var rc i64 = PatchWalk(item, cls - 100, table)
+        if rc != 0 { return rc }
+        item = ovid/json.Next(item)
+      }
+    }
+    if cls >= 200 && ck != 0 {
+      var rc i64 = PatchWalk(child, cls - 200, table)
+      if rc != 0 { return rc }
+    }
+    child = ovid/json.Next(child)
+  }
+  return 0
+}
+
+func PatchValidate(io *ovid/io.Cap, root i64) i64 {
+  var table i64 = ovid/io.Alloc(io, 4194304)
+  if table == 0 { return 1 }
+  ovid/check.Zero(table, 4194304)
+  return PatchWalk(root, 0, table)
+}
+
+func PatchFindKind(node i64, kind i64, idp i64, idn i64) i64 {
+  if node == 0 { return -1 }
+  if ovid/json.Kind(node) != 5 { return -1 }
+  if ovid/json.IsLit(SGet(node, strptr("id"), strlen("id")), idp, idn) { return kind }
+  var c i64 = ovid/json.Child(node)
+  while c != 0 {
+    var cls i64 = PatchKey(kind, load64(c + 40), load64(c + 48))
+    if cls >= 100 && cls < 200 && ovid/json.Kind(c) == 4 {
+      var item i64 = ovid/json.Child(c)
+      while item != 0 {
+        var found i64 = PatchFindKind(item, cls - 100, idp, idn)
+        if found >= 0 { return found }
+        item = ovid/json.Next(item)
+      }
+    }
+    if cls >= 200 && ovid/json.Kind(c) == 5 {
+      var found i64 = PatchFindKind(c, cls - 200, idp, idn)
+      if found >= 0 { return found }
+    }
+    c = ovid/json.Next(c)
+  }
+  return -1
+}
+
+func PatchShapeError(io *ovid/io.Cap, code i64, cn i64, reason i64) i64 {
+  if reason == 2 { return Fail(io, code, cn, strptr("missing_id"), strlen("missing_id")) }
+  if reason == 3 { return Fail(io, code, cn, strptr("duplicate_id"), strlen("duplicate_id")) }
+  return Fail(io, code, cn, strptr("invalid_node"), strlen("invalid_node"))
+}
+
 func CmdPatch(io *ovid/io.Cap, dir i64, patch i64) i64 {
+  var pp i64 = ovid/io.Alloc(io, 8)
+  var nn i64 = ovid/io.Alloc(io, 8)
+  var read i64 = 0
+  if ovid/mem.Eq(patch, ovid/io.CLen(patch), strptr("-"), 1) {
+    read = ovid/io.ReadAll(io, 0, pp, nn)
+  } else {
+    read = Read(io, patch, pp, nn)
+  }
+  if read != 0 { return Fail(io, strptr("read"), strlen("read"), strptr("patch"), strlen("patch")) }
+  var proot i64 = ovid/json.Parse(io, load64(pp), load64(nn))
+  if proot == 0 { return Fail(io, strptr("bad_patch"), strlen("bad_patch"), strptr("invalid JSON"), strlen("invalid JSON")) }
+  if ovid/json.Kind(proot) != 5 { return Fail(io, strptr("bad_patch"), strlen("bad_patch"), strptr("invalid JSON"), strlen("invalid JSON")) }
+  var lockpath i64 = Join(io, dir, ovid/io.CLen(dir), strptr(".ovid.lock"), strlen(".ovid.lock"))
+  var lock i64 = ovid/io.Lock(lockpath)
+  if lock < 0 { return Fail(io, strptr("lock"), strlen("lock"), strptr(".ovid.lock"), strlen(".ovid.lock")) }
+  var rc i64 = CmdPatchLocked(io, dir, proot, load64(pp))
+  ovid/io.Close(lock)
+  return rc
+}
+
+func CmdPatchLocked(io *ovid/io.Cap, dir i64, proot i64, patchdata i64) i64 {
   var path i64 = Join(io, dir, ovid/io.CLen(dir), strptr("ovid.json"), strlen("ovid.json"))
   var pp i64 = ovid/io.Alloc(io, 8)
   var nn i64 = ovid/io.Alloc(io, 8)
@@ -525,31 +836,33 @@ func CmdPatch(io *ovid/io.Cap, dir i64, patch i64) i64 {
   if ovid/check.Hash(io, file, filen, stored, comp) < 0 {
     return Fail(io, strptr("revision"), strlen("revision"), strptr("missing revision"), strlen("missing revision"))
   }
-  var ppp i64 = ovid/io.Alloc(io, 8)
-  var pnn i64 = ovid/io.Alloc(io, 8)
-  if Read(io, patch, ppp, pnn) != 0 {
-    return Fail(io, strptr("read"), strlen("read"), strptr("patch"), strlen("patch"))
+  if !ovid/mem.Eq(stored, 64, comp, 64) {
+    return Fail(io, strptr("revision_mismatch"), strlen("revision_mismatch"), strptr("stored revision does not match file bytes"), strlen("stored revision does not match file bytes"))
   }
-  var proot i64 = ovid/json.Parse(io, load64(ppp), load64(pnn))
-  if proot == 0 {
-    return Fail(io, strptr("parse"), strlen("parse"), strptr("patch"), strlen("patch"))
-  }
+  var valid i64 = PatchValidate(io, root)
+  if valid != 0 { return PatchShapeError(io, strptr("bad_program"), strlen("bad_program"), valid) }
   var base i64 = SGet(proot, strptr("baseRevision"), strlen("baseRevision"))
-  if base == 0 {
+  if !PatchString(proot, strptr("baseRevision"), strlen("baseRevision")) || JStrN(base) == 0 {
     return Fail(io, strptr("bad_patch"), strlen("bad_patch"), strptr("missing baseRevision"), strlen("missing baseRevision"))
   }
   if !ovid/json.IsLit(base, comp, 64) {
-    ovid/io.Stdout(strptr("{\"ok\":false,\"error\":\"stale_patch\",\"revision\":\""), strlen("{\"ok\":false,\"error\":\"stale_patch\",\"revision\":\""))
-    ovid/io.Stdout(comp, 64)
-    ovid/io.Stdout(strptr("\"}\n"), strlen("\"}\n"))
+    var b *ovid/mem.Buf = ovid/mem.New(io, 512)
+    ovid/mem.WBytes(io, b, strptr("{\"ok\":false,\"error\":\"stale_patch\",\"baseRevision\":"), strlen("{\"ok\":false,\"error\":\"stale_patch\",\"baseRevision\":"))
+    ovid/json.Quote(io, b, JStrP(base), JStrN(base))
+    ovid/mem.WBytes(io, b, strptr(",\"currentRevision\":\""), strlen(",\"currentRevision\":\""))
+    ovid/mem.WBytes(io, b, comp, 64)
+    ovid/mem.WBytes(io, b, strptr("\",\"revision\":\""), strlen("\",\"revision\":\""))
+    ovid/mem.WBytes(io, b, comp, 64)
+    ovid/mem.WBytes(io, b, strptr("\"}\n"), strlen("\"}\n"))
+    ovid/io.Stdout(b.data, b.len)
     return 2
   }
   var ops i64 = SGet(proot, strptr("ops"), strlen("ops"))
   if ops == 0 {
-    return Fail(io, strptr("bad_patch"), strlen("bad_patch"), strptr("missing ops"), strlen("missing ops"))
+    return Fail(io, strptr("bad_patch"), strlen("bad_patch"), strptr("no ops"), strlen("no ops"))
   }
-  if ovid/json.Count(ops) == 0 {
-    return Fail(io, strptr("bad_patch"), strlen("bad_patch"), strptr("missing ops"), strlen("missing ops"))
+  if ovid/json.Kind(ops) != 4 || ovid/json.Count(ops) == 0 {
+    return Fail(io, strptr("bad_patch"), strlen("bad_patch"), strptr("no ops"), strlen("no ops"))
   }
   var cur i64 = file
   var cn i64 = filen
@@ -557,25 +870,31 @@ func CmdPatch(io *ovid/io.Cap, dir i64, patch i64) i64 {
   while op != 0 {
     var kind i64 = SGet(op, strptr("op"), strlen("op"))
     if !ovid/json.IsLit(kind, strptr("replace"), strlen("replace")) {
-      return Fail(io, strptr("bad_patch"), strlen("bad_patch"), strptr("only replace is supported"), strlen("only replace is supported"))
+      return Fail(io, strptr("bad_patch"), strlen("bad_patch"), strptr("unsupported op"), strlen("unsupported op"))
     }
     var id i64 = SGet(op, strptr("id"), strlen("id"))
+    if !PatchString(op, strptr("id"), strlen("id")) || JStrN(id) == 0 {
+      return Fail(io, strptr("bad_patch"), strlen("bad_patch"), strptr("missing_id"), strlen("missing_id"))
+    }
     var node i64 = SGet(op, strptr("node"), strlen("node"))
     if node == 0 {
       return Fail(io, strptr("bad_patch"), strlen("bad_patch"), strptr("missing node"), strlen("missing node"))
     }
     var nid i64 = SGet(node, strptr("id"), strlen("id"))
     if !ovid/json.IsLit(nid, JStrP(id), JStrN(id)) {
-      return Fail(io, strptr("id_mismatch"), strlen("id_mismatch"), JStrP(id), JStrN(id))
+      return Fail(io, strptr("bad_patch"), strlen("bad_patch"), strptr("id_mismatch"), strlen("id_mismatch"))
     }
     var found i64 = FindID(root, JStrP(id), JStrN(id))
     if found == 0 {
-      return Fail(io, strptr("not_found"), strlen("not_found"), JStrP(id), JStrN(id))
+      return Fail(io, strptr("bad_patch"), strlen("bad_patch"), strptr("not_found"), strlen("not_found"))
     }
+    var nodekind i64 = PatchFindKind(root, 0, JStrP(id), JStrN(id))
+    var shape i64 = PatchWalk(node, nodekind, 0)
+    if shape != 0 { return PatchShapeError(io, strptr("bad_patch"), strlen("bad_patch"), shape) }
     var at i64 = ovid/json.Src(found)
     var meta i64 = ovid/io.Alloc(io, 32)
     store64(meta, ovid/json.SrcN(found))
-    store64(meta + 8, load64(ppp) + ovid/json.Src(node))
+    store64(meta + 8, patchdata + ovid/json.Src(node))
     store64(meta + 16, ovid/json.SrcN(node))
     var outn i64 = ovid/io.Alloc(io, 8)
     store64(meta + 24, outn)
@@ -591,6 +910,8 @@ func CmdPatch(io *ovid/io.Cap, dir i64, patch i64) i64 {
     }
     op = ovid/json.Next(op)
   }
+  valid = PatchValidate(io, root)
+  if valid != 0 { return PatchShapeError(io, strptr("bad_patch"), strlen("bad_patch"), valid) }
   var st i64 = ovid/io.Alloc(io, 64)
   var cp i64 = ovid/io.Alloc(io, 64)
   var start i64 = ovid/check.Hash(io, cur, cn, st, cp)
@@ -602,7 +923,7 @@ func CmdPatch(io *ovid/io.Cap, dir i64, patch i64) i64 {
     store8((cur + start) + i, load8(cp + i))
     i = i + 1
   }
-  if ovid/io.WriteFile(io, path, ovid/io.CLen(path), cur, cn, 420) != 0 {
+  if ovid/io.AtomicFile(io, dir, path, cur, cn) != 0 {
     return Fail(io, strptr("write"), strlen("write"), strptr("ovid.json"), strlen("ovid.json"))
   }
   ovid/io.Stdout(strptr("{\"ok\":true,\"revision\":\""), strlen("{\"ok\":true,\"revision\":\""))
@@ -622,7 +943,7 @@ func CmdBuild(io *ovid/io.Cap, dir i64, out i64) i64 {
   if root == 0 {
     return Fail(io, strptr("parse"), strlen("parse"), strptr("ovid.json"), strlen("ovid.json"))
   }
-  var nerr i64 = ovid/check.Run(io, root, load64(pp), load64(nn), dir, ovid/io.CLen(dir))
+  var nerr i64 = ovid/check.RunQuiet(io, root, load64(pp), load64(nn))
   if nerr != 0 {
     return 1
   }
@@ -640,9 +961,7 @@ func CmdBuild(io *ovid/io.Cap, dir i64, out i64) i64 {
   }
   ovid/io.Stdout(strptr("{\"ok\":true,\"output\":"), strlen("{\"ok\":true,\"output\":"))
   var qb *ovid/mem.Buf = ovid/mem.New(io, 1024)
-  ovid/mem.WByte(io, qb, 34)
-  ovid/mem.WBytes(io, qb, out, ovid/io.CLen(out))
-  ovid/mem.WByte(io, qb, 34)
+  ovid/json.Quote(io, qb, out, ovid/io.CLen(out))
   ovid/io.Stdout(qb.data, qb.len)
   ovid/io.Stdout(strptr(",\"bytes\":"), strlen(",\"bytes\":"))
   var nb i64 = ovid/io.Alloc(io, 64)
@@ -652,13 +971,94 @@ func CmdBuild(io *ovid/io.Cap, dir i64, out i64) i64 {
   return 0
 }
 
+func InitDirs(io *ovid/io.Cap, path i64) i64 {
+  var n i64 = ovid/io.CLen(path)
+  if n == 0 {
+    return -1
+  }
+  var prefix i64 = ovid/io.CStr(io, path, n)
+  var i i64 = 1
+  while i <= n {
+    if i == n || load8(prefix + i) == 47 {
+      var saved i64 = load8(prefix + i)
+      store8(prefix + i, 0)
+      var rc i64 = ovid/io.Mkdir(prefix)
+      if rc != 0 && rc != -17 {
+        return -1
+      }
+      if rc == -17 {
+        if ovid/io.IsDir(io, prefix, i) == 0 {
+          return -1
+        }
+      }
+      store8(prefix + i, saved)
+    }
+    i = i + 1
+  }
+  return 0
+}
+
+func CmdInit(io *ovid/io.Cap, dir i64) i64 {
+  if InitDirs(io, dir) != 0 {
+    return Fail(io, strptr("mkdir"), strlen("mkdir"), dir, ovid/io.CLen(dir))
+  }
+  var path i64 = Join(io, dir, ovid/io.CLen(dir), strptr("ovid.json"), strlen("ovid.json"))
+  var lockpath i64 = Join(io, dir, ovid/io.CLen(dir), strptr(".ovid.lock"), strlen(".ovid.lock"))
+  var lock i64 = ovid/io.Lock(lockpath)
+  if lock < 0 {
+    return Fail(io, strptr("lock"), strlen("lock"), dir, ovid/io.CLen(dir))
+  }
+  var st i64 = ovid/io.Alloc(io, 256)
+  var exists i64 = ovid/io.LstatAt(path, st)
+  if exists == 0 {
+    ovid/io.Close(lock)
+    return Fail(io, strptr("exists"), strlen("exists"), strptr("ovid.json already exists"), strlen("ovid.json already exists"))
+  }
+  if exists != -2 {
+    ovid/io.Close(lock)
+    return Fail(io, strptr("stat"), strlen("stat"), dir, ovid/io.CLen(dir))
+  }
+  // Keep the starter bytes identical to internal/tool/init.json.
+  var template i64 = strptr("{\n  \"revision\": \"0000000000000000000000000000000000000000000000000000000000000000\",\n  \"module\": \"app\",\n  \"entry\": \"app\",\n  \"packages\": [\n    {\n      \"id\": \"pkg:app\",\n      \"path\": \"app\",\n      \"imports\": [\n        {\n          \"id\": \"im:app:ovid/io\",\n          \"path\": \"ovid/io\"\n        }\n      ],\n      \"funcs\": [\n        {\n          \"id\": \"fn:app.main\",\n          \"name\": \"main\",\n          \"params\": [\n            {\n              \"id\": \"pa:app.main.io\",\n              \"name\": \"io\",\n              \"type\": \"*ovid/io.Cap\"\n            }\n          ],\n          \"result\": \"i64\",\n          \"body\": [\n            {\n              \"id\": \"st:app.main:1\",\n              \"op\": \"return\",\n              \"val\": {\n                \"id\": \"ex:app.main:1\",\n                \"op\": \"int\",\n                \"value\": 0\n              }\n            }\n          ]\n        }\n      ]\n    },\n    {\n      \"id\": \"pkg:ovid/io\",\n      \"path\": \"ovid/io\",\n      \"types\": [\n        {\n          \"id\": \"ty:ovid/io.Cap\",\n          \"name\": \"Cap\",\n          \"fields\": [\n            {\n              \"id\": \"fd:ovid/io.Cap.argc\",\n              \"name\": \"argc\",\n              \"type\": \"i64\"\n            },\n            {\n              \"id\": \"fd:ovid/io.Cap.argv\",\n              \"name\": \"argv\",\n              \"type\": \"i64\"\n            },\n            {\n              \"id\": \"fd:ovid/io.Cap.heap\",\n              \"name\": \"heap\",\n              \"type\": \"i64\"\n            },\n            {\n              \"id\": \"fd:ovid/io.Cap.used\",\n              \"name\": \"used\",\n              \"type\": \"i64\"\n            },\n            {\n              \"id\": \"fd:ovid/io.Cap.size\",\n              \"name\": \"size\",\n              \"type\": \"i64\"\n            }\n          ]\n        }\n      ]\n    }\n  ]\n}\n")
+  var n i64 = ovid/io.CLen(template)
+  var file i64 = ovid/io.CStr(io, template, n)
+  var stored i64 = ovid/io.Alloc(io, 64)
+  var revision i64 = ovid/io.Alloc(io, 64)
+  var start i64 = ovid/check.Hash(io, file, n, stored, revision)
+  if start < 0 {
+    ovid/io.Close(lock)
+    return Fail(io, strptr("revision"), strlen("revision"), strptr("starter"), strlen("starter"))
+  }
+  ovid/mem.Copy(file + start, revision, 64)
+  var written i64 = ovid/io.AtomicFile(io, dir, path, file, n)
+  ovid/io.Close(lock)
+  if written != 0 {
+    return Fail(io, strptr("write"), strlen("write"), dir, ovid/io.CLen(dir))
+  }
+  ovid/io.Stdout(strptr("{\"ok\":true,\"revision\":\""), strlen("{\"ok\":true,\"revision\":\""))
+  ovid/io.Stdout(revision, 64)
+  ovid/io.Stdout(strptr("\",\"entry\":\"app\"}\n"), strlen("\",\"entry\":\"app\"}\n"))
+  return 0
+}
+
 func main(io *ovid/io.Cap) i64 {
   if ovid/io.Argc(io) < 2 {
     return Usage(io)
   }
-  if ArgEq(io, 1, strptr("check"), strlen("check")) {
+  if ArgEq(io, 1, strptr("init"), strlen("init")) {
     if ovid/io.Argc(io) != 3 {
       return Usage(io)
+    }
+    return CmdInit(io, ovid/io.Arg(io, 2))
+  }
+  if ArgEq(io, 1, strptr("check"), strlen("check")) {
+    if ovid/io.Argc(io) < 3 || ovid/io.Argc(io) > 4 {
+      return Usage(io)
+    }
+    if ovid/io.Argc(io) == 4 {
+      if !ArgEq(io, 3, strptr("--facts"), strlen("--facts")) {
+        return Usage(io)
+      }
     }
     return CmdCheck(io, ovid/io.Arg(io, 2))
   }

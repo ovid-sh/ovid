@@ -170,7 +170,7 @@ func main(io *ovid/io.Cap) i64 {
 		t.Fatalf("expected type error\n%s", cerr.String())
 	}
 	var buf bytesBuf
-	if code := tool.Query(dir, "", "main", "demo", "func", &buf); code != 0 {
+	if code := tool.Query(dir, "fn:demo.main", "", "", "", &buf); code != 0 {
 		t.Fatal(buf.String())
 	}
 	text := buf.String()

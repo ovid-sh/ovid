@@ -92,12 +92,13 @@ func FormatI64(dst i64, v i64) i64 {
   var x i64 = v
   if v < 0 {
     neg = true
+  } else {
     x = 0 - v
   }
   var tmp i64 = dst + 32
   var n i64 = 0
-  while x > 0 {
-    var d i64 = x % 10
+  while x < 0 {
+    var d i64 = 0 - (x % 10)
     store8(tmp + n, 48 + d)
     n = n + 1
     x = x / 10

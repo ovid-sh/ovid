@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 )
@@ -296,13 +297,77 @@ func Marshal(p *Program) ([]byte, error) {
 }
 
 func Unmarshal(data []byte) (*Program, error) {
+	if err := uniqueJSONKeys(data); err != nil {
+		return nil, err
+	}
 	var p Program
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.UseNumber()
 	if err := dec.Decode(&p); err != nil {
 		return nil, err
 	}
+	if err := dec.Decode(new(any)); err != io.EOF {
+		return nil, fmt.Errorf("trailing JSON data")
+	}
 	return &p, nil
+}
+
+// ValidateJSON rejects malformed JSON, duplicate object keys and trailing input.
+func ValidateJSON(data []byte) error { return uniqueJSONKeys(data) }
+
+// uniqueJSONKeys prevents ambiguous programs from being interpreted differently
+// by clients whose JSON decoders disagree about duplicate object members.
+func uniqueJSONKeys(data []byte) error {
+	d := json.NewDecoder(bytes.NewReader(data))
+	d.UseNumber()
+	var value func() error
+	value = func() error {
+		t, err := d.Token()
+		if err != nil {
+			return err
+		}
+		delim, ok := t.(json.Delim)
+		if !ok {
+			return nil
+		}
+		if delim == '{' {
+			seen := map[string]bool{}
+			for d.More() {
+				key, err := d.Token()
+				if err != nil {
+					return err
+				}
+				k, ok := key.(string)
+				if !ok {
+					return fmt.Errorf("invalid object key")
+				}
+				if seen[k] {
+					return fmt.Errorf("duplicate JSON key: %s", k)
+				}
+				seen[k] = true
+				if err := value(); err != nil {
+					return err
+				}
+			}
+		} else if delim == '[' {
+			for d.More() {
+				if err := value(); err != nil {
+					return err
+				}
+			}
+		} else {
+			return fmt.Errorf("unexpected JSON delimiter")
+		}
+		_, err = d.Token()
+		return err
+	}
+	if err := value(); err != nil {
+		return err
+	}
+	if _, err := d.Token(); err != io.EOF {
+		return fmt.Errorf("trailing JSON data")
+	}
+	return nil
 }
 
 // SplitRevision finds the stored revision and returns a copy of the file with
@@ -313,8 +378,11 @@ func SplitRevision(file []byte) (stored string, zeroed []byte, err error) {
 		return "", nil, fmt.Errorf("missing revision field")
 	}
 	start := i + len(revKey)
-	if start+64 > len(file) {
+	if start+64 >= len(file) {
 		return "", nil, fmt.Errorf("truncated revision")
+	}
+	if file[start+64] != '"' {
+		return "", nil, fmt.Errorf("revision is not 64 hex digits")
 	}
 	hexpart := file[start : start+64]
 	for _, c := range hexpart {
@@ -375,96 +443,212 @@ func ReadFile(dir string) ([]byte, *Program, error) {
 	return b, p, nil
 }
 
-// Replace swaps the node or function with this id. The new object's id must match.
+// Replace accepts every addressable object while preserving its identity and
+// structural kind. Type errors are allowed: a draft must remain repairable.
 func (p *Program) Replace(id string, raw []byte) error {
-	for pi := range p.Packages {
-		pkg := &p.Packages[pi]
-		for fi := range pkg.Funcs {
-			if pkg.Funcs[fi].ID == id {
-				var nf Func
-				if err := json.Unmarshal(raw, &nf); err != nil {
-					return err
-				}
-				if nf.ID != id {
-					return fmt.Errorf("id_mismatch")
-				}
-				pkg.Funcs[fi] = nf
-				return nil
-			}
-		}
+	if id == "" {
+		return fmt.Errorf("missing_id")
 	}
-	var nn Node
-	if err := json.Unmarshal(raw, &nn); err != nil {
+	if err := uniqueJSONKeys(raw); err != nil {
 		return err
 	}
-	if nn.ID != id {
+	var replacement map[string]any
+	d := json.NewDecoder(bytes.NewReader(raw))
+	d.UseNumber()
+	if err := d.Decode(&replacement); err != nil {
+		return err
+	}
+	if replacement["id"] != id {
 		return fmt.Errorf("id_mismatch")
 	}
-	if p.replaceNode(id, &nn) {
+	encoded, err := Marshal(p)
+	if err != nil {
+		return err
+	}
+	var root map[string]any
+	d = json.NewDecoder(bytes.NewReader(encoded))
+	d.UseNumber()
+	if err := d.Decode(&root); err != nil {
+		return err
+	}
+	found := false
+	err = walkStructure(root, "program", func(obj map[string]any, kind string) error {
+		if obj["id"] != id {
+			return nil
+		}
+		if err := walkStructure(replacement, kind, func(map[string]any, string) error { return nil }); err != nil {
+			return err
+		}
+		for k := range obj {
+			delete(obj, k)
+		}
+		for k, v := range replacement {
+			obj[k] = v
+		}
+		found = true
 		return nil
+	})
+	if err != nil {
+		return err
 	}
-	return fmt.Errorf("not_found")
+	if !found {
+		return fmt.Errorf("not_found")
+	}
+	encoded, err = json.Marshal(root)
+	if err != nil {
+		return err
+	}
+	updated, err := Unmarshal(encoded)
+	if err != nil {
+		return err
+	}
+	*p = *updated
+	return nil
 }
 
-func (p *Program) replaceNode(id string, neu *Node) bool {
-	for pi := range p.Packages {
-		for fi := range p.Packages[pi].Funcs {
-			body := p.Packages[pi].Funcs[fi].Body
-			if replaceList(body, id, neu) {
-				return true
+// ValidateStructure checks identities and JSON shape without typechecking.
+func ValidateStructure(raw []byte) error {
+	if err := uniqueJSONKeys(raw); err != nil {
+		return err
+	}
+	var root map[string]any
+	d := json.NewDecoder(bytes.NewReader(raw))
+	d.UseNumber()
+	if err := d.Decode(&root); err != nil {
+		return err
+	}
+	seen := map[string]bool{}
+	return walkStructure(root, "program", func(obj map[string]any, kind string) error {
+		if kind == "program" {
+			return nil
+		}
+		id, ok := obj["id"].(string)
+		if !ok || id == "" {
+			return fmt.Errorf("missing_id")
+		}
+		if seen[id] {
+			return fmt.Errorf("duplicate_id")
+		}
+		seen[id] = true
+		return nil
+	})
+}
+
+func walkStructure(obj map[string]any, kind string, visit func(map[string]any, string) error) error {
+	if obj == nil {
+		return fmt.Errorf("invalid_node")
+	}
+	allowed := map[string]bool{"id": true}
+	var required []string
+	lists := map[string]string{}
+	singles := map[string]string{}
+	switch kind {
+	case "program":
+		allowed = map[string]bool{"revision": true, "module": true, "entry": true, "packages": true}
+		required = []string{"revision", "module", "entry"}
+		lists["packages"] = "package"
+	case "package":
+		required = []string{"path"}
+		lists = map[string]string{"imports": "import", "consts": "const", "types": "type", "funcs": "func"}
+	case "import":
+		required = []string{"path"}
+	case "const":
+		required = []string{"name", "type"}
+		allowed["value"] = true
+		if _, ok := obj["value"].(json.Number); !ok {
+			return fmt.Errorf("invalid_node")
+		}
+	case "type":
+		required = []string{"name"}
+		lists["fields"] = "field"
+	case "field", "param":
+		required = []string{"name", "type"}
+	case "func":
+		required = []string{"name", "result"}
+		lists = map[string]string{"params": "param", "body": "node"}
+	case "node":
+		required = []string{"op"}
+		for _, k := range []string{"name", "type", "pkg", "func", "value"} {
+			allowed[k] = true
+		}
+		for _, k := range []string{"left", "right", "arg", "base", "addr", "val", "cond"} {
+			singles[k] = "node"
+		}
+		for _, k := range []string{"args", "then", "else", "body"} {
+			lists[k] = "node"
+		}
+	default:
+		return fmt.Errorf("invalid_node")
+	}
+	for _, k := range required {
+		allowed[k] = true
+		if _, ok := obj[k].(string); !ok {
+			return fmt.Errorf("invalid_node")
+		}
+	}
+	for k := range lists {
+		allowed[k] = true
+	}
+	for k := range singles {
+		allowed[k] = true
+	}
+	for k, v := range obj {
+		if !allowed[k] {
+			return fmt.Errorf("invalid_node")
+		}
+		if _, ok := lists[k]; ok {
+			continue
+		}
+		if _, ok := singles[k]; ok {
+			continue
+		}
+		if k == "value" {
+			switch v.(type) {
+			case json.Number, bool, string:
+			default:
+				return fmt.Errorf("invalid_node")
 			}
-			for _, st := range body {
-				if st.replaceChildren(id, neu) {
-					return true
-				}
+		} else if _, ok := v.(string); !ok {
+			return fmt.Errorf("invalid_node")
+		}
+	}
+	if err := visit(obj, kind); err != nil {
+		return err
+	}
+	for k, childKind := range lists {
+		v, present := obj[k]
+		if !present {
+			continue
+		}
+		if v == nil {
+			continue
+		}
+		list, ok := v.([]any)
+		if !ok {
+			return fmt.Errorf("invalid_node")
+		}
+		for _, child := range list {
+			c, ok := child.(map[string]any)
+			if !ok {
+				return fmt.Errorf("invalid_node")
+			}
+			if err := walkStructure(c, childKind, visit); err != nil {
+				return err
 			}
 		}
 	}
-	return false
-}
-
-func replaceList(list []*Node, id string, neu *Node) bool {
-	for i, n := range list {
-		if n != nil && n.ID == id {
-			list[i] = neu
-			return true
+	for k, childKind := range singles {
+		v, present := obj[k]
+		if !present || v == nil {
+			continue
+		}
+		c, ok := v.(map[string]any)
+		if !ok {
+			return fmt.Errorf("invalid_node")
+		}
+		if err := walkStructure(c, childKind, visit); err != nil {
+			return err
 		}
 	}
-	return false
-}
-
-func (n *Node) replaceChildren(id string, neu *Node) bool {
-	if n == nil {
-		return false
-	}
-	if replacePtr(&n.Left, id, neu) || replacePtr(&n.Right, id, neu) || replacePtr(&n.Arg, id, neu) ||
-		replacePtr(&n.Base, id, neu) || replacePtr(&n.Addr, id, neu) || replacePtr(&n.Val, id, neu) ||
-		replacePtr(&n.Cond, id, neu) {
-		return true
-	}
-	if replaceList(n.Args, id, neu) || replaceList(n.Then, id, neu) || replaceList(n.Else, id, neu) || replaceList(n.Body, id, neu) {
-		return true
-	}
-	kids := []*Node{n.Left, n.Right, n.Arg, n.Base, n.Addr, n.Val, n.Cond}
-	kids = append(kids, n.Args...)
-	kids = append(kids, n.Then...)
-	kids = append(kids, n.Else...)
-	kids = append(kids, n.Body...)
-	for _, k := range kids {
-		if k.replaceChildren(id, neu) {
-			return true
-		}
-	}
-	return false
-}
-
-func replacePtr(slot **Node, id string, neu *Node) bool {
-	if slot == nil || *slot == nil {
-		return false
-	}
-	if (*slot).ID == id {
-		*slot = neu
-		return true
-	}
-	return false
+	return nil
 }

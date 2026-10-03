@@ -5,8 +5,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"ovid/internal/ir"
@@ -43,7 +41,26 @@ func (r *result) err(id, pkg, fn, code, detail string) {
 	}{Fact: "error", ID: id, Pkg: pkg, Func: fn, Code: code, Detail: detail})
 }
 
-// Run checks p. root is the module directory (import paths are subdirectories).
+func (r *result) mismatch(n *ir.Node, pkg, fn, expected, actual string) {
+	id := ""
+	if n != nil {
+		id = n.ID
+	}
+	r.errors++
+	r.add(struct {
+		Fact     string `json:"fact"`
+		ID       string `json:"id"`
+		Pkg      string `json:"pkg"`
+		Func     string `json:"func"`
+		Code     string `json:"code"`
+		Detail   string `json:"detail"`
+		Expected string `json:"expected"`
+		Actual   string `json:"actual"`
+	}{"error", id, pkg, fn, "type_mismatch", "expected " + expected + ", got " + actual, expected, actual})
+}
+
+// Run checks p. The JSON document contains all local packages; presentation
+// files and package directory markers are not compilation inputs.
 // file is the raw ovid.json used for the revision fact. facts are one JSON
 // object per line, without trailing newlines.
 func Run(p *ir.Program, root string, file []byte) (lines [][]byte, errors int) {
@@ -72,17 +89,6 @@ func Run(p *ir.Program, root string, file []byte) (lines [][]byte, errors int) {
 	if strings.TrimSpace(p.Module) == "" {
 		r.err("", "", "", "bad_module", "module name is empty")
 	}
-	proj := filepath.Join(root, "PROJECTION")
-	_, statErr := os.Stat(proj)
-	r.add(struct {
-		Fact    string `json:"fact"`
-		Path    string `json:"path"`
-		Present bool   `json:"present"`
-	}{Fact: "projection", Path: "PROJECTION", Present: statErr == nil})
-	if statErr != nil {
-		r.err("", "", "", "missing_projection", "PROJECTION is not in the module directory")
-	}
-
 	pkgs := map[string]*ir.Package{}
 	ids := map[string]string{}
 	claim := func(id, what string) {
@@ -104,18 +110,11 @@ func Run(p *ir.Program, root string, file []byte) (lines [][]byte, errors int) {
 			r.err(pkg.ID, pkg.Path, "", "duplicate_package", prev.ID)
 		}
 		pkgs[pkg.Path] = pkg
-		dir := filepath.Join(root, filepath.FromSlash(pkg.Path))
-		info, err := os.Stat(dir)
-		okDir := err == nil && info.IsDir()
 		r.add(struct {
 			Fact string `json:"fact"`
 			ID   string `json:"id"`
 			Path string `json:"path"`
-			Dir  bool   `json:"dir"`
-		}{Fact: "package", ID: pkg.ID, Path: pkg.Path, Dir: okDir})
-		if !okDir {
-			r.err(pkg.ID, pkg.Path, "", "missing_dir", "package directory does not exist")
-		}
+		}{Fact: "package", ID: pkg.ID, Path: pkg.Path})
 		for _, im := range pkg.Imports {
 			claim(im.ID, "import")
 		}
@@ -133,22 +132,6 @@ func Run(p *ir.Program, root string, file []byte) (lines [][]byte, errors int) {
 			for _, pa := range fn.Params {
 				claim(pa.ID, "param")
 			}
-			var walk func(n *ir.Node)
-			walk = func(n *ir.Node) {
-				if n == nil {
-					return
-				}
-				claim(n.ID, "node")
-				n.Walk(func(c *ir.Node) {
-					if c != n {
-						claim(c.ID, "node")
-					}
-				})
-			}
-			// Walk already visits n. Avoid double-counting: claim tree once.
-			_ = walk
-			var seenRoot bool
-			_ = seenRoot
 			for _, st := range fn.Body {
 				if st == nil {
 					continue
@@ -163,27 +146,26 @@ func Run(p *ir.Program, root string, file []byte) (lines [][]byte, errors int) {
 		for _, im := range pkg.Imports {
 			target, ok := pkgs[im.Path]
 			resolved := ok && target.Path == im.Path
-			dir := filepath.Join(root, filepath.FromSlash(im.Path))
-			info, err := os.Stat(dir)
-			dirOK := err == nil && info.IsDir()
 			r.add(struct {
 				Fact     string `json:"fact"`
 				ID       string `json:"id"`
 				Pkg      string `json:"pkg"`
 				Path     string `json:"path"`
 				Resolved bool   `json:"resolved"`
-			}{Fact: "import", ID: im.ID, Pkg: pkg.Path, Path: im.Path, Resolved: resolved && dirOK})
+			}{Fact: "import", ID: im.ID, Pkg: pkg.Path, Path: im.Path, Resolved: resolved})
 			if im.Path == pkg.Path {
 				r.err(im.ID, pkg.Path, "", "import_self", im.Path)
 			}
 			if !ok {
 				r.err(im.ID, pkg.Path, "", "unknown_package", im.Path)
 			}
-			if !dirOK {
-				r.err(im.ID, pkg.Path, "", "missing_dir", im.Path)
-			}
 		}
+		seenTypes := map[string]bool{}
 		for _, t := range pkg.Types {
+			if seenTypes[t.Name] {
+				r.err(t.ID, pkg.Path, "", "duplicate_type", t.Name)
+			}
+			seenTypes[t.Name] = true
 			r.add(struct {
 				Fact   string `json:"fact"`
 				ID     string `json:"id"`
@@ -192,7 +174,12 @@ func Run(p *ir.Program, root string, file []byte) (lines [][]byte, errors int) {
 				Fields int    `json:"fields"`
 				Size   int    `json:"size"`
 			}{Fact: "type", ID: t.ID, Pkg: pkg.Path, Name: t.Name, Fields: len(t.Fields), Size: len(t.Fields) * 8})
+			seenFields := map[string]bool{}
 			for i, f := range t.Fields {
+				if seenFields[f.Name] {
+					r.err(f.ID, pkg.Path, "", "duplicate_field", f.Name)
+				}
+				seenFields[f.Name] = true
 				ft, _, ferr := resolveType(pkg, f.Type, pkgs)
 				r.add(struct {
 					Fact   string `json:"fact"`
@@ -211,7 +198,12 @@ func Run(p *ir.Program, root string, file []byte) (lines [][]byte, errors int) {
 				}
 			}
 		}
+		seenConsts := map[string]bool{}
 		for _, c := range pkg.Consts {
+			if seenConsts[c.Name] {
+				r.err(c.ID, pkg.Path, "", "duplicate_const", c.Name)
+			}
+			seenConsts[c.Name] = true
 			r.add(struct {
 				Fact  string `json:"fact"`
 				ID    string `json:"id"`
@@ -319,15 +311,18 @@ func Run(p *ir.Program, root string, file []byte) (lines [][]byte, errors int) {
 		if capTy == nil {
 			r.err(ioPkg.ID, "ovid/io", "", "bad_abi", "missing Cap")
 		} else {
-			have := map[string]string{}
-			for _, f := range capTy.Fields {
-				have[f.Name] = f.Type
-			}
-			for _, n := range need {
-				if have[n] != "i64" {
-					r.err(capTy.ID, "ovid/io", "", "bad_abi", "Cap."+n+" must be i64")
+			valid := len(capTy.Fields) == len(need)
+			if valid {
+				for i, n := range need {
+					if capTy.Fields[i].Name != n || capTy.Fields[i].Type != "i64" {
+						valid = false
+					}
 				}
 			}
+			if !valid {
+				r.err(capTy.ID, "ovid/io", "", "bad_abi", "Cap must have argc, argv, heap, used, size as i64 in that order")
+			}
+
 		}
 	} else {
 		r.err("", "", "", "bad_abi", "missing package ovid/io")
@@ -358,7 +353,8 @@ func Run(p *ir.Program, root string, file []byte) (lines [][]byte, errors int) {
 		Errors   int    `json:"errors"`
 		Packages int    `json:"packages"`
 		Funcs    int    `json:"funcs"`
-	}{Fact: "summary", Ok: r.errors == 0, Errors: r.errors, Packages: len(p.Packages), Funcs: countFuncs(p)})
+		Revision string `json:"revision"`
+	}{Fact: "summary", Ok: r.errors == 0, Errors: r.errors, Packages: len(p.Packages), Funcs: countFuncs(p), Revision: computed})
 	return r.facts, r.errors
 }
 
@@ -482,7 +478,7 @@ func checkStmts(r *result, pkg *ir.Package, fn *ir.Func, e *env, pkgs map[string
 			if s.Val != nil {
 				vt := checkExpr(r, pkg, fn, e, pkgs, sigs, imported, s.Val)
 				if vt != t && vt != "invalid" && t != "invalid" {
-					r.err(s.ID, pkg.Path, fn.Name, "type_mismatch", "var "+s.Name+" got "+vt+" want "+t)
+					r.mismatch(s.Val, pkg.Path, fn.Name, t, vt)
 				}
 			}
 		case "assign":
@@ -493,7 +489,7 @@ func checkStmts(r *result, pkg *ir.Package, fn *ir.Func, e *env, pkgs map[string
 			}
 			vt := checkExpr(r, pkg, fn, e, pkgs, sigs, imported, s.Val)
 			if vt != t && vt != "invalid" && t != "invalid" {
-				r.err(s.ID, pkg.Path, fn.Name, "type_mismatch", "assign "+s.Name+" got "+vt+" want "+t)
+				r.mismatch(s.Val, pkg.Path, fn.Name, t, vt)
 			}
 		case "setfield":
 			bt := checkExpr(r, pkg, fn, e, pkgs, sigs, imported, s.Base)
@@ -504,16 +500,16 @@ func checkStmts(r *result, pkg *ir.Package, fn *ir.Func, e *env, pkgs map[string
 			}
 			vt := checkExpr(r, pkg, fn, e, pkgs, sigs, imported, s.Val)
 			if vt != ft && vt != "invalid" && ft != "invalid" {
-				r.err(s.ID, pkg.Path, fn.Name, "type_mismatch", "set field got "+vt+" want "+ft)
+				r.mismatch(s.Val, pkg.Path, fn.Name, ft, vt)
 			}
 		case "store8", "store64":
 			at := checkExpr(r, pkg, fn, e, pkgs, sigs, imported, s.Addr)
 			vt := checkExpr(r, pkg, fn, e, pkgs, sigs, imported, s.Val)
 			if at != "i64" && at != "invalid" {
-				r.err(s.ID, pkg.Path, fn.Name, "type_mismatch", s.Op+" address got "+at+" want i64")
+				r.mismatch(s.Addr, pkg.Path, fn.Name, "i64", at)
 			}
 			if vt != "i64" && vt != "invalid" {
-				r.err(s.ID, pkg.Path, fn.Name, "type_mismatch", s.Op+" value got "+vt+" want i64")
+				r.mismatch(s.Val, pkg.Path, fn.Name, "i64", vt)
 			}
 		case "expr":
 			checkExpr(r, pkg, fn, e, pkgs, sigs, imported, s.Val)
@@ -525,19 +521,23 @@ func checkStmts(r *result, pkg *ir.Package, fn *ir.Func, e *env, pkgs map[string
 				vt = "void"
 			}
 			if vt != res && vt != "invalid" {
-				r.err(s.ID, pkg.Path, fn.Name, "type_mismatch", "return got "+vt+" want "+res)
+				target := s.Val
+				if target == nil {
+					target = s
+				}
+				r.mismatch(target, pkg.Path, fn.Name, res, vt)
 			}
 		case "if":
 			ct := checkExpr(r, pkg, fn, e, pkgs, sigs, imported, s.Cond)
 			if ct != "bool" && ct != "invalid" {
-				r.err(s.ID, pkg.Path, fn.Name, "type_mismatch", "if condition got "+ct+" want bool")
+				r.mismatch(s.Cond, pkg.Path, fn.Name, "bool", ct)
 			}
 			checkStmts(r, pkg, fn, childEnv(e), pkgs, sigs, imported, s.Then, res)
 			checkStmts(r, pkg, fn, childEnv(e), pkgs, sigs, imported, s.Else, res)
 		case "while":
 			ct := checkExpr(r, pkg, fn, e, pkgs, sigs, imported, s.Cond)
 			if ct != "bool" && ct != "invalid" {
-				r.err(s.ID, pkg.Path, fn.Name, "type_mismatch", "while condition got "+ct+" want bool")
+				r.mismatch(s.Cond, pkg.Path, fn.Name, "bool", ct)
 			}
 			checkStmts(r, pkg, fn, childEnv(e), pkgs, sigs, imported, s.Body, res)
 		default:
@@ -592,41 +592,50 @@ func checkExpr(r *result, pkg *ir.Package, fn *ir.Func, e *env, pkgs map[string]
 	case "add", "sub", "mul", "div", "mod", "and", "or", "xor", "shl", "shr":
 		lt := checkExpr(r, pkg, fn, e, pkgs, sigs, imported, n.Left)
 		rt := checkExpr(r, pkg, fn, e, pkgs, sigs, imported, n.Right)
-		if (lt != "i64" && lt != "invalid") || (rt != "i64" && rt != "invalid") {
-			r.err(n.ID, pkg.Path, fn.Name, "type_mismatch", n.Op+" needs i64")
+		if lt != "i64" && lt != "invalid" {
+			r.mismatch(n.Left, pkg.Path, fn.Name, "i64", lt)
+		}
+		if rt != "i64" && rt != "invalid" {
+			r.mismatch(n.Right, pkg.Path, fn.Name, "i64", rt)
 		}
 		return "i64"
 	case "eq", "ne":
 		lt := checkExpr(r, pkg, fn, e, pkgs, sigs, imported, n.Left)
 		rt := checkExpr(r, pkg, fn, e, pkgs, sigs, imported, n.Right)
 		if lt != rt && lt != "invalid" && rt != "invalid" {
-			r.err(n.ID, pkg.Path, fn.Name, "type_mismatch", n.Op+" type "+lt+" vs "+rt)
+			r.mismatch(n.Right, pkg.Path, fn.Name, lt, rt)
 		}
 		return "bool"
 	case "lt", "le", "gt", "ge":
 		lt := checkExpr(r, pkg, fn, e, pkgs, sigs, imported, n.Left)
 		rt := checkExpr(r, pkg, fn, e, pkgs, sigs, imported, n.Right)
-		if (lt != "i64" && lt != "invalid") || (rt != "i64" && rt != "invalid") {
-			r.err(n.ID, pkg.Path, fn.Name, "type_mismatch", n.Op+" needs i64")
+		if lt != "i64" && lt != "invalid" {
+			r.mismatch(n.Left, pkg.Path, fn.Name, "i64", lt)
+		}
+		if rt != "i64" && rt != "invalid" {
+			r.mismatch(n.Right, pkg.Path, fn.Name, "i64", rt)
 		}
 		return "bool"
 	case "land", "lor":
 		lt := checkExpr(r, pkg, fn, e, pkgs, sigs, imported, n.Left)
 		rt := checkExpr(r, pkg, fn, e, pkgs, sigs, imported, n.Right)
-		if (lt != "bool" && lt != "invalid") || (rt != "bool" && rt != "invalid") {
-			r.err(n.ID, pkg.Path, fn.Name, "type_mismatch", n.Op+" needs bool")
+		if lt != "bool" && lt != "invalid" {
+			r.mismatch(n.Left, pkg.Path, fn.Name, "bool", lt)
+		}
+		if rt != "bool" && rt != "invalid" {
+			r.mismatch(n.Right, pkg.Path, fn.Name, "bool", rt)
 		}
 		return "bool"
 	case "not":
 		t := checkExpr(r, pkg, fn, e, pkgs, sigs, imported, n.Arg)
 		if t != "bool" && t != "invalid" {
-			r.err(n.ID, pkg.Path, fn.Name, "type_mismatch", "not needs bool")
+			r.mismatch(n.Arg, pkg.Path, fn.Name, "bool", t)
 		}
 		return "bool"
 	case "neg", "bnot":
 		t := checkExpr(r, pkg, fn, e, pkgs, sigs, imported, n.Arg)
 		if t != "i64" && t != "invalid" {
-			r.err(n.ID, pkg.Path, fn.Name, "type_mismatch", n.Op+" needs i64")
+			r.mismatch(n.Arg, pkg.Path, fn.Name, "i64", t)
 		}
 		return "i64"
 	case "cast":
@@ -637,7 +646,7 @@ func checkExpr(r *result, pkg *ir.Package, fn *ir.Func, e *env, pkgs map[string]
 		}
 		src := checkExpr(r, pkg, fn, e, pkgs, sigs, imported, n.Arg)
 		if !castOK(src, t) && src != "invalid" {
-			r.err(n.ID, pkg.Path, fn.Name, "type_mismatch", "cannot cast "+src+" to "+t)
+			r.mismatch(n.Arg, pkg.Path, fn.Name, t, src)
 		}
 		return t
 	case "field":
@@ -669,7 +678,7 @@ func checkExpr(r *result, pkg *ir.Package, fn *ir.Func, e *env, pkgs map[string]
 		for i, a := range n.Args {
 			at := checkExpr(r, pkg, fn, e, pkgs, sigs, imported, a)
 			if i < len(sg.params) && at != sg.params[i] && at != "invalid" && sg.params[i] != "" {
-				r.err(a.ID, pkg.Path, fn.Name, "type_mismatch", fmt.Sprintf("%s arg %d got %s want %s", n.Func, i, at, sg.params[i]))
+				r.mismatch(a, pkg.Path, fn.Name, sg.params[i], at)
 			}
 		}
 		return sg.result
@@ -683,14 +692,14 @@ func checkExpr(r *result, pkg *ir.Package, fn *ir.Func, e *env, pkgs map[string]
 		for _, a := range n.Args {
 			at := checkExpr(r, pkg, fn, e, pkgs, sigs, imported, a)
 			if at != "i64" && at != "invalid" {
-				r.err(a.ID, pkg.Path, fn.Name, "type_mismatch", "syscall arg got "+at+" want i64")
+				r.mismatch(a, pkg.Path, fn.Name, "i64", at)
 			}
 		}
 		return "i64"
 	case "load8", "load32", "load64":
 		at := checkExpr(r, pkg, fn, e, pkgs, sigs, imported, n.Arg)
 		if at != "i64" && at != "invalid" {
-			r.err(n.ID, pkg.Path, fn.Name, "type_mismatch", n.Op+" got "+at+" want i64")
+			r.mismatch(n.Arg, pkg.Path, fn.Name, "i64", at)
 		}
 		return "i64"
 	default:
