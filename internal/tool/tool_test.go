@@ -501,7 +501,7 @@ func TestCrash(io *ovid/io.Cap) i64 {
 			got[r["id"].(string)] = r
 		}
 	}
-	if got["fn:demo.TestTwo"]["ok"] != true || got["fn:demo.TestFails"]["exit"] != float64(3) || got["fn:demo.TestCrash"]["signal"] == nil {
+	if got["fn:demo.TestTwo"]["ok"] != true || got["fn:demo.TestFails"]["exit"] != float64(3) || got["fn:demo.TestCrash"]["signal"] != "floating point exception" {
 		t.Fatalf("results %v", got)
 	}
 	if rb := got["fn:demo.TestFails"]["returned_by"].([]any); len(rb) != 1 || rb[0].(map[string]any)["source"] != "  return 3" {

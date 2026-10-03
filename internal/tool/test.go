@@ -114,6 +114,7 @@ func Test(dir, filter string, list bool, w io.Writer) int {
 		t0 := time.Now()
 		err := cmd.Run()
 		ms := time.Since(t0).Milliseconds()
+		timedOut := ctx.Err() == context.DeadlineExceeded
 		cancel()
 		r := map[string]any{"fact": "test", "id": t.id, "ms": ms}
 		if l := m.Index[t.id]; l != nil {
@@ -126,7 +127,7 @@ func Test(dir, filter string, list bool, w io.Writer) int {
 			code = ee.ExitCode()
 			if sig := signalOf(ee); sig != "" {
 				r["signal"] = sig
-				if ctx.Err() != nil {
+				if timedOut {
 					r["signal"] = "timeout"
 					r["hint"] = fmt.Sprintf("killed after %s", testTimeout)
 				}
