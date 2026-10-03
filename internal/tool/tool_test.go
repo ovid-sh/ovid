@@ -152,6 +152,20 @@ func main(io *ovid/io.Cap) i64 {
   return load64(p)
 }
 `, "", 42},
+		{"sizeof", `package demo
+import ovid/io
+import ovid/mem
+type Tri struct {
+  a i64
+  b i64
+  next *Tri
+}
+func main(io *ovid/io.Cap) i64 {
+  var t *Tri = ovid/io.Alloc(io, sizeof(Tri)) as *Tri
+  t.next = t
+  return sizeof(Tri) + sizeof(ovid/mem.Buf)
+}
+`, "", 48},
 		{"elseif", `package demo
 import ovid/io
 func F(x i64) i64 {
@@ -443,7 +457,7 @@ type Point struct {
 }
 
 func Make(io *ovid/io.Cap, x i64) *Point {
-  var p *Point = ovid/io.Alloc(io, Size * 2) as *Point
+  var p *Point = ovid/io.Alloc(io, sizeof(Point) + Size) as *Point
   p.x = x
   return p
 }
@@ -458,6 +472,9 @@ func Four() i64 {
 		if code := Rename(dir, rn[0], rn[1], false, &b); code != 0 {
 			t.Fatalf("rename %v: %s", rn, b.String())
 		}
+	}
+	if pt, _ := os.ReadFile(filepath.Join(dir, "demo/pt/pt.ov")); !strings.Contains(string(pt), "sizeof(Pt) + Width") {
+		t.Fatalf("pt.ov:\n%s", pt)
 	}
 	src, _ := os.ReadFile(filepath.Join(dir, "demo/main.ov"))
 	if !strings.Contains(string(src), "var p *demo/pt.Pt = demo/pt.NewPoint(io, 3)") || !strings.Contains(string(src), "p.xx = x + demo/pt.Four() - demo/pt.Width") {
@@ -760,6 +777,12 @@ func TestSelfHost(t *testing.T) {
 }
 
 func TestHints(t *testing.T) {
+	dir0 := mkmod(t, demo("package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  return sizeof(i64) + sizeof(Nope)\n}\n"))
+	var b0 bytes.Buffer
+	Check(dir0, false, &b0)
+	if ds := lines(t, b0.String()); ds[0]["message"] != "sizeof(i64) is always 8" || !strings.Contains(ds[1]["message"].(string), "unknown type demo.Nope") {
+		t.Fatalf("sizeof %v", ds)
+	}
 	dir := mkmod(t, demo("package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  while true {\n    break\n  }\n  return 0\n}\n"))
 	var b bytes.Buffer
 	Check(dir, false, &b)

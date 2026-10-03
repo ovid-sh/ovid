@@ -342,7 +342,7 @@ func findRefs(m *module.Module, res *check.Result, target *module.Loc) ([]ref, e
 			}
 		}
 		forEachNode(m, func(pkg *ir.Package, fn *ir.Func, n *ir.Node) {
-			if (n.Op == "var" || n.Op == "cast") && full(n.Type, pkg.Path) == tname {
+			if (n.Op == "var" || n.Op == "cast" || n.Op == "sizeof") && full(n.Type, pkg.Path) == tname {
 				out = append(out, ref{id: n.ID, kind: "type", span: n.Span, decl: fn.ID})
 			}
 		})

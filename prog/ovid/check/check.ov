@@ -644,6 +644,9 @@ func CheckExpr(c *Ch, n i64) i64 {
     }
     return SetI64(c)
   }
+  if ovid/json.IsLit(op, strptr("sizeof"), strlen("sizeof")) {
+    return SetI64(c)
+  }
   if ovid/json.IsLit(op, strptr("cast"), strlen("cast")) {
     CheckExpr(c, SGet(n, strptr("arg"), strlen("arg")))
     var ty i64 = SGet(n, strptr("type"), strlen("type"))
@@ -1054,8 +1057,8 @@ func CheckMain(c *Ch) i64 {
 // Run type-checks the program tree root (parsed from m.json) and prints
 // error lines and a summary. It returns the error count.
 func Run(io *ovid/io.Cap, root i64, m *ovid/parse.Mod) i64 {
-  var raw i64 = ovid/io.Alloc(io, 256)
-  Zero(raw, 256)
+  var raw i64 = ovid/io.Alloc(io, sizeof(Ch))
+  Zero(raw, sizeof(Ch))
   var c *Ch = raw as *Ch
   c.io = io
   c.root = root

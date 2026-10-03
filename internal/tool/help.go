@@ -81,7 +81,7 @@ Expressions: integers (decimal, 0x hex), true/false, names, calls f(a),
 other packages' funcs and consts by import path: ovid/mem.Copy(d, s, n),
 ovid/io.O_RDONLY (a one-segment import may also be written util.F()),
 field reads p.f, casts e as *T (i64 address to pointer and back),
-load8/load32/load64(addr), strptr("lit") / strlen("lit").
+load8/load32/load64(addr), strptr("lit") / strlen("lit"), sizeof(T).
 Binary operators, Go precedence: || && == != < <= > >= + - | ^ * / % << >> &
 (>> is arithmetic). Unary: ! (bool), - and ^ (i64). Comparisons give bool;
 if/while conditions must be bool.
@@ -95,8 +95,10 @@ ovid/io.PrintInt(io, n) prints a number, Eprint writes to stderr.
 
 Memory: no implicit allocation. ovid/io.Alloc(io, nbytes) returns an i64
 address from the heap the runtime maps; cast it: var p *Pair = raw as *Pair.
-Each struct field takes 8 bytes, so a struct is 8 * fields bytes (outline
-prints it as "size").
+Each struct field takes 8 bytes, so a struct is 8 * fields bytes; never
+count them by hand, write sizeof(T) (T a struct; path.T for another
+package's), a compile-time i64:
+  var p *Pair = ovid/io.Alloc(io, sizeof(Pair)) as *Pair
 There is no address-of (&x): locals live in registers or the stack and
 cannot be pointed at. When a callee must write a value back, allocate a
 cell and pass its address (the out-param pattern ovid/io.ReadFile uses):

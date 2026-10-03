@@ -28,6 +28,7 @@ const OP_LOAD32 i64 = 21
 const OP_LOAD64 i64 = 22
 const OP_STRPTR i64 = 23
 const OP_STRLEN i64 = 24
+const OP_SIZEOF i64 = 25
 const OP_LOR i64 = 30
 const OP_LAND i64 = 31
 const OP_EQ i64 = 32
@@ -134,13 +135,13 @@ type File struct {
 }
 
 func NewNode(p *P, op i64) *Node {
-  var n *Node = ovid/io.Alloc(p.io, 224) as *Node
+  var n *Node = ovid/io.Alloc(p.io, sizeof(Node)) as *Node
   n.op = op
   return n
 }
 
 func NewDecl(p *P, np i64, nn i64, off i64) *Decl {
-  var d *Decl = ovid/io.Alloc(p.io, 88) as *Decl
+  var d *Decl = ovid/io.Alloc(p.io, sizeof(Decl)) as *Decl
   d.namep = np
   d.namen = nn
   d.file = p.file
@@ -209,7 +210,7 @@ func Eid(p *P) i64 {
 }
 
 func NewP(io *ovid/io.Cap, f *File) *P {
-  var p *P = ovid/io.Alloc(io, 168) as *P
+  var p *P = ovid/io.Alloc(io, sizeof(P)) as *P
   p.io = io
   p.src = f.src
   p.n = f.n
@@ -224,7 +225,7 @@ func ParseFile(p *P) *Pkg {
   var s i64 = Start(p)
   ExpectKw(p, strptr("package"), strlen("package"))
   ParsePath(p)
-  var k *Pkg = ovid/io.Alloc(p.io, 136) as *Pkg
+  var k *Pkg = ovid/io.Alloc(p.io, sizeof(Pkg)) as *Pkg
   k.pathp = p.tp
   k.pathn = p.tn
   k.file = p.file
@@ -837,6 +838,22 @@ func Primary0(p *P) *Node {
     l.num = Eid(p)
     l.arg = a
     return l
+  }
+  if PeekKw(p, strptr("sizeof"), 6) {
+    Ident(p)
+    Expect(p, 40)
+    if PeekByte(p, 42) {
+      Errorf(p, strptr("sizeof takes a struct type, not a pointer: sizeof(T) is 8 * T's fields"), strlen("sizeof takes a struct type, not a pointer: sizeof(T) is 8 * T's fields"))
+    }
+    ParseType(p)
+    var zp i64 = p.tp
+    var zn i64 = p.tn
+    Expect(p, 41)
+    var z *Node = NewNode(p, OP_SIZEOF)
+    z.num = Eid(p)
+    z.typp = zp
+    z.typn = zn
+    return z
   }
   if PeekKw(p, strptr("strptr"), 6) || PeekKw(p, strptr("strlen"), 6) {
     Ident(p)

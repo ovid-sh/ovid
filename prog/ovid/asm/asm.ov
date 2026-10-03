@@ -20,7 +20,7 @@ type Code struct {
 }
 
 func New(io *ovid/io.Cap) *Code {
-  var raw i64 = ovid/io.Alloc(io, 112)
+  var raw i64 = ovid/io.Alloc(io, sizeof(Code))
   var c *Code = raw as *Code
   c.cap = 8388608
   c.data = ovid/io.Alloc(io, c.cap)

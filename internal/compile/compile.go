@@ -320,7 +320,7 @@ func exprMax(n *ir.Node, lv int) int {
 		return -1
 	}
 	switch n.Op {
-	case "int", "bool", "name", "strptr", "strlen":
+	case "int", "bool", "name", "strptr", "strlen", "sizeof":
 		return -1
 	case "add", "sub", "mul", "div", "mod", "and", "or", "xor", "shl", "shr", "eq", "ne", "lt", "le", "gt", "ge":
 		return max2(exprMax(n.Left, lv), exprMax(n.Right, lv+1), lv)
@@ -499,6 +499,13 @@ func (c *cg) emitExpr(n *ir.Node, lv int) error {
 	switch n.Op {
 	case "int":
 		c.b.MovRegImm64(asm.RAX, n.Int)
+		return nil
+	case "sizeof":
+		sz, err := c.sizeOf(n.Type)
+		if err != nil {
+			return err
+		}
+		c.b.MovRegImm64(asm.RAX, sz)
 		return nil
 	case "bool":
 		v := int64(0)
@@ -714,6 +721,20 @@ func (c *cg) emitExpr(n *ir.Node, lv int) error {
 	}
 }
 
+// sizeOf is the byte size of struct type t (pkg.T): 8 per field.
+func (c *cg) sizeOf(t string) (int64, error) {
+	i := strings.LastIndex(t, ".")
+	if i < 0 || c.pkgs[t[:i]] == nil {
+		return 0, fmt.Errorf("sizeof %s", t)
+	}
+	for _, td := range c.pkgs[t[:i]].Types {
+		if td.Name == t[i+1:] {
+			return int64(8 * len(td.Fields)), nil
+		}
+	}
+	return 0, fmt.Errorf("sizeof %s", t)
+}
+
 func (c *cg) fieldOff(base *ir.Node, field string) (int32, error) {
 	bt := c.typeOf(base)
 	if !strings.HasPrefix(bt, "*") {
@@ -747,7 +768,7 @@ func (c *cg) typeOf(n *ir.Node) string {
 		return "invalid"
 	}
 	switch n.Op {
-	case "int", "strptr", "strlen", "add", "sub", "mul", "div", "mod", "and", "or", "xor", "shl", "shr", "neg", "bnot", "load8", "load32", "load64", "syscall":
+	case "int", "strptr", "strlen", "sizeof", "add", "sub", "mul", "div", "mod", "and", "or", "xor", "shl", "shr", "neg", "bnot", "load8", "load32", "load64", "syscall":
 		return "i64"
 	case "bool", "eq", "ne", "lt", "le", "gt", "ge", "land", "lor", "not":
 		return "bool"

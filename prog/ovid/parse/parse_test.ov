@@ -5,7 +5,7 @@ import ovid/mem
 
 // Src wraps source text as a File named t.ov.
 func Src(io *ovid/io.Cap, p i64, n i64) *File {
-  var f *File = ovid/io.Alloc(io, 72) as *File
+  var f *File = ovid/io.Alloc(io, sizeof(File)) as *File
   f.relp = strptr("t.ov")
   f.reln = 4
   f.dispp = f.relp

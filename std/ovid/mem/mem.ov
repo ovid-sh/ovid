@@ -42,7 +42,7 @@ func Copy(dst i64, src i64, n i64) i64 {
 
 // New is an empty Buf with room for cap bytes.
 func New(io *ovid/io.Cap, cap i64) *Buf {
-  var raw i64 = ovid/io.Alloc(io, 24)
+  var raw i64 = ovid/io.Alloc(io, sizeof(Buf))
   var b *Buf = raw as *Buf
   b.data = ovid/io.Alloc(io, cap)
   b.len = 0

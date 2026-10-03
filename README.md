@@ -67,7 +67,7 @@ error remains and `--dry-run` never writes.
 
 ## Language, briefly
 
-`i64`, `bool`, and pointers to structs (`*T`). Struct fields are 8 bytes.
+`i64`, `bool`, and pointers to structs (`*T`). Struct fields are 8 bytes and `sizeof(T)` gives a struct's size.
 No struct values, globals, function pointers, methods, generics, or implicit
 allocation. At most six parameters, one result. Operators follow Go
 precedence; `>>` is arithmetic. String literals exist only as `strptr("…")`
@@ -93,9 +93,9 @@ cmp /tmp/s1 /tmp/s2                        # byte-identical
 ```
 
 The two compilers emit byte-identical binaries for the same source, and
-`go test ./internal/tool -run TestSelfHost` checks it. Measured on
-starship (Ryzen 7 8745HS) on 2026-10-03: the self-hosted compiler is
-236,165 bytes and builds `prog/` in 133 ms, against 25 ms for the Go one.
+`go test ./internal/tool -run TestSelfHost` checks it. The self-hosted
+compiler is 238,698 bytes (2026-10-03). On an idle starship (Ryzen 7
+8745HS) it built `prog/` in 133 ms, against 25 ms for the Go one.
 
 ## Tests
 

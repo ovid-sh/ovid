@@ -80,7 +80,7 @@ func MkParent(io *ovid/io.Cap, path i64) i64 {
 // ParseArgs reads [dir] [-C dir] [--std dir] and, when allowOut, [-o out]
 // from argv[2:]. a.bad is set (and a message printed) on a usage error.
 func ParseArgs(io *ovid/io.Cap, allowOut bool) *Args {
-  var a *Args = ovid/io.Alloc(io, 32) as *Args
+  var a *Args = ovid/io.Alloc(io, sizeof(Args)) as *Args
   var i i64 = 2
   var n i64 = ovid/io.Argc(io)
   while i < n && a.bad == 0 {

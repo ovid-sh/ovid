@@ -181,6 +181,9 @@ func WOp(e *E, op i64) i64 {
   if op == OP_STRLEN {
     return WL(e, strptr("strlen"), 6)
   }
+  if op == OP_SIZEOF {
+    return WL(e, strptr("sizeof"), 6)
+  }
   if op == OP_LOR {
     return WL(e, strptr("lor"), 3)
   }
@@ -470,7 +473,7 @@ func EPkg(e *E, k *Pkg) i64 {
 
 // Emit writes the whole program to m.json and indexes the ids.
 func Emit(m *Mod) i64 {
-  var e *E = ovid/io.Alloc(m.io, 64) as *E
+  var e *E = ovid/io.Alloc(m.io, sizeof(E)) as *E
   e.io = m.io
   e.m = m
   e.b = ovid/mem.New(m.io, 1 << 20)

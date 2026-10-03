@@ -88,6 +88,9 @@ func LeafOp(op i64) bool {
   if Lit(op, strptr("int"), strlen("int")) {
     return true
   }
+  if Lit(op, strptr("sizeof"), strlen("sizeof")) {
+    return true
+  }
   if Lit(op, strptr("strptr"), strlen("strptr")) {
     return true
   }
@@ -558,6 +561,45 @@ func SetBool(c *C) i64 {
   return 0
 }
 
+// SizeOf is the byte size of struct type pkg.T (tp/tn): 8 per field.
+func SizeOf(c *C, tp i64, tn i64) i64 {
+  var dot i64 = -1
+  var i i64 = 0
+  while i < tn {
+    if load8(tp + i) == 46 {
+      dot = i
+    }
+    i = i + 1
+  }
+  if dot < 1 {
+    Fail(c, 4)
+    return -1
+  }
+  var pkg i64 = FindPkg(c, tp, dot)
+  if pkg == 0 {
+    Fail(c, 4)
+    return -1
+  }
+  var types i64 = SGet(pkg, strptr("types"), strlen("types"))
+  var t i64 = 0
+  if types != 0 {
+    t = ovid/json.Child(types)
+  }
+  while t != 0 {
+    var nm i64 = SGet(t, strptr("name"), strlen("name"))
+    if Lit(nm, (tp + dot) + 1, (tn - dot) - 1) {
+      var fields i64 = SGet(t, strptr("fields"), strlen("fields"))
+      if fields == 0 {
+        return 0
+      }
+      return ovid/json.Count(fields) * 8
+    }
+    t = ovid/json.Next(t)
+  }
+  Fail(c, 4)
+  return -1
+}
+
 func OffsetOf(c *C, tp i64, tn i64, fp i64, fnn i64) i64 {
   if tn < 2 {
     Fail(c, 4)
@@ -993,6 +1035,15 @@ func EmitExpr(c *C, n i64, lv i64) i64 {
   if Lit(op, strptr("int"), strlen("int")) {
     var v i64 = SGet(n, strptr("value"), strlen("value"))
     ovid/asm.MovRegImm(c.code, 0, ovid/json.Int(v))
+    return 0
+  }
+  if Lit(op, strptr("sizeof"), strlen("sizeof")) {
+    var ty i64 = SGet(n, strptr("type"), strlen("type"))
+    var sz i64 = SizeOf(c, JStrP(ty), JStrN(ty))
+    if sz < 0 {
+      return c.err
+    }
+    ovid/asm.MovRegImm(c.code, 0, sz)
     return 0
   }
   if Lit(op, strptr("bool"), strlen("bool")) {
@@ -1497,12 +1548,12 @@ func Compile(io *ovid/io.Cap, root i64, errp i64) *ovid/mem.Buf {
     store64(errp, 1)
     return z as *ovid/mem.Buf
   }
-  var raw i64 = ovid/io.Alloc(io, 160)
+  var raw i64 = ovid/io.Alloc(io, sizeof(C))
   if raw == 0 {
     store64(errp, 1)
     return z as *ovid/mem.Buf
   }
-  Zero(raw, 160)
+  Zero(raw, sizeof(C))
   var c *C = raw as *C
   c.io = io
   c.root = root

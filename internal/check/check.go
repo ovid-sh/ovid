@@ -569,6 +569,15 @@ func (c *checker) expr0(e *env, n *ir.Node) string {
 			c.mismatch(n.ID, "cast", src, "i64, bool, or a pointer type")
 		}
 		return t
+	case "sizeof":
+		if n.Type == "i64" || n.Type == "bool" {
+			c.issue(Issue{Code: "bad_type", ID: n.ID, Message: "sizeof(" + n.Type + ") is always 8", Hint: "write 8; sizeof takes a struct type"})
+			return "i64"
+		}
+		if _, err := c.resolve(n.Type); err != nil {
+			c.err(n.ID, "bad_type", err.Error())
+		}
+		return "i64"
 	case "field":
 		return c.field(n.ID, c.expr(e, n.Base), n.Name)
 	case "call":

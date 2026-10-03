@@ -319,6 +319,8 @@ func (p *parser) evalConst(n *ir.Node) (int64, bool) {
 			}
 		}
 		return 0, false
+	case "sizeof":
+		p.errorf("a const's value cannot use sizeof; write sizeof(T) where the size is used")
 	case "neg":
 		v, ok := p.evalConst(n.Arg)
 		return -v, ok
@@ -768,6 +770,15 @@ func (p *parser) primary0() *ir.Node {
 		a := p.parseExpr()
 		p.expect(')')
 		return &ir.Node{ID: p.eid(), Op: op, Arg: a}
+	case p.peekKw("sizeof"):
+		p.ident()
+		p.expect('(')
+		if p.peekByte('*') {
+			p.errorf("sizeof takes a struct type, not a pointer: sizeof(T) is 8 * T's fields")
+		}
+		t := p.parseType()
+		p.expect(')')
+		return &ir.Node{ID: p.eid(), Op: "sizeof", Type: t}
 	case p.peekKw("strptr"), p.peekKw("strlen"):
 		op := p.ident()
 		p.expect('(')

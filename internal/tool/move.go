@@ -326,7 +326,7 @@ func pkgsUsed(l *module.Loc) []string {
 				set[p] = true
 			}
 		}
-		if n.Op == "var" || n.Op == "cast" {
+		if n.Op == "var" || n.Op == "cast" || n.Op == "sizeof" {
 			typ(n.Type)
 		}
 		for _, c := range n.Children() {
