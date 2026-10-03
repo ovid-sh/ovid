@@ -1,0 +1,75 @@
+package ovid/elf
+
+import ovid/io
+import ovid/asm
+import ovid/mem
+
+func W32(b *ovid/mem.Buf, io *ovid/io.Cap, v i64) i64 {
+  ovid/mem.WByte(io, b, v)
+  ovid/mem.WByte(io, b, v >> 8)
+  ovid/mem.WByte(io, b, v >> 16)
+  ovid/mem.WByte(io, b, v >> 24)
+  return 0
+}
+
+func W64(b *ovid/mem.Buf, io *ovid/io.Cap, v i64) i64 {
+  W32(b, io, v)
+  W32(b, io, v >> 32)
+  return 0
+}
+
+// Phdr writes one PT_LOAD program header.
+func Phdr(b *ovid/mem.Buf, io *ovid/io.Cap, flags i64, off i64, vaddr i64, size i64) i64 {
+  W32(b, io, 1)
+  W32(b, io, flags)
+  W64(b, io, off)
+  W64(b, io, vaddr)
+  W64(b, io, vaddr)
+  W64(b, io, size)
+  W64(b, io, size)
+  W64(b, io, ovid/asm.PAGESIZE)
+  return 0
+}
+
+// Link writes a static ET_EXEC with two segments: headers and code
+// read+execute, rodata read-only. Nothing is writable and executable.
+func Link(io *ovid/io.Cap, c *ovid/asm.Code) *ovid/mem.Buf {
+  var textsz i64 = ovid/asm.HEADERSIZE + c.len
+  var b *ovid/mem.Buf = ovid/mem.New(io, (textsz + c.ron) + 16)
+  ovid/mem.WByte(io, b, 127)
+  ovid/mem.WByte(io, b, 69)
+  ovid/mem.WByte(io, b, 76)
+  ovid/mem.WByte(io, b, 70)
+  ovid/mem.WByte(io, b, 2)
+  ovid/mem.WByte(io, b, 1)
+  ovid/mem.WByte(io, b, 1)
+  var i i64 = 0
+  while i < 9 {
+    ovid/mem.WByte(io, b, 0)
+    i = i + 1
+  }
+  ovid/mem.WByte(io, b, 2)
+  ovid/mem.WByte(io, b, 0)
+  ovid/mem.WByte(io, b, 62)
+  ovid/mem.WByte(io, b, 0)
+  W32(b, io, 1)
+  W64(b, io, ovid/asm.LOADADDR + ovid/asm.HEADERSIZE)
+  W64(b, io, 64)
+  W64(b, io, 0)
+  W32(b, io, 0)
+  ovid/mem.WByte(io, b, 64)
+  ovid/mem.WByte(io, b, 0)
+  ovid/mem.WByte(io, b, 56)
+  ovid/mem.WByte(io, b, 0)
+  ovid/mem.WByte(io, b, 2)
+  i = 0
+  while i < 7 {
+    ovid/mem.WByte(io, b, 0)
+    i = i + 1
+  }
+  Phdr(b, io, 5, 0, ovid/asm.LOADADDR, textsz)
+  Phdr(b, io, 4, textsz, ovid/asm.RodataVAddr(c.len), c.ron)
+  ovid/mem.WBytes(io, b, c.data, c.len)
+  ovid/mem.WBytes(io, b, c.ro, c.ron)
+  return b
+}

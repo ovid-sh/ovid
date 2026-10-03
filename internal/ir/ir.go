@@ -1,24 +1,24 @@
-// Package ir is the Ovid program database. A program is one JSON document
-// (ovid.json). Agents address nodes by stable id. The revision is the SHA-256
-// of the file with the 64-digit revision value replaced by zeros.
+// Package ir is the Ovid program tree. The source of truth is .ov text; the
+// parser builds this tree with an id and a source span on every node. The JSON
+// form (ovid dump) is a derived view for tools and for the self-hosted CLI.
 package ir
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
-	"fmt"
-	"os"
 	"strconv"
 )
 
-const RevZeros = "0000000000000000000000000000000000000000000000000000000000000000"
-
-const revKey = `"revision": "`
+// Span is a byte range in one source file. File indexes Program.Files.
+type Span struct {
+	File int
+	Off  int
+	End  int
+}
 
 type Program struct {
 	Revision string    `json:"revision"`
+	Files    []string  `json:"-"`
 	Module   string    `json:"module"`
 	Entry    string    `json:"entry"`
 	Packages []Package `json:"packages"`
@@ -31,11 +31,13 @@ type Package struct {
 	Consts  []Const    `json:"consts,omitempty"`
 	Types   []TypeDecl `json:"types,omitempty"`
 	Funcs   []Func     `json:"funcs,omitempty"`
+	Span    Span       `json:"-"`
 }
 
 type Import struct {
 	ID   string `json:"id"`
 	Path string `json:"path"`
+	Span Span   `json:"-"`
 }
 
 type Const struct {
@@ -43,18 +45,21 @@ type Const struct {
 	Name  string `json:"name"`
 	Type  string `json:"type"`
 	Value int64  `json:"value"`
+	Span  Span   `json:"-"`
 }
 
 type TypeDecl struct {
 	ID     string  `json:"id"`
 	Name   string  `json:"name"`
 	Fields []Field `json:"fields"`
+	Span   Span    `json:"-"`
 }
 
 type Field struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
 	Type string `json:"type"`
+	Span Span   `json:"-"`
 }
 
 type Func struct {
@@ -63,12 +68,14 @@ type Func struct {
 	Params []Param `json:"params,omitempty"`
 	Result string  `json:"result"`
 	Body   []*Node `json:"body,omitempty"`
+	Span   Span    `json:"-"`
 }
 
 type Param struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
 	Type string `json:"type"`
+	Span Span   `json:"-"`
 }
 
 // Node is a statement or expression. ValK selects the JSON "value" payload:
@@ -95,6 +102,7 @@ type Node struct {
 	Then  []*Node
 	Else  []*Node
 	Body  []*Node
+	Span  Span
 }
 
 func (n *Node) MarshalJSON() ([]byte, error) {
@@ -305,165 +313,25 @@ func Unmarshal(data []byte) (*Program, error) {
 	return &p, nil
 }
 
-// SplitRevision finds the stored revision and returns a copy of the file with
-// that 64-digit field set to zeros.
-func SplitRevision(file []byte) (stored string, zeroed []byte, err error) {
-	i := bytes.Index(file, []byte(revKey))
-	if i < 0 {
-		return "", nil, fmt.Errorf("missing revision field")
-	}
-	start := i + len(revKey)
-	if start+64 > len(file) {
-		return "", nil, fmt.Errorf("truncated revision")
-	}
-	hexpart := file[start : start+64]
-	for _, c := range hexpart {
-		if !isHex(c) {
-			return "", nil, fmt.Errorf("revision is not 64 hex digits")
+// Children returns the direct child nodes of n in source order.
+func (n *Node) Children() []*Node {
+	var out []*Node
+	for _, c := range []*Node{n.Left, n.Right, n.Arg, n.Base, n.Addr, n.Val, n.Cond} {
+		if c != nil {
+			out = append(out, c)
 		}
 	}
-	zeroed = append([]byte(nil), file...)
-	for j := 0; j < 64; j++ {
-		zeroed[start+j] = '0'
-	}
-	return string(hexpart), zeroed, nil
+	out = append(out, n.Args...)
+	out = append(out, n.Then...)
+	out = append(out, n.Else...)
+	out = append(out, n.Body...)
+	return out
 }
 
-func isHex(c byte) bool {
-	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')
-}
-
-// Hash returns the revision of a file that already contains a 64-digit revision.
-func Hash(file []byte) (stored, computed string, err error) {
-	stored, zeroed, err := SplitRevision(file)
-	if err != nil {
-		return "", "", err
-	}
-	sum := sha256.Sum256(zeroed)
-	return stored, hex.EncodeToString(sum[:]), nil
-}
-
-// Stamp replaces a 64-zero revision with the hash of the zeroed file.
-func Stamp(file []byte) ([]byte, error) {
-	stored, zeroed, err := SplitRevision(file)
-	if err != nil {
-		return nil, err
-	}
-	if stored != RevZeros {
-		// Still recompute from the zeroed image so callers can pass either.
-		_ = stored
-	}
-	sum := sha256.Sum256(zeroed)
-	h := hex.EncodeToString(sum[:])
-	out := append([]byte(nil), zeroed...)
-	i := bytes.Index(out, []byte(revKey))
-	start := i + len(revKey)
-	copy(out[start:start+64], h)
-	return out, nil
-}
-
-func ReadFile(dir string) ([]byte, *Program, error) {
-	path := dir + "/ovid.json"
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return nil, nil, err
-	}
-	p, err := Unmarshal(b)
-	if err != nil {
-		return b, nil, err
-	}
-	return b, p, nil
-}
-
-// Replace swaps the node or function with this id. The new object's id must match.
-func (p *Program) Replace(id string, raw []byte) error {
-	for pi := range p.Packages {
-		pkg := &p.Packages[pi]
-		for fi := range pkg.Funcs {
-			if pkg.Funcs[fi].ID == id {
-				var nf Func
-				if err := json.Unmarshal(raw, &nf); err != nil {
-					return err
-				}
-				if nf.ID != id {
-					return fmt.Errorf("id_mismatch")
-				}
-				pkg.Funcs[fi] = nf
-				return nil
-			}
-		}
-	}
-	var nn Node
-	if err := json.Unmarshal(raw, &nn); err != nil {
-		return err
-	}
-	if nn.ID != id {
-		return fmt.Errorf("id_mismatch")
-	}
-	if p.replaceNode(id, &nn) {
-		return nil
-	}
-	return fmt.Errorf("not_found")
-}
-
-func (p *Program) replaceNode(id string, neu *Node) bool {
-	for pi := range p.Packages {
-		for fi := range p.Packages[pi].Funcs {
-			body := p.Packages[pi].Funcs[fi].Body
-			if replaceList(body, id, neu) {
-				return true
-			}
-			for _, st := range body {
-				if st.replaceChildren(id, neu) {
-					return true
-				}
-			}
-		}
-	}
-	return false
-}
-
-func replaceList(list []*Node, id string, neu *Node) bool {
-	for i, n := range list {
-		if n != nil && n.ID == id {
-			list[i] = neu
-			return true
-		}
-	}
-	return false
-}
-
-func (n *Node) replaceChildren(id string, neu *Node) bool {
-	if n == nil {
-		return false
-	}
-	if replacePtr(&n.Left, id, neu) || replacePtr(&n.Right, id, neu) || replacePtr(&n.Arg, id, neu) ||
-		replacePtr(&n.Base, id, neu) || replacePtr(&n.Addr, id, neu) || replacePtr(&n.Val, id, neu) ||
-		replacePtr(&n.Cond, id, neu) {
-		return true
-	}
-	if replaceList(n.Args, id, neu) || replaceList(n.Then, id, neu) || replaceList(n.Else, id, neu) || replaceList(n.Body, id, neu) {
-		return true
-	}
-	kids := []*Node{n.Left, n.Right, n.Arg, n.Base, n.Addr, n.Val, n.Cond}
-	kids = append(kids, n.Args...)
-	kids = append(kids, n.Then...)
-	kids = append(kids, n.Else...)
-	kids = append(kids, n.Body...)
-	for _, k := range kids {
-		if k.replaceChildren(id, neu) {
-			return true
-		}
-	}
-	return false
-}
-
-func replacePtr(slot **Node, id string, neu *Node) bool {
-	if slot == nil || *slot == nil {
-		return false
-	}
-	if (*slot).ID == id {
-		*slot = neu
+// IsStmt reports whether op names a statement.
+func IsStmt(op string) bool {
+	switch op {
+	case "var", "assign", "setfield", "store8", "store64", "return", "if", "while", "expr":
 		return true
 	}
 	return false

@@ -1,0 +1,146 @@
+package ovid/parse
+
+import ovid/io
+import ovid/mem
+
+// Src wraps source text as a File named t.ov.
+func Src(io *ovid/io.Cap, p i64, n i64) *File {
+  var f *File = ovid/io.Alloc(io, 72) as *File
+  f.relp = strptr("t.ov")
+  f.reln = 4
+  f.dispp = f.relp
+  f.dispn = 4
+  f.src = p
+  f.n = n
+  return f
+}
+
+// ErrIs parses src and reports whether the first error is msg at offset off.
+func ErrIs(io *ovid/io.Cap, src i64, n i64, msg i64, mn i64, off i64) bool {
+  var p *P = NewP(io, Src(io, src, n))
+  ParseFile(p)
+  if p.err == 0 {
+    return false
+  }
+  if !ovid/mem.Eq(p.emsg.data, p.emsg.len, msg, mn) {
+    ovid/io.Stderr(p.emsg.data, p.emsg.len)
+    ovid/io.Stderr(strptr("\n"), 1)
+    return false
+  }
+  return p.eoff == off
+}
+
+func TestCmp(io *ovid/io.Cap) i64 {
+  if Cmp(strptr("a"), 1, strptr("ab"), 2) != -1 {
+    return 1
+  }
+  if Cmp(strptr("b"), 1, strptr("ab"), 2) != 1 {
+    return 2
+  }
+  if Cmp(strptr("ab"), 2, strptr("ab"), 2) != 0 {
+    return 3
+  }
+  return 0
+}
+
+func TestConsts(io *ovid/io.Cap) i64 {
+  var s i64 = strptr("package a\nconst A i64 = 0x10\nconst B i64 = -9223372036854775808\nconst C i64 = 010 + ^A * 2 % 7\nconst D i64 = 1 << 70\n")
+  var p *P = NewP(io, Src(io, s, ovid/io.CLen(s)))
+  var k *Pkg = ParseFile(p)
+  if p.err != 0 {
+    return 1
+  }
+  var c *Decl = k.cs
+  if c.val != 16 {
+    return 2
+  }
+  c = c.next
+  if c.val != -9223372036854775807 - 1 {
+    return 3
+  }
+  c = c.next
+  if c.val != 8 + ((-17 * 2) % 7) {
+    return 4
+  }
+  c = c.next
+  if c.val != 0 {
+    return 5
+  }
+  return 0
+}
+
+func TestErrors(io *ovid/io.Cap) i64 {
+  var a i64 = strptr("package a\nfunc F() i64 {\n  return 1 2\n}\n")
+  if !ErrIs(io, a, ovid/io.CLen(a), strptr("expected newline, found \"2\""), strlen("expected newline, found \"2\""), 36) {
+    return 1
+  }
+  var b i64 = strptr("package a\nfunc F() i64 {\n  return 1\n")
+  if !ErrIs(io, b, ovid/io.CLen(b), strptr("unclosed block"), strlen("unclosed block"), 35) {
+    return 2
+  }
+  var c i64 = strptr("package a\nconst X i64 = 99999999999999999999\n")
+  if !ErrIs(io, c, ovid/io.CLen(c), strptr("bad integer 99999999999999999999"), strlen("bad integer 99999999999999999999"), 44) {
+    return 3
+  }
+  var d i64 = strptr("package a\nfunc F() i64 {\n  return strlen(\"\\q\")\n}\n")
+  if !ErrIs(io, d, ovid/io.CLen(d), strptr("bad escape"), strlen("bad escape"), 44) {
+    return 4
+  }
+  var e i64 = strptr("package a\nfunc F() i64 {\n  var x i64 =\n}\n")
+  if !ErrIs(io, e, ovid/io.CLen(e), strptr("expected an expression, found newline"), strlen("expected an expression, found newline"), 38) {
+    return 5
+  }
+  return 0
+}
+
+// TestIds checks the id order: statements pre-order, expressions
+// post-order except unary ops, which take their id before the operand.
+func TestIds(io *ovid/io.Cap) i64 {
+  var s i64 = strptr("package a\nfunc F(x i64) i64 {\n  if x > 0 {\n    return -x\n  } else if x == 0 {\n    x = 1\n  }\n  return x\n}\n")
+  var p *P = NewP(io, Src(io, s, ovid/io.CLen(s)))
+  var k *Pkg = ParseFile(p)
+  if p.err != 0 {
+    return 1
+  }
+  var st *Node = k.fs.body
+  if st.num != 1 || st.op != OP_IF {
+    return 2
+  }
+  if st.cond.num != 3 || st.cond.left.num != 1 || st.cond.right.num != 2 {
+    return 3
+  }
+  var ret *Node = st.then
+  if ret.num != 2 || ret.val.op != OP_NEG || ret.val.num != 4 || ret.val.arg.num != 5 {
+    return 4
+  }
+  var elif *Node = st.els
+  if elif.num != 3 || elif.op != OP_IF {
+    return 5
+  }
+  if st.next.num != 5 {
+    return 6
+  }
+  return 0
+}
+
+func TestPkgConst(io *ovid/io.Cap) i64 {
+  var s i64 = strptr("package a\nimport ovid/io\nfunc F() i64 {\n  return ovid/io.O_CREAT + io.X\n}\n")
+  var p *P = NewP(io, Src(io, s, ovid/io.CLen(s)))
+  var k *Pkg = ParseFile(p)
+  if p.err != 0 {
+    return 1
+  }
+  var add *Node = k.fs.body.val
+  if add.op != OP_ADD {
+    return 2
+  }
+  var l *Node = add.left
+  if l.op != OP_NAME || !ovid/mem.Eq(l.pkgp, l.pkgn, strptr("ovid/io"), 7) || !ovid/mem.Eq(l.namep, l.namen, strptr("O_CREAT"), 7) {
+    return 3
+  }
+  // io is not an imported path, so io.X stays a field access.
+  if add.right.op != OP_FIELD {
+    return 4
+  }
+  return 0
+}

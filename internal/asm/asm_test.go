@@ -76,7 +76,7 @@ func TestWriteHi(t *testing.T) {
 	if err := b.PatchRel(); err != nil {
 		t.Fatal(err)
 	}
-	b.PatchAbs(elf.CodeVAddr())
+	b.PatchAbs(elf.RodataVAddr(len(b.Code)))
 	bin := elf.Link(b.Code, []byte("hi\n"), 0)
 	out, code := runBin(t, bin)
 	if code != 0 || out != "hi\n" {

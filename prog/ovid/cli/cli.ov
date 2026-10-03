@@ -1,0 +1,233 @@
+package ovid/cli
+
+import ovid/io
+import ovid/json
+import ovid/mem
+import ovid/check
+import ovid/cg
+import ovid/parse
+
+// Args holds the parsed command line: the module dir, --std, and -o.
+type Args struct {
+  dir i64
+  std i64
+  out i64
+  bad i64
+}
+
+func ArgEq(io *ovid/io.Cap, i i64, lit i64, n i64) bool {
+  var a i64 = ovid/io.Arg(io, i)
+  return ovid/mem.Eq(a, ovid/io.CLen(a), lit, n)
+}
+
+func Join(io *ovid/io.Cap, dir i64, dirn i64, suf i64, sufn i64) i64 {
+  var n i64 = (dirn + 1) + sufn
+  var p i64 = ovid/io.Alloc(io, n + 1)
+  ovid/mem.Copy(p, dir, dirn)
+  store8(p + dirn, 47)
+  ovid/mem.Copy(p + dirn + 1, suf, sufn)
+  store8(p + n, 0)
+  return p
+}
+
+// Usage prints the usage error (exit 64). Keep it in sync with main.
+func Usage(io *ovid/io.Cap, msg i64, msgn i64) i64 {
+  var b *ovid/mem.Buf = ovid/mem.New(io, 1024)
+  ovid/mem.WBytes(io, b, strptr("{\"ok\":false,\"error\":\"usage\",\"message\":"), strlen("{\"ok\":false,\"error\":\"usage\",\"message\":"))
+  ovid/parse.WStr(io, b, msg, msgn)
+  ovid/mem.WBytes(io, b, strptr(",\"usage\":\"ovid check [dir] [--std dir] | ovid build [dir] [-o out] [--std dir] | ovid dump [dir] [--std dir]; dir defaults to . and may also be given as -C dir; out defaults to <dir>/bin/<module name>; --std names the directory holding the shipped packages (ovid/io, ovid/mem) and overrides the std line in ovid.mod\"}\n"), strlen(",\"usage\":\"ovid check [dir] [--std dir] | ovid build [dir] [-o out] [--std dir] | ovid dump [dir] [--std dir]; dir defaults to . and may also be given as -C dir; out defaults to <dir>/bin/<module name>; --std names the directory holding the shipped packages (ovid/io, ovid/mem) and overrides the std line in ovid.mod\"}\n"))
+  ovid/io.Stdout(b.data, b.len)
+  return 64
+}
+
+func Fail(io *ovid/io.Cap, code i64, coden i64, detail i64, dn i64) i64 {
+  var b *ovid/mem.Buf = ovid/mem.New(io, 1024)
+  ovid/mem.WBytes(io, b, strptr("{\"ok\":false,\"error\":"), strlen("{\"ok\":false,\"error\":"))
+  ovid/parse.WStr(io, b, code, coden)
+  ovid/mem.WBytes(io, b, strptr(",\"message\":"), strlen(",\"message\":"))
+  ovid/parse.WStr(io, b, detail, dn)
+  ovid/mem.WBytes(io, b, strptr("}\n"), 2)
+  ovid/io.Stdout(b.data, b.len)
+  return 1
+}
+
+// LoadFailed prints the summary for a module that did not load.
+func LoadFailed(io *ovid/io.Cap, m *ovid/parse.Mod) i64 {
+  var b *ovid/mem.Buf = ovid/mem.New(io, 256)
+  ovid/mem.WBytes(io, b, strptr("{\"fact\":\"summary\",\"ok\":false,\"errors\":"), strlen("{\"fact\":\"summary\",\"ok\":false,\"errors\":"))
+  ovid/parse.WInt(io, b, m.nerr)
+  ovid/mem.WBytes(io, b, strptr("}\n"), 2)
+  ovid/io.Stdout(b.data, b.len)
+  return 1
+}
+
+func MkParent(io *ovid/io.Cap, path i64) i64 {
+  var n i64 = ovid/io.CLen(path)
+  var i i64 = n - 1
+  while i >= 0 {
+    if load8(path + i) == 47 {
+      var p i64 = ovid/io.Alloc(io, i + 1)
+      ovid/mem.Copy(p, path, i)
+      store8(p + i, 0)
+      ovid/io.Mkdir(p)
+      return 0
+    }
+    i = i - 1
+  }
+  return 0
+}
+
+// ParseArgs reads [dir] [-C dir] [--std dir] and, when allowOut, [-o out]
+// from argv[2:]. a.bad is set (and a message printed) on a usage error.
+func ParseArgs(io *ovid/io.Cap, allowOut bool) *Args {
+  var a *Args = ovid/io.Alloc(io, 32) as *Args
+  var i i64 = 2
+  var n i64 = ovid/io.Argc(io)
+  while i < n && a.bad == 0 {
+    var flag bool = ArgEq(io, i, strptr("-C"), 2) || ArgEq(io, i, strptr("--std"), 5) || (allowOut && ArgEq(io, i, strptr("-o"), 2))
+    if flag {
+      if i + 1 >= n {
+        a.bad = Usage(io, strptr("flag needs a value"), strlen("flag needs a value"))
+      } else if ArgEq(io, i, strptr("--std"), 5) {
+        a.std = ovid/io.Arg(io, i + 1)
+      } else if ArgEq(io, i, strptr("-o"), 2) {
+        a.out = ovid/io.Arg(io, i + 1)
+      } else if a.dir != 0 {
+        a.bad = Usage(io, strptr("more than one module dir"), strlen("more than one module dir"))
+      } else {
+        a.dir = ovid/io.Arg(io, i + 1)
+      }
+      i = i + 2
+    } else if load8(ovid/io.Arg(io, i)) == 45 {
+      a.bad = Usage(io, ovid/io.Arg(io, i), ovid/io.CLen(ovid/io.Arg(io, i)))
+    } else if a.dir != 0 {
+      a.bad = Usage(io, strptr("more than one module dir"), strlen("more than one module dir"))
+    } else {
+      a.dir = ovid/io.Arg(io, i)
+      i = i + 1
+    }
+  }
+  if a.dir == 0 {
+    a.dir = strptr(".")
+  }
+  return a
+}
+
+// LoadArgs loads the module named by a; on load errors it prints the
+// summary and returns 0.
+func LoadArgs(io *ovid/io.Cap, a *Args) *ovid/parse.Mod {
+  var stdn i64 = 0
+  if a.std != 0 {
+    stdn = ovid/io.CLen(a.std)
+  }
+  var dn i64 = ovid/io.CLen(a.dir)
+  while dn > 1 && load8((a.dir + dn) - 1) == 47 {
+    dn = dn - 1
+  }
+  var m *ovid/parse.Mod = ovid/parse.Load(io, a.dir, dn, a.std, stdn)
+  if m.nerr != 0 {
+    LoadFailed(io, m)
+    return 0 as *ovid/parse.Mod
+  }
+  return m
+}
+
+func Tree(io *ovid/io.Cap, m *ovid/parse.Mod) i64 {
+  return ovid/json.Parse(io, m.json.data, m.json.len)
+}
+
+func CmdCheck(io *ovid/io.Cap) i64 {
+  var a *Args = ParseArgs(io, false)
+  if a.bad != 0 {
+    return a.bad
+  }
+  var m *ovid/parse.Mod = LoadArgs(io, a)
+  if m == 0 as *ovid/parse.Mod {
+    return 1
+  }
+  var root i64 = Tree(io, m)
+  if root == 0 {
+    return Fail(io, strptr("internal"), 8, strptr("program JSON did not parse"), strlen("program JSON did not parse"))
+  }
+  if ovid/check.Run(io, root, m) != 0 {
+    return 1
+  }
+  return 0
+}
+
+func CmdDump(io *ovid/io.Cap) i64 {
+  var a *Args = ParseArgs(io, false)
+  if a.bad != 0 {
+    return a.bad
+  }
+  var m *ovid/parse.Mod = LoadArgs(io, a)
+  if m == 0 as *ovid/parse.Mod {
+    return 1
+  }
+  ovid/io.Stdout(m.json.data, m.json.len)
+  return 0
+}
+
+func CmdBuild(io *ovid/io.Cap) i64 {
+  var a *Args = ParseArgs(io, true)
+  if a.bad != 0 {
+    return a.bad
+  }
+  var m *ovid/parse.Mod = LoadArgs(io, a)
+  if m == 0 as *ovid/parse.Mod {
+    return 1
+  }
+  var root i64 = Tree(io, m)
+  if root == 0 {
+    return Fail(io, strptr("internal"), 8, strptr("program JSON did not parse"), strlen("program JSON did not parse"))
+  }
+  if ovid/check.Run(io, root, m) != 0 {
+    return 1
+  }
+  var out i64 = a.out
+  if out == 0 {
+    var bin i64 = Join(io, m.dirp, m.dirn, strptr("bin"), 3)
+    out = Join(io, bin, m.dirn + 4, m.namep, m.namen)
+  }
+  var errp i64 = ovid/io.Alloc(io, 8)
+  store64(errp, 0)
+  var b *ovid/mem.Buf = ovid/cg.Compile(io, root, errp)
+  if load64(errp) != 0 {
+    var tmp i64 = ovid/io.Alloc(io, 64)
+    var en i64 = ovid/mem.FormatI64(tmp, load64(errp))
+    return Fail(io, strptr("compile"), strlen("compile"), tmp, en)
+  }
+  MkParent(io, out)
+  if ovid/io.WriteFile(io, out, ovid/io.CLen(out), b.data, b.len, 493) != 0 {
+    return Fail(io, strptr("write"), strlen("write"), out, ovid/io.CLen(out))
+  }
+  var qb *ovid/mem.Buf = ovid/mem.New(io, 1024)
+  ovid/mem.WBytes(io, qb, strptr("{\"ok\":true,\"output\":"), strlen("{\"ok\":true,\"output\":"))
+  ovid/parse.WStr(io, qb, out, ovid/io.CLen(out))
+  ovid/mem.WBytes(io, qb, strptr(",\"bytes\":"), strlen(",\"bytes\":"))
+  ovid/parse.WInt(io, qb, b.len)
+  ovid/mem.WBytes(io, qb, strptr("}\n"), 2)
+  ovid/io.Stdout(qb.data, qb.len)
+  return 0
+}
+
+func main(io *ovid/io.Cap) i64 {
+  if ovid/io.Argc(io) < 2 {
+    return Usage(io, strptr("no command"), strlen("no command"))
+  }
+  if ArgEq(io, 1, strptr("check"), 5) {
+    return CmdCheck(io)
+  }
+  if ArgEq(io, 1, strptr("build"), 5) {
+    return CmdBuild(io)
+  }
+  if ArgEq(io, 1, strptr("dump"), 4) {
+    return CmdDump(io)
+  }
+  var cmd i64 = ovid/io.Arg(io, 1)
+  var b *ovid/mem.Buf = ovid/mem.New(io, 256)
+  ovid/mem.WBytes(io, b, strptr("unknown command "), strlen("unknown command "))
+  ovid/mem.WBytes(io, b, cmd, ovid/io.CLen(cmd))
+  ovid/mem.WBytes(io, b, strptr("; commands: check build dump"), strlen("; commands: check build dump"))
+  return Usage(io, b.data, b.len)
+}

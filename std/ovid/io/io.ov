@@ -1,0 +1,251 @@
+package ovid/io
+
+// Cap is the capability main receives: argv and the heap. Only code
+// handed a *Cap can allocate or read arguments.
+type Cap struct {
+  argc i64
+  argv i64
+  heap i64
+  used i64
+  size i64
+}
+
+const SYS_READ i64 = 0
+const SYS_WRITE i64 = 1
+const SYS_CLOSE i64 = 3
+const SYS_FSTAT i64 = 5
+const SYS_MMAP i64 = 9
+const SYS_EXIT i64 = 60
+const SYS_OPENAT i64 = 257
+const SYS_FSTATAT i64 = 262
+const AT_FDCWD i64 = -100
+const O_RDONLY i64 = 0
+const O_WRONLY i64 = 1
+const O_CREAT i64 = 64
+const O_TRUNC i64 = 512
+const O_DIRECTORY i64 = 65536
+const SYS_GETDENTS64 i64 = 217
+
+// Argc is the number of command-line arguments, the program name included.
+func Argc(io *Cap) i64 {
+  return io.argc
+}
+
+// Arg is the address of argument i, NUL-terminated; its length is CLen.
+// Arg(io, 0) is the program name.
+func Arg(io *Cap, i i64) i64 {
+  return load64(io.argv + (i * 8))
+}
+
+// Alloc returns n zeroed bytes (8-aligned) from the heap, or 0 when the
+// heap (128 MiB) is spent. Nothing is ever freed.
+func Alloc(io *Cap, n i64) i64 {
+  var align i64 = (n + 7) & ^7
+  if align < 8 {
+    align = 8
+  }
+  var u i64 = io.used
+  if (u + align) > io.size {
+    return 0
+  }
+  var p i64 = io.heap + u
+  io.used = u + align
+  return p
+}
+
+// CLen is the length of the NUL-terminated string at p.
+func CLen(p i64) i64 {
+  var i i64 = 0
+  while load8(p + i) != 0 {
+    i = i + 1
+  }
+  return i
+}
+
+// Write writes all n bytes at p to fd. It returns 0, or -1 on error.
+func Write(fd i64, p i64, n i64) i64 {
+  var off i64 = 0
+  while off < n {
+    var w i64 = syscall(SYS_WRITE, fd, p + off, n - off, 0, 0, 0)
+    if w <= 0 {
+      return -1
+    }
+    off = off + w
+  }
+  return 0
+}
+
+// Stdout writes n bytes at p to standard output.
+func Stdout(p i64, n i64) i64 {
+  return Write(1, p, n)
+}
+
+// Stderr writes n bytes at p to standard error.
+func Stderr(p i64, n i64) i64 {
+  return Write(2, p, n)
+}
+
+// CStr copies n bytes at p into a new NUL-terminated string.
+func CStr(io *Cap, p i64, n i64) i64 {
+  var d i64 = Alloc(io, n + 1)
+  var i i64 = 0
+  while i < n {
+    store8(d + i, load8(p + i))
+    i = i + 1
+  }
+  store8(d + n, 0)
+  return d
+}
+
+// Open opens the NUL-terminated path; it returns an fd, or < 0 on error.
+func Open(path i64, flags i64, mode i64) i64 {
+  return syscall(SYS_OPENAT, AT_FDCWD, path, flags, mode, 0, 0)
+}
+
+// Close closes fd.
+func Close(fd i64) i64 {
+  return syscall(SYS_CLOSE, fd, 0, 0, 0, 0, 0)
+}
+
+// Read reads up to n bytes from fd into p; it returns the count, 0 at the
+// end, or < 0 on error.
+func Read(fd i64, p i64, n i64) i64 {
+  return syscall(SYS_READ, fd, p, n, 0, 0, 0)
+}
+
+// Fstat fills buf (256 bytes) with struct stat for fd: size at 48.
+func Fstat(fd i64, buf i64) i64 {
+  return syscall(SYS_FSTAT, fd, buf, 0, 0, 0, 0)
+}
+
+// FstatAt fills buf (256 bytes) with struct stat for the NUL-terminated path.
+func FstatAt(path i64, buf i64) i64 {
+  return syscall(SYS_FSTATAT, AT_FDCWD, path, buf, 0, 0, 0)
+}
+
+// ReadFile reads the whole file named by path (pathn bytes). It returns 0
+// and stores the data address at outp and its length at outn (allocate
+// two 8-byte cells and load64 them), or -1. The data is NUL-terminated.
+func ReadFile(io *Cap, path i64, pathn i64, outp i64, outn i64) i64 {
+  var cs i64 = CStr(io, path, pathn)
+  var fd i64 = Open(cs, O_RDONLY, 0)
+  if fd < 0 {
+    return -1
+  }
+  var st i64 = Alloc(io, 256)
+  if Fstat(fd, st) < 0 {
+    Close(fd)
+    return -1
+  }
+  var sz i64 = load64(st + 48)
+  var buf i64 = Alloc(io, sz + 1)
+  if buf == 0 {
+    Close(fd)
+    return -1
+  }
+  var got i64 = 0
+  while got < sz {
+    var r i64 = Read(fd, buf + got, sz - got)
+    if r <= 0 {
+      Close(fd)
+      return -1
+    }
+    got = got + r
+  }
+  Close(fd)
+  store8(buf + sz, 0)
+  store64(outp, buf)
+  store64(outn, sz)
+  return 0
+}
+
+// WriteFile creates or truncates path with permission mode (493 is 0755,
+// 420 is 0644) and writes datan bytes. It returns 0, or < 0 on error.
+func WriteFile(io *Cap, path i64, pathn i64, data i64, datan i64, mode i64) i64 {
+  var cs i64 = CStr(io, path, pathn)
+  var flags i64 = (O_WRONLY + O_CREAT) + O_TRUNC
+  var fd i64 = Open(cs, flags, mode)
+  if fd < 0 {
+    return -1
+  }
+  var w i64 = Write(fd, data, datan)
+  Close(fd)
+  return w
+}
+
+// Getdents reads directory entries from fd (opened with O_DIRECTORY) into
+// buf, at most n bytes, as linux_dirent64 records: d_ino at 0, d_off at 8,
+// d_reclen (u16) at 16, d_type at 18 (4 dir, 8 file, 10 symlink, 0 unknown),
+// NUL-terminated name at 19. Returns the bytes read, 0 at the end, or < 0.
+func Getdents(fd i64, buf i64, n i64) i64 {
+  return syscall(SYS_GETDENTS64, fd, buf, n, 0, 0, 0)
+}
+
+// Mkdir creates the directory at the NUL-terminated path, mode 0755.
+func Mkdir(path i64) i64 {
+  return syscall(258, AT_FDCWD, path, 493, 0, 0, 0)
+}
+
+// IsDir is 1 if path (pathn bytes) is a directory, else 0.
+func IsDir(io *Cap, path i64, pathn i64) i64 {
+  var cs i64 = CStr(io, path, pathn)
+  var st i64 = Alloc(io, 256)
+  if FstatAt(cs, st) < 0 {
+    return 0
+  }
+  var m i64 = load32(st + 24)
+  if (m & 0xF000) == 0x4000 {
+    return 1
+  }
+  return 0
+}
+
+// Print writes the NUL-terminated string at p to standard output, so a
+// literal needs no length: ovid/io.Print(strptr("hi\n")).
+func Print(p i64) i64 {
+  return Write(1, p, CLen(p))
+}
+
+// Eprint is Print to standard error.
+func Eprint(p i64) i64 {
+  return Write(2, p, CLen(p))
+}
+
+// PrintInt writes v in decimal to standard output. It uses heap scratch
+// and gives it back, so it may be called in a loop.
+func PrintInt(io *Cap, v i64) i64 {
+  return WriteInt(io, 1, v)
+}
+
+// WriteInt writes v in decimal to fd.
+func WriteInt(io *Cap, fd i64, v i64) i64 {
+  var mark i64 = io.used
+  var buf i64 = Alloc(io, 24)
+  if buf == 0 {
+    return -1
+  }
+  // Digits go right to left; negatives are built from negative remainders
+  // so the most negative i64 works too.
+  var i i64 = 24
+  var x i64 = v
+  if x > 0 {
+    x = 0 - x
+  }
+  while x != 0 || i == 24 {
+    i = i - 1
+    store8(buf + i, 48 - (x % 10))
+    x = x / 10
+  }
+  if v < 0 {
+    i = i - 1
+    store8(buf + i, 45)
+  }
+  var r i64 = Write(fd, buf + i, 24 - i)
+  // Hand the scratch back zeroed, as Alloc promises.
+  while i < 24 {
+    store8(buf + i, 0)
+    i = i + 1
+  }
+  io.used = mark
+  return r
+}

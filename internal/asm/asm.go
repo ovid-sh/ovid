@@ -302,10 +302,10 @@ func errUnset(label int) error { return unsetErr(label) }
 
 func (e unsetErr) Error() string { return "unset label" }
 
-// PatchAbs writes absolute rodata addresses.
-// codeVAddr is the virtual address of Code[0]. rodata follows Code in the image.
-func (b *Buf) PatchAbs(codeVAddr uint64) {
-	base := codeVAddr + uint64(len(b.Code))
+// PatchAbs writes the absolute address of each rodata reference, given
+// where rodata is mapped.
+func (b *Buf) PatchAbs(rodataVAddr uint64) {
+	base := rodataVAddr
 	for _, f := range b.abs {
 		addr := base + uint64(f.roOff)
 		binary.LittleEndian.PutUint64(b.Code[f.at:f.at+8], addr)

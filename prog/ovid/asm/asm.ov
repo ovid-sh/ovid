@@ -1,0 +1,541 @@
+package ovid/asm
+
+import ovid/io
+
+type Code struct {
+  data i64
+  len i64
+  cap i64
+  nlab i64
+  labs i64
+  nfix i64
+  fixes i64
+  nabs i64
+  abss i64
+  ro i64
+  ron i64
+  rocap i64
+  strs i64
+  nstr i64
+}
+
+func New(io *ovid/io.Cap) *Code {
+  var raw i64 = ovid/io.Alloc(io, 112)
+  var c *Code = raw as *Code
+  c.cap = 8388608
+  c.data = ovid/io.Alloc(io, c.cap)
+  c.len = 0
+  c.nlab = 0
+  c.labs = ovid/io.Alloc(io, 1600000)
+  c.nfix = 0
+  c.fixes = ovid/io.Alloc(io, 4800000)
+  c.nabs = 0
+  c.abss = ovid/io.Alloc(io, 640000)
+  c.rocap = 2097152
+  c.ro = ovid/io.Alloc(io, c.rocap)
+  c.ron = 0
+  c.strs = ovid/io.Alloc(io, 1048576)
+  c.nstr = 0
+  return c
+}
+
+func E(c *Code, b i64) i64 {
+  if c.len >= c.cap {
+    return -1
+  }
+  store8(c.data + c.len, b & 255)
+  c.len = c.len + 1
+  return 0
+}
+
+func EU32(c *Code, v i64) i64 {
+  E(c, v)
+  E(c, v >> 8)
+  E(c, v >> 16)
+  E(c, v >> 24)
+  return 0
+}
+
+func EU64(c *Code, v i64) i64 {
+  EU32(c, v)
+  EU32(c, v >> 32)
+  return 0
+}
+
+func PutU32(p i64, v i64) i64 {
+  store8(p, v)
+  store8(p + 1, v >> 8)
+  store8(p + 2, v >> 16)
+  store8(p + 3, v >> 24)
+  return 0
+}
+
+func PutU64(p i64, v i64) i64 {
+  PutU32(p, v)
+  PutU32(p + 4, v >> 32)
+  return 0
+}
+
+func NewLabel(c *Code) i64 {
+  var id i64 = c.nlab
+  store64(c.labs + (id * 8), 0 - 1)
+  c.nlab = id + 1
+  return id
+}
+
+func Mark(c *Code, id i64) i64 {
+  store64(c.labs + (id * 8), c.len)
+  return 0
+}
+
+func AddFix(c *Code, at i64, end i64, lab i64) i64 {
+  var p i64 = c.fixes + (c.nfix * 24)
+  store64(p, at)
+  store64(p + 8, end)
+  store64(p + 16, lab)
+  c.nfix = c.nfix + 1
+  return 0
+}
+
+func Rel(c *Code, op i64, op2 i64, n i64, lab i64) i64 {
+  if n == 1 {
+    E(c, op)
+  } else {
+    E(c, op)
+    E(c, op2)
+  }
+  var at i64 = c.len
+  EU32(c, 0)
+  AddFix(c, at, c.len, lab)
+  return 0
+}
+
+func Jmp(c *Code, lab i64) i64 {
+  return Rel(c, 0xE9, 0, 1, lab)
+}
+
+func Call(c *Code, lab i64) i64 {
+  return Rel(c, 0xE8, 0, 1, lab)
+}
+
+func Jcc(c *Code, cc i64, lab i64) i64 {
+  return Rel(c, 0x0F, cc, 2, lab)
+}
+
+func Jz(c *Code, lab i64) i64 {
+  return Jcc(c, 0x84, lab)
+}
+
+func Jnz(c *Code, lab i64) i64 {
+  return Jcc(c, 0x85, lab)
+}
+
+func Jl(c *Code, lab i64) i64 {
+  return Jcc(c, 0x8C, lab)
+}
+
+func MovRegImm(c *Code, reg i64, imm i64) i64 {
+  var rex i64 = 0x48
+  if reg >= 8 {
+    rex = 0x49
+  }
+  E(c, rex)
+  E(c, 0xB8 + (reg & 7))
+  EU64(c, imm)
+  return 0
+}
+
+func AbsHere(c *Code, roOff i64) i64 {
+  var p i64 = c.abss + (c.nabs * 16)
+  store64(p, c.len - 8)
+  store64(p + 8, roOff)
+  c.nabs = c.nabs + 1
+  return 0
+}
+
+func MovRegReg(c *Code, dst i64, src i64) i64 {
+  var rex i64 = 0x48
+  if src >= 8 {
+    rex = rex + 4
+  }
+  if dst >= 8 {
+    rex = rex + 1
+  }
+  E(c, rex)
+  E(c, 0x89)
+  E(c, (192 + ((src & 7) * 8)) + (dst & 7))
+  return 0
+}
+
+func PushReg(c *Code, reg i64) i64 {
+  if reg >= 8 {
+    E(c, 0x41)
+  }
+  E(c, 0x50 + (reg & 7))
+  return 0
+}
+
+func PopReg(c *Code, reg i64) i64 {
+  if reg >= 8 {
+    E(c, 0x41)
+  }
+  E(c, 0x58 + (reg & 7))
+  return 0
+}
+
+func Ret(c *Code) i64 {
+  return E(c, 0xC3)
+}
+
+func Syscall(c *Code) i64 {
+  E(c, 0x0F)
+  E(c, 0x05)
+  return 0
+}
+
+func Cqo(c *Code) i64 {
+  E(c, 0x48)
+  E(c, 0x99)
+  return 0
+}
+
+func IdivRcx(c *Code) i64 {
+  E(c, 0x48)
+  E(c, 0xF7)
+  E(c, 0xF9)
+  return 0
+}
+
+func NegRax(c *Code) i64 {
+  E(c, 0x48)
+  E(c, 0xF7)
+  E(c, 0xD8)
+  return 0
+}
+
+func NotRax(c *Code) i64 {
+  E(c, 0x48)
+  E(c, 0xF7)
+  E(c, 0xD0)
+  return 0
+}
+
+func XorRaxRax(c *Code) i64 {
+  E(c, 0x48)
+  E(c, 0x31)
+  E(c, 0xC0)
+  return 0
+}
+
+func TestRaxRax(c *Code) i64 {
+  E(c, 0x48)
+  E(c, 0x85)
+  E(c, 0xC0)
+  return 0
+}
+
+func CmpRaxRcx(c *Code) i64 {
+  E(c, 0x48)
+  E(c, 0x39)
+  E(c, 0xC8)
+  return 0
+}
+
+func AddRaxRcx(c *Code) i64 {
+  E(c, 0x48)
+  E(c, 0x01)
+  E(c, 0xC8)
+  return 0
+}
+
+func SubRaxRcx(c *Code) i64 {
+  E(c, 0x48)
+  E(c, 0x29)
+  E(c, 0xC8)
+  return 0
+}
+
+func AndRaxRcx(c *Code) i64 {
+  E(c, 0x48)
+  E(c, 0x21)
+  E(c, 0xC8)
+  return 0
+}
+
+func OrRaxRcx(c *Code) i64 {
+  E(c, 0x48)
+  E(c, 0x09)
+  E(c, 0xC8)
+  return 0
+}
+
+func XorRaxRcx(c *Code) i64 {
+  E(c, 0x48)
+  E(c, 0x31)
+  E(c, 0xC8)
+  return 0
+}
+
+func ImulRaxRcx(c *Code) i64 {
+  E(c, 0x48)
+  E(c, 0x0F)
+  E(c, 0xAF)
+  E(c, 0xC1)
+  return 0
+}
+
+func ShlRaxCl(c *Code) i64 {
+  E(c, 0x48)
+  E(c, 0xD3)
+  E(c, 0xE0)
+  return 0
+}
+
+func SarRaxCl(c *Code) i64 {
+  E(c, 0x48)
+  E(c, 0xD3)
+  E(c, 0xF8)
+  return 0
+}
+
+func SetccAl(c *Code, cc i64) i64 {
+  E(c, 0x0F)
+  E(c, cc)
+  E(c, 0xC0)
+  return 0
+}
+
+func MovzxRaxAl(c *Code) i64 {
+  E(c, 0x48)
+  E(c, 0x0F)
+  E(c, 0xB6)
+  E(c, 0xC0)
+  return 0
+}
+
+func MovzxRaxByteRcx(c *Code) i64 {
+  E(c, 0x48)
+  E(c, 0x0F)
+  E(c, 0xB6)
+  E(c, 0x01)
+  return 0
+}
+
+func MovEaxDwordRcx(c *Code) i64 {
+  E(c, 0x8B)
+  E(c, 0x01)
+  return 0
+}
+
+func MovRaxQwordRcx(c *Code) i64 {
+  E(c, 0x48)
+  E(c, 0x8B)
+  E(c, 0x01)
+  return 0
+}
+
+func MovByteRcxAl(c *Code) i64 {
+  E(c, 0x88)
+  E(c, 0x01)
+  return 0
+}
+
+func MovQwordRcxRax(c *Code) i64 {
+  E(c, 0x48)
+  E(c, 0x89)
+  E(c, 0x01)
+  return 0
+}
+
+func MovRbpDisp(c *Code, op i64, reg i64, disp i64) i64 {
+  var rex i64 = 0x48
+  if reg >= 8 {
+    rex = 0x4C
+  }
+  E(c, rex)
+  E(c, op)
+  if disp >= (0 - 128) && disp <= 127 {
+    E(c, (64 + ((reg & 7) * 8)) + 5)
+    E(c, disp)
+    return 0
+  }
+  E(c, (128 + ((reg & 7) * 8)) + 5)
+  EU32(c, disp)
+  return 0
+}
+
+func MovRegMemRbp(c *Code, reg i64, disp i64) i64 {
+  return MovRbpDisp(c, 0x8B, reg, disp)
+}
+
+func MovMemRbpReg(c *Code, reg i64, disp i64) i64 {
+  return MovRbpDisp(c, 0x89, reg, disp)
+}
+
+func MovRaxMemRbp(c *Code, disp i64) i64 {
+  return MovRegMemRbp(c, 0, disp)
+}
+
+func MovMemRbpRax(c *Code, disp i64) i64 {
+  return MovMemRbpReg(c, 0, disp)
+}
+
+func MovRcxMemRbp(c *Code, disp i64) i64 {
+  return MovRegMemRbp(c, 1, disp)
+}
+
+func MemReg(c *Code, op i64, reg i64, base i64, disp i64) i64 {
+  var rex i64 = 0x48
+  if reg >= 8 {
+    rex = rex + 4
+  }
+  if base >= 8 {
+    rex = rex + 1
+  }
+  E(c, rex)
+  E(c, op)
+  var rb i64 = base & 7
+  var rg i64 = reg & 7
+  if disp == 0 && rb != 5 && rb != 4 {
+    E(c, (rg * 8) + rb)
+    return 0
+  }
+  if disp >= (0 - 128) && disp <= 127 {
+    E(c, (64 + (rg * 8)) + rb)
+    E(c, disp)
+    return 0
+  }
+  E(c, (128 + (rg * 8)) + rb)
+  EU32(c, disp)
+  return 0
+}
+
+func MovRaxMemRegDisp(c *Code, base i64, disp i64) i64 {
+  return MemReg(c, 0x8B, 0, base, disp)
+}
+
+func MovMemRegDispRax(c *Code, base i64, disp i64) i64 {
+  return MemReg(c, 0x89, 0, base, disp)
+}
+
+func SubRsp(c *Code, n i64) i64 {
+  if n == 0 {
+    return 0
+  }
+  if n >= (0 - 128) && n <= 127 {
+    E(c, 0x48)
+    E(c, 0x83)
+    E(c, 0xEC)
+    E(c, n)
+    return 0
+  }
+  E(c, 0x48)
+  E(c, 0x81)
+  E(c, 0xEC)
+  EU32(c, n)
+  return 0
+}
+
+func AndRspAlign(c *Code) i64 {
+  E(c, 0x48)
+  E(c, 0x83)
+  E(c, 0xE4)
+  E(c, 0xF0)
+  return 0
+}
+
+func LeaR13Rsp8(c *Code) i64 {
+  E(c, 0x4C)
+  E(c, 0x8D)
+  E(c, 0x6C)
+  E(c, 0x24)
+  E(c, 0x08)
+  return 0
+}
+
+func MovR12MemRsp(c *Code) i64 {
+  E(c, 0x4C)
+  E(c, 0x8B)
+  E(c, 0x24)
+  E(c, 0x24)
+  return 0
+}
+
+// Intern returns the offset of p[0:n] in the read-only pool, adding it
+// (NUL-terminated) the first time. Only identical strings share storage,
+// like the Go compiler's map, so every literal stays NUL-terminated.
+func Intern(c *Code, p i64, n i64) i64 {
+  var i i64 = 0
+  while i < c.nstr {
+    var r i64 = c.strs + (i * 16)
+    if ovidMemEq(c.ro + load64(r), load64(r + 8), p, n) {
+      return load64(r)
+    }
+    i = i + 1
+  }
+  var off i64 = c.ron
+  var k i64 = 0
+  while k < n {
+    store8(c.ro + off + k, load8(p + k))
+    k = k + 1
+  }
+  store8(c.ro + off + n, 0)
+  c.ron = off + n + 1
+  if c.nstr < 65536 {
+    store64(c.strs + (c.nstr * 16), off)
+    store64(c.strs + (c.nstr * 16) + 8, n)
+    c.nstr = c.nstr + 1
+  }
+  return off
+}
+
+func ovidMemEq(a i64, an i64, b i64, bn i64) bool {
+  if an != bn {
+    return false
+  }
+  var i i64 = 0
+  while i < an {
+    if load8(a + i) != load8(b + i) {
+      return false
+    }
+    i = i + 1
+  }
+  return true
+}
+
+// The image layout shared with ovid/elf: the ELF header and two program
+// headers, then code (read+execute), then rodata (read-only) mapped on the
+// next page at the same offset within its page as in the file.
+const LOADADDR i64 = 4194304
+const HEADERSIZE i64 = 176
+const PAGESIZE i64 = 4096
+
+func RodataVAddr(codeLen i64) i64 {
+  var end i64 = (LOADADDR + HEADERSIZE) + codeLen
+  var page i64 = ((end + PAGESIZE) - 1) / PAGESIZE * PAGESIZE
+  return page + ((HEADERSIZE + codeLen) % PAGESIZE)
+}
+
+func Patch(c *Code) i64 {
+  var i i64 = 0
+  while i < c.nfix {
+    var fp i64 = c.fixes + (i * 24)
+    var at i64 = load64(fp)
+    var end i64 = load64(fp + 8)
+    var lab i64 = load64(fp + 16)
+    var target i64 = load64(c.labs + (lab * 8))
+    var rel i64 = target - end
+    PutU32(c.data + at, rel)
+    i = i + 1
+  }
+  var base i64 = RodataVAddr(c.len)
+  i = 0
+  while i < c.nabs {
+    var ap i64 = c.abss + (i * 16)
+    var at i64 = load64(ap)
+    var ro i64 = load64(ap + 8)
+    PutU64(c.data + at, base + ro)
+    i = i + 1
+  }
+  return 0
+}

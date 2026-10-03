@@ -50,9 +50,13 @@ func Compile(p *ir.Program) ([]byte, error) {
 	if err := c.emitStartup(c.funcLabel[mainKey]); err != nil {
 		return nil, err
 	}
+	live := reachable(p, mainKey)
 	for i := range p.Packages {
 		pkg := &p.Packages[i]
 		for fi := range pkg.Funcs {
+			if !live[pkg.Path+"."+pkg.Funcs[fi].Name] {
+				continue
+			}
 			if err := c.emitFunc(pkg, &pkg.Funcs[fi]); err != nil {
 				return nil, err
 			}
@@ -61,7 +65,7 @@ func Compile(p *ir.Program) ([]byte, error) {
 	if err := c.b.PatchRel(); err != nil {
 		return nil, err
 	}
-	c.b.PatchAbs(elf.CodeVAddr())
+	c.b.PatchAbs(elf.RodataVAddr(len(c.b.Code)))
 	return elf.Link(c.b.Code, c.ro, 0), nil
 }
 
@@ -71,19 +75,19 @@ type sig struct {
 }
 
 type cg struct {
-	prog      *ir.Program
-	b         asm.Buf
-	ro        []byte
-	strs      map[string]int
-	funcLabel map[string]int
-	sigs      map[string]sig
-	pkgs      map[string]*ir.Package
-	locals    map[string]int32
-	consts    map[string]int64
+	prog       *ir.Program
+	b          asm.Buf
+	ro         []byte
+	strs       map[string]int
+	funcLabel  map[string]int
+	sigs       map[string]sig
+	pkgs       map[string]*ir.Package
+	locals     map[string]int32
+	consts     map[string]int64
 	localBytes int32
-	epi       int
-	pkg       *ir.Package
-	fn        *ir.Func
+	epi        int
+	pkg        *ir.Package
+	fn         *ir.Func
 }
 
 func (c *cg) intern(s string) int {
@@ -512,6 +516,14 @@ func (c *cg) emitExpr(n *ir.Node, lv int) error {
 		c.b.MovRegImm64(asm.RAX, int64(len(n.Str)))
 		return nil
 	case "name":
+		if n.Pkg != "" {
+			v, err := c.pkgConst(n)
+			if err != nil {
+				return err
+			}
+			c.b.MovRegImm64(asm.RAX, v)
+			return nil
+		}
 		if disp, ok := c.locals[n.Name]; ok {
 			c.b.MovRaxMemRbp(disp)
 			return nil
@@ -740,6 +752,9 @@ func (c *cg) typeOf(n *ir.Node) string {
 	case "bool", "eq", "ne", "lt", "le", "gt", "ge", "land", "lor", "not":
 		return "bool"
 	case "name":
+		if n.Pkg != "" {
+			return "i64"
+		}
 		if _, ok := c.locals[n.Name]; ok {
 			// Recover the declared type from params and vars by scanning.
 			return c.localType(n.Name)
@@ -822,4 +837,59 @@ func (c *cg) fieldType(baseType, field string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("no field")
+}
+
+// pkgConst is the value of another package's const, path.Name.
+func (c *cg) pkgConst(n *ir.Node) (int64, error) {
+	if pkg := c.pkgs[n.Pkg]; pkg != nil {
+		for _, cn := range pkg.Consts {
+			if cn.Name == n.Name {
+				return cn.Value, nil
+			}
+		}
+	}
+	return 0, fmt.Errorf("const %s.%s", n.Pkg, n.Name)
+}
+
+// reachable is the set of funcs main can call, directly or not. Only these
+// are emitted.
+func reachable(p *ir.Program, root string) map[string]bool {
+	funcs := map[string]*ir.Func{}
+	for i := range p.Packages {
+		pkg := &p.Packages[i]
+		for fi := range pkg.Funcs {
+			funcs[pkg.Path+"."+pkg.Funcs[fi].Name] = &pkg.Funcs[fi]
+		}
+	}
+	live := map[string]bool{}
+	work := []string{root}
+	for len(work) > 0 {
+		key := work[len(work)-1]
+		work = work[:len(work)-1]
+		if live[key] || funcs[key] == nil {
+			continue
+		}
+		live[key] = true
+		pkg := key[:strings.LastIndex(key, ".")]
+		var walk func(n *ir.Node)
+		walk = func(n *ir.Node) {
+			if n == nil {
+				return
+			}
+			if n.Op == "call" {
+				callee := n.Pkg
+				if callee == "" {
+					callee = pkg
+				}
+				work = append(work, callee+"."+n.Func)
+			}
+			for _, ch := range n.Children() {
+				walk(ch)
+			}
+		}
+		for _, st := range funcs[key].Body {
+			walk(st)
+		}
+	}
+	return live
 }

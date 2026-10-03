@@ -29,7 +29,7 @@ func ioPkg() ir.Package {
 
 func prog(fns ...ir.Func) *ir.Program {
 	return &ir.Program{
-		Revision: ir.RevZeros,
+		Revision: "",
 		Module:   "t",
 		Entry:    "demo",
 		Packages: []ir.Package{
