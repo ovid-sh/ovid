@@ -3,6 +3,7 @@ package tool
 import (
 	"bytes"
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -65,6 +66,17 @@ func TestRunJSON(t *testing.T) {
 	if code != ExitOK || r["ok"] != true || r["signal"] != "timeout" || r["exit"] != nil || r["truncated"] != true ||
 		len(r["stdout"].(string)) != 30 || r["stdout_bytes"].(float64) <= 30 || r["stderr_bytes"] != nil {
 		t.Fatalf("exit %d: %v", code, r)
+	}
+
+	// The largest limit there is keeps everything and reports no cut.
+	rs, code = runJSON(t, dir, RunOpts{MaxOutput: math.MaxInt})
+	if r := rs[len(rs)-1]; code != ExitOK || r["stdout"] != "out\n" || r["stderr"] != "{\"ok\":false}\n" || r["truncated"] != nil {
+		t.Fatalf("exit %d: %v", code, r)
+	}
+	// A limit the output exactly fills is not a cut either.
+	rs, _ = runJSON(t, dir, RunOpts{MaxOutput: 4})
+	if r := rs[len(rs)-1]; r["stdout"] != "out\n" || r["stdout_bytes"] != nil || r["truncated"] != true || r["stderr_bytes"] != float64(13) {
+		t.Fatalf("%v", r)
 	}
 
 	// A fault is a signal, traced to its statement where the host can.

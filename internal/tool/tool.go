@@ -248,8 +248,8 @@ func RunWith(dir string, args []string, o RunOpts, w io.Writer) int {
 		if o.MaxOutput <= 0 {
 			o.MaxOutput = DefaultRunOutput
 		}
-		if outc, err = newPipeCapture(o.MaxOutput + 1); err == nil {
-			if errc, err = newPipeCapture(o.MaxOutput + 1); err != nil {
+		if outc, err = newPipeCapture(o.MaxOutput); err == nil {
+			if errc, err = newPipeCapture(o.MaxOutput); err != nil {
 				outc.finish()
 			}
 		}
@@ -285,8 +285,7 @@ func RunWith(dir string, args []string, o RunOpts, w io.Writer) int {
 			describeCrash(m, exe, marks, pr, r)
 		}
 		cut := func(key string, b []byte, n int64) {
-			if len(b) > o.MaxOutput {
-				b = b[:o.MaxOutput]
+			if n > int64(len(b)) { // more was written than was kept
 				r["truncated"], r[key+"_bytes"] = true, n
 			}
 			r[key] = string(b)

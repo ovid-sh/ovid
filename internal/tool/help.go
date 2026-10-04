@@ -20,7 +20,7 @@ Source is plain .ov text. A module is a directory with ovid.mod; each
 subdirectory holding .ov files is one package, and its path is the package
 name. Every command prints JSON lines; the last line always has "ok".
 Exit codes: 0 ok, 1 errors, 2 stale edit, 64 usage, 124 run: timeout,
-125 run: build failed.
+125 run: could not build or start the program.
 
 Start here:
   ovid init <dir>              new module with a hello-world entry and a test
