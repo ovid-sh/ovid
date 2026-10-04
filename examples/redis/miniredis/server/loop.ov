@@ -1,0 +1,148 @@
+package miniredis/server
+
+import ovid/io
+import ovid/mem
+import miniredis/store
+
+const MAXEVENTS i64 = 256
+
+// New makes a server listening on 127.0.0.1:port. Its listener is < 0 if
+// the port could not be taken.
+func New(io *ovid/io.Cap, port i64) *Server {
+  var s *Server = ovid/io.Alloc(io, sizeof(Server)) as *Server
+  s.io = io
+  s.heap = miniredis/store.NewHeap(io)
+  s.dict = miniredis/store.NewDict(s.heap)
+  s.evs = ovid/io.Alloc(io, MAXEVENTS * ovid/io.EPOLLEVENT)
+  s.ev = ovid/io.Alloc(io, 16)
+  s.ts = ovid/io.Alloc(io, 16)
+  s.cell = ovid/io.Alloc(io, 32)
+  s.listener = ovid/io.TCPListen(io, 0x7f000001, port, 511)
+  if s.listener < 0 {
+    return s
+  }
+  s.ep = ovid/io.EpollCreate()
+  // The listener's data is 0; a connection's is its Conn.
+  ovid/io.EpollCtl(s.ep, ovid/io.EPOLL_CTL_ADD, s.listener, ovid/io.EPOLLIN, 0, s.ev)
+  return s
+}
+
+// accept takes every connection that is waiting.
+func accept(s *Server) i64 {
+  var fd i64 = ovid/io.Accept(s.listener)
+  while fd >= 0 {
+    ovid/io.SetNoDelay(fd, s.cell)
+    var c *Conn = NewConn(s, fd)
+    ovid/io.EpollCtl(s.ep, ovid/io.EPOLL_CTL_ADD, fd, ovid/io.EPOLLIN, c as i64, s.ev)
+    fd = ovid/io.Accept(s.listener)
+  }
+  return 0
+}
+
+// room makes space to read into: it moves what is waiting in rbuf to the
+// front, and doubles the buffer when a command is larger than it.
+func room(c *Conn) i64 {
+  if c.rpos == c.rend {
+    c.rpos = 0
+    c.rend = 0
+    return 0
+  }
+  if c.rpos > 0 {
+    ovid/mem.Copy(c.rbuf, c.rbuf + c.rpos, c.rend - c.rpos)
+    c.rend = c.rend - c.rpos
+    c.rpos = 0
+  }
+  if c.rend == c.rcap {
+    var b i64 = miniredis/store.Alloc(c.srv.heap, c.rcap * 2)
+    ovid/mem.Copy(b, c.rbuf, c.rend)
+    miniredis/store.Free(c.srv.heap, c.rbuf)
+    c.rbuf = b
+    c.rcap = c.rcap * 2
+  }
+  return 0
+}
+
+// flush sends what is in wbuf. It returns false if the client has gone.
+// What the socket does not take stays, and the connection then waits for
+// EPOLLOUT as well.
+func flush(c *Conn) bool {
+  var s *Server = c.srv
+  var more bool = c.wpos < c.wlen
+  while more {
+    var w i64 = ovid/io.Send(c.fd, c.wbuf + c.wpos, c.wlen - c.wpos)
+    if w > 0 {
+      c.wpos = c.wpos + w
+      more = c.wpos < c.wlen
+    } else if w == ovid/io.EAGAIN {
+      if !c.writing {
+        c.writing = true
+        ovid/io.EpollCtl(s.ep, ovid/io.EPOLL_CTL_MOD, c.fd, ovid/io.EPOLLIN | ovid/io.EPOLLOUT, c as i64, s.ev)
+      }
+      return true
+    } else if w != ovid/io.EINTR {
+      return false
+    }
+  }
+  c.wpos = 0
+  c.wlen = 0
+  if c.writing {
+    c.writing = false
+    ovid/io.EpollCtl(s.ep, ovid/io.EPOLL_CTL_MOD, c.fd, ovid/io.EPOLLIN, c as i64, s.ev)
+  }
+  return !c.closing
+}
+
+// serve reads what the client sent, runs every whole command in it, and
+// sends the replies. It returns false when the connection is finished.
+func serve(c *Conn) bool {
+  room(c)
+  var r i64 = ovid/io.Read(c.fd, c.rbuf + c.rend, c.rcap - c.rend)
+  if r == ovid/io.EAGAIN || r == ovid/io.EINTR {
+    return true
+  }
+  if r <= 0 {
+    return false
+  }
+  c.rend = c.rend + r
+  var st i64 = Parse(c)
+  while st == 1 && !c.closing {
+    Exec(c)
+    st = Parse(c)
+  }
+  if st < 0 {
+    WErr(c, strptr("ERR Protocol error"))
+    c.closing = true
+  }
+  return flush(c)
+}
+
+// Run serves clients until the process is killed.
+func Run(s *Server) i64 {
+  while true {
+    var n i64 = ovid/io.EpollWait(s.ep, s.evs, MAXEVENTS, -1)
+    s.now = 0
+    var i i64 = 0
+    while i < n {
+      var data i64 = ovid/io.EpollData(s.evs, i)
+      var events i64 = ovid/io.EpollEvents(s.evs, i)
+      if data == 0 {
+        accept(s)
+      } else {
+        var c *Conn = data as *Conn
+        var alive bool = true
+        if (events & ovid/io.EPOLLIN) != 0 {
+          alive = serve(c)
+        } else if (events & ovid/io.EPOLLOUT) != 0 {
+          alive = flush(c)
+        } else {
+          alive = false
+        }
+        if !alive {
+          CloseConn(c)
+        }
+      }
+      i = i + 1
+    }
+  }
+  return 0
+}

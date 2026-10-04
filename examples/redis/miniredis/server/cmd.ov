@@ -1,0 +1,424 @@
+package miniredis/server
+
+import ovid/io
+import ovid/mem
+import miniredis/store
+
+// Now is the clock in milliseconds, read at most once per turn of the
+// event loop: the loop sets s.now to 0 before it handles a batch.
+func Now(s *Server) i64 {
+  if s.now == 0 {
+    s.now = ovid/io.NowMs(s.ts)
+  }
+  return s.now
+}
+
+// Lookup is the live entry for the key, or 0. A key past its expiry is
+// deleted here, when someone asks for it; nothing sweeps the others.
+func Lookup(s *Server, key i64, keyn i64) *miniredis/store.Entry {
+  var e *miniredis/store.Entry = miniredis/store.Find(s.dict, key, keyn)
+  if e != 0 as *miniredis/store.Entry && e.expire != 0 {
+    if e.expire <= Now(s) {
+      miniredis/store.Remove(s.dict, key, keyn)
+      return 0 as *miniredis/store.Entry
+    }
+  }
+  return e
+}
+
+// ToInt reads the n bytes at p as a decimal i64; s.ok says whether they
+// are one. Overflow is not detected.
+func ToInt(s *Server, p i64, n i64) i64 {
+  s.ok = false
+  var i i64 = 0
+  var neg bool = n > 0 && load8(p) == 45
+  if neg {
+    i = 1
+  }
+  if i >= n || n > 20 {
+    return 0
+  }
+  var v i64 = 0
+  while i < n {
+    var ch i64 = load8(p + i)
+    if ch < 48 || ch > 57 {
+      return 0
+    }
+    v = (v * 10) + (ch - 48)
+    i = i + 1
+  }
+  s.ok = true
+  if neg {
+    return 0 - v
+  }
+  return v
+}
+
+func upper(ch i64) i64 {
+  if ch >= 97 && ch <= 122 {
+    return ch - 32
+  }
+  return ch
+}
+
+// isArg reports whether argument i is the word lit (upper case, NUL-
+// terminated), in any case.
+func isArg(c *Conn, i i64, lit i64) bool {
+  var p i64 = ArgP(c, i)
+  var n i64 = ArgN(c, i)
+  var k i64 = 0
+  while k < n {
+    if load8(lit + k) == 0 || upper(load8(p + k)) != load8(lit + k) {
+      return false
+    }
+    k = k + 1
+  }
+  return load8(lit + n) == 0
+}
+
+func wrongArgs(c *Conn) i64 {
+  WLit(c, strptr("-ERR wrong number of arguments for '"))
+  W(c, ArgP(c, 0), ArgN(c, 0))
+  return WLit(c, strptr("' command\r\n"))
+}
+
+func notInt(c *Conn) i64 {
+  return WErr(c, strptr("ERR value is not an integer or out of range"))
+}
+
+// cmdSet is SET key value [EX seconds | PX milliseconds].
+func cmdSet(c *Conn) i64 {
+  var s *Server = c.srv
+  var expire i64 = 0
+  if c.argc == 5 {
+    var t i64 = ToInt(s, ArgP(c, 4), ArgN(c, 4))
+    if !s.ok || t <= 0 {
+      return WErr(c, strptr("ERR invalid expire time in 'set' command"))
+    }
+    if isArg(c, 3, strptr("EX")) {
+      expire = Now(s) + (t * 1000)
+    } else if isArg(c, 3, strptr("PX")) {
+      expire = Now(s) + t
+    } else {
+      return WErr(c, strptr("ERR syntax error"))
+    }
+  } else if c.argc != 3 {
+    if c.argc < 3 {
+      return wrongArgs(c)
+    }
+    return WErr(c, strptr("ERR syntax error"))
+  }
+  var e *miniredis/store.Entry = miniredis/store.Put(s.dict, ArgP(c, 1), ArgN(c, 1), ArgP(c, 2), ArgN(c, 2))
+  e.expire = expire
+  return WOK(c)
+}
+
+func cmdGet(c *Conn) i64 {
+  if c.argc != 2 {
+    return wrongArgs(c)
+  }
+  var e *miniredis/store.Entry = Lookup(c.srv, ArgP(c, 1), ArgN(c, 1))
+  if e == 0 as *miniredis/store.Entry {
+    return WNull(c)
+  }
+  return WBulk(c, e.val, e.valn)
+}
+
+// cmdIncr adds delta to the number a key holds (0 when it has none).
+func cmdIncr(c *Conn, delta i64) i64 {
+  var s *Server = c.srv
+  var e *miniredis/store.Entry = Lookup(s, ArgP(c, 1), ArgN(c, 1))
+  var v i64 = 0
+  if e != 0 as *miniredis/store.Entry {
+    v = ToInt(s, e.val, e.valn)
+    if !s.ok {
+      return notInt(c)
+    }
+  }
+  v = v + delta
+  var n i64 = PutInt(s.cell, v)
+  if e != 0 as *miniredis/store.Entry {
+    miniredis/store.SetVal(s.dict, e, s.cell, n)
+  } else {
+    miniredis/store.Put(s.dict, ArgP(c, 1), ArgN(c, 1), s.cell, n)
+  }
+  return WInt(c, v)
+}
+
+// cmdIncrBy is INCRBY and DECRBY: sign is 1 or -1.
+func cmdIncrBy(c *Conn, sign i64) i64 {
+  if c.argc != 3 {
+    return wrongArgs(c)
+  }
+  var d i64 = ToInt(c.srv, ArgP(c, 2), ArgN(c, 2))
+  if !c.srv.ok {
+    return notInt(c)
+  }
+  return cmdIncr(c, d * sign)
+}
+
+// cmdDel is DEL and EXISTS: it counts the keys that are there, and
+// deletes them when del.
+func cmdDel(c *Conn, del bool) i64 {
+  if c.argc < 2 {
+    return wrongArgs(c)
+  }
+  var n i64 = 0
+  var i i64 = 1
+  while i < c.argc {
+    if Lookup(c.srv, ArgP(c, i), ArgN(c, i)) != 0 as *miniredis/store.Entry {
+      n = n + 1
+      if del {
+        miniredis/store.Remove(c.srv.dict, ArgP(c, i), ArgN(c, i))
+      }
+    }
+    i = i + 1
+  }
+  return WInt(c, n)
+}
+
+func cmdAppend(c *Conn) i64 {
+  if c.argc != 3 {
+    return wrongArgs(c)
+  }
+  var s *Server = c.srv
+  var e *miniredis/store.Entry = Lookup(s, ArgP(c, 1), ArgN(c, 1))
+  if e == 0 as *miniredis/store.Entry {
+    miniredis/store.Put(s.dict, ArgP(c, 1), ArgN(c, 1), ArgP(c, 2), ArgN(c, 2))
+    return WInt(c, ArgN(c, 2))
+  }
+  var n i64 = e.valn + ArgN(c, 2)
+  if n > miniredis/store.Room(e.val) {
+    var b i64 = miniredis/store.Alloc(s.heap, n * 2)
+    ovid/mem.Copy(b, e.val, e.valn)
+    miniredis/store.Free(s.heap, e.val)
+    e.val = b
+  }
+  ovid/mem.Copy(e.val + e.valn, ArgP(c, 2), ArgN(c, 2))
+  e.valn = n
+  return WInt(c, n)
+}
+
+func cmdStrlen(c *Conn) i64 {
+  if c.argc != 2 {
+    return wrongArgs(c)
+  }
+  var e *miniredis/store.Entry = Lookup(c.srv, ArgP(c, 1), ArgN(c, 1))
+  if e == 0 as *miniredis/store.Entry {
+    return WInt(c, 0)
+  }
+  return WInt(c, e.valn)
+}
+
+func cmdMset(c *Conn) i64 {
+  if c.argc < 3 || (c.argc % 2) != 1 {
+    return wrongArgs(c)
+  }
+  var i i64 = 1
+  while i < c.argc {
+    miniredis/store.Put(c.srv.dict, ArgP(c, i), ArgN(c, i), ArgP(c, i + 1), ArgN(c, i + 1))
+    i = i + 2
+  }
+  return WOK(c)
+}
+
+func cmdMget(c *Conn) i64 {
+  if c.argc < 2 {
+    return wrongArgs(c)
+  }
+  WNum(c, 42, c.argc - 1)
+  var i i64 = 1
+  while i < c.argc {
+    var e *miniredis/store.Entry = Lookup(c.srv, ArgP(c, i), ArgN(c, i))
+    if e == 0 as *miniredis/store.Entry {
+      WNull(c)
+    } else {
+      WBulk(c, e.val, e.valn)
+    }
+    i = i + 1
+  }
+  return 0
+}
+
+// cmdExpire is EXPIRE and PEXPIRE: unit is the milliseconds in one of the
+// argument's units.
+func cmdExpire(c *Conn, unit i64) i64 {
+  if c.argc != 3 {
+    return wrongArgs(c)
+  }
+  var s *Server = c.srv
+  var t i64 = ToInt(s, ArgP(c, 2), ArgN(c, 2))
+  if !s.ok {
+    return notInt(c)
+  }
+  var e *miniredis/store.Entry = Lookup(s, ArgP(c, 1), ArgN(c, 1))
+  if e == 0 as *miniredis/store.Entry {
+    return WInt(c, 0)
+  }
+  if t <= 0 {
+    miniredis/store.Remove(s.dict, ArgP(c, 1), ArgN(c, 1))
+  } else {
+    e.expire = Now(s) + (t * unit)
+  }
+  return WInt(c, 1)
+}
+
+// cmdTTL is TTL and PTTL: -2 for no key, -1 for no expiry, else what is
+// left, in units of unit milliseconds, rounded.
+func cmdTTL(c *Conn, unit i64) i64 {
+  if c.argc != 2 {
+    return wrongArgs(c)
+  }
+  var e *miniredis/store.Entry = Lookup(c.srv, ArgP(c, 1), ArgN(c, 1))
+  if e == 0 as *miniredis/store.Entry {
+    return WInt(c, -2)
+  }
+  if e.expire == 0 {
+    return WInt(c, -1)
+  }
+  return WInt(c, ((e.expire - Now(c.srv)) + (unit / 2)) / unit)
+}
+
+func cmdPersist(c *Conn) i64 {
+  if c.argc != 2 {
+    return wrongArgs(c)
+  }
+  var e *miniredis/store.Entry = Lookup(c.srv, ArgP(c, 1), ArgN(c, 1))
+  if e == 0 as *miniredis/store.Entry || e.expire == 0 {
+    return WInt(c, 0)
+  }
+  e.expire = 0
+  return WInt(c, 1)
+}
+
+func cmdPing(c *Conn) i64 {
+  if c.argc == 1 {
+    return WLit(c, strptr("+PONG\r\n"))
+  }
+  if c.argc == 2 {
+    return WBulk(c, ArgP(c, 1), ArgN(c, 1))
+  }
+  return wrongArgs(c)
+}
+
+// put copies a NUL-terminated literal to dst and returns the address after it.
+func put(dst i64, lit i64) i64 {
+  var n i64 = ovid/io.CLen(lit)
+  ovid/mem.Copy(dst, lit, n)
+  return dst + n
+}
+
+func cmdInfo(c *Conn) i64 {
+  var s *Server = c.srv
+  var b i64 = miniredis/store.Alloc(s.heap, 256)
+  var p i64 = put(b, strptr("# Server\r\nserver_name:miniredis\r\n# Clients\r\nconnected_clients:"))
+  p = p + PutInt(p, s.conns)
+  p = put(p, strptr("\r\n# Memory\r\nused_memory:"))
+  p = p + PutInt(p, s.heap.used)
+  p = put(p, strptr("\r\n# Keyspace\r\nkeys:"))
+  p = p + PutInt(p, s.dict.count)
+  p = put(p, strptr("\r\n"))
+  WBulk(c, b, p - b)
+  return miniredis/store.Free(s.heap, b)
+}
+
+// Exec runs the command in c.args and appends its reply. The commands a
+// benchmark sends most are tested first; there are no function values to
+// put in a table.
+func Exec(c *Conn) i64 {
+  if c.argc == 0 {
+    return 0
+  }
+  var n i64 = ArgN(c, 0)
+  if n == 3 {
+    if isArg(c, 0, strptr("GET")) {
+      return cmdGet(c)
+    }
+    if isArg(c, 0, strptr("SET")) {
+      return cmdSet(c)
+    }
+    if isArg(c, 0, strptr("DEL")) {
+      return cmdDel(c, true)
+    }
+    if isArg(c, 0, strptr("TTL")) {
+      return cmdTTL(c, 1000)
+    }
+  } else if n == 4 {
+    if isArg(c, 0, strptr("INCR")) || isArg(c, 0, strptr("DECR")) {
+      if c.argc != 2 {
+        return wrongArgs(c)
+      }
+      if isArg(c, 0, strptr("INCR")) {
+        return cmdIncr(c, 1)
+      }
+      return cmdIncr(c, -1)
+    }
+    if isArg(c, 0, strptr("PING")) {
+      return cmdPing(c)
+    }
+    if isArg(c, 0, strptr("MSET")) {
+      return cmdMset(c)
+    }
+    if isArg(c, 0, strptr("MGET")) {
+      return cmdMget(c)
+    }
+    if isArg(c, 0, strptr("ECHO")) {
+      if c.argc != 2 {
+        return wrongArgs(c)
+      }
+      return WBulk(c, ArgP(c, 1), ArgN(c, 1))
+    }
+    if isArg(c, 0, strptr("PTTL")) {
+      return cmdTTL(c, 1)
+    }
+    if isArg(c, 0, strptr("INFO")) {
+      return cmdInfo(c)
+    }
+    if isArg(c, 0, strptr("QUIT")) {
+      c.closing = true
+      return WOK(c)
+    }
+  } else {
+    if isArg(c, 0, strptr("INCRBY")) {
+      return cmdIncrBy(c, 1)
+    }
+    if isArg(c, 0, strptr("DECRBY")) {
+      return cmdIncrBy(c, -1)
+    }
+    if isArg(c, 0, strptr("EXISTS")) {
+      return cmdDel(c, false)
+    }
+    if isArg(c, 0, strptr("APPEND")) {
+      return cmdAppend(c)
+    }
+    if isArg(c, 0, strptr("STRLEN")) {
+      return cmdStrlen(c)
+    }
+    if isArg(c, 0, strptr("EXPIRE")) {
+      return cmdExpire(c, 1000)
+    }
+    if isArg(c, 0, strptr("PEXPIRE")) {
+      return cmdExpire(c, 1)
+    }
+    if isArg(c, 0, strptr("PERSIST")) {
+      return cmdPersist(c)
+    }
+    if isArg(c, 0, strptr("DBSIZE")) {
+      return WInt(c, c.srv.dict.count)
+    }
+    if isArg(c, 0, strptr("FLUSHALL")) || isArg(c, 0, strptr("FLUSHDB")) {
+      miniredis/store.Clear(c.srv.dict)
+      return WOK(c)
+    }
+    if isArg(c, 0, strptr("SELECT")) || isArg(c, 0, strptr("CLIENT")) {
+      return WOK(c)
+    }
+    // Asked by clients and benchmarks at start; an empty answer satisfies them.
+    if isArg(c, 0, strptr("COMMAND")) || isArg(c, 0, strptr("CONFIG")) {
+      return WLit(c, strptr("*0\r\n"))
+    }
+  }
+  WLit(c, strptr("-ERR unknown command '"))
+  W(c, ArgP(c, 0), ArgN(c, 0))
+  return WLit(c, strptr("'\r\n"))
+}

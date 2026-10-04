@@ -1,0 +1,329 @@
+package miniredis/server
+
+import ovid/io
+import ovid/mem
+import miniredis/store
+
+// Server is the one thread's state: the keys, the epoll instance, and
+// scratch for system calls.
+type Server struct {
+  io *ovid/io.Cap
+  heap *miniredis/store.Heap
+  dict *miniredis/store.Dict
+  ep i64
+  listener i64
+  evs i64
+  ev i64
+  ts i64
+  cell i64
+  now i64
+  ok bool
+  np i64
+  conns i64
+}
+
+// Conn is one client. Bytes read wait in rbuf[rpos:rend] until a whole
+// command is there; replies collect in wbuf[wpos:wlen] until the socket
+// takes them. args holds the command being run: 16 bytes per argument, its
+// address in rbuf and its length.
+type Conn struct {
+  srv *Server
+  fd i64
+  rbuf i64
+  rcap i64
+  rpos i64
+  rend i64
+  wbuf i64
+  wcap i64
+  wpos i64
+  wlen i64
+  args i64
+  argcap i64
+  argc i64
+  closing bool
+  writing bool
+}
+
+const RBUF i64 = 16384
+const WBUF i64 = 16384
+const MAXARGS i64 = 1048576
+const MAXBULK i64 = 536870912
+
+func NewConn(s *Server, fd i64) *Conn {
+  var c *Conn = miniredis/store.Alloc(s.heap, sizeof(Conn)) as *Conn
+  c.srv = s
+  c.fd = fd
+  c.rcap = RBUF
+  c.rbuf = miniredis/store.Alloc(s.heap, c.rcap)
+  c.rpos = 0
+  c.rend = 0
+  c.wcap = WBUF
+  c.wbuf = miniredis/store.Alloc(s.heap, c.wcap)
+  c.wpos = 0
+  c.wlen = 0
+  c.argcap = 16
+  c.args = miniredis/store.Alloc(s.heap, c.argcap * 16)
+  c.argc = 0
+  c.closing = false
+  c.writing = false
+  s.conns = s.conns + 1
+  return c
+}
+
+func CloseConn(c *Conn) i64 {
+  var s *Server = c.srv
+  ovid/io.Close(c.fd)
+  miniredis/store.Free(s.heap, c.rbuf)
+  miniredis/store.Free(s.heap, c.wbuf)
+  miniredis/store.Free(s.heap, c.args)
+  miniredis/store.Free(s.heap, c as i64)
+  s.conns = s.conns - 1
+  return 0
+}
+
+// ArgP and ArgN are argument i's address and length.
+func ArgP(c *Conn, i i64) i64 {
+  return load64(c.args + (i * 16))
+}
+
+func ArgN(c *Conn, i i64) i64 {
+  return load64((c.args + (i * 16)) + 8)
+}
+
+// Reserve makes room for n more reply bytes and returns where they go.
+func Reserve(c *Conn, n i64) i64 {
+  if (c.wlen + n) > c.wcap {
+    var size i64 = c.wcap * 2
+    while (c.wlen + n) > size {
+      size = size * 2
+    }
+    var b i64 = miniredis/store.Alloc(c.srv.heap, size)
+    ovid/mem.Copy(b, c.wbuf, c.wlen)
+    miniredis/store.Free(c.srv.heap, c.wbuf)
+    c.wbuf = b
+    c.wcap = size
+  }
+  return c.wbuf + c.wlen
+}
+
+// W appends n bytes at p to the reply.
+func W(c *Conn, p i64, n i64) i64 {
+  ovid/mem.Copy(Reserve(c, n), p, n)
+  c.wlen = c.wlen + n
+  return 0
+}
+
+// WLit appends a NUL-terminated literal.
+func WLit(c *Conn, lit i64) i64 {
+  return W(c, lit, ovid/io.CLen(lit))
+}
+
+// PutInt writes v in decimal at dst and returns the length (at most 20).
+func PutInt(dst i64, v i64) i64 {
+  // Digits come from negative remainders, so the most negative i64 works.
+  var x i64 = v
+  if x > 0 {
+    x = 0 - x
+  }
+  var n i64 = 0
+  var t i64 = x
+  while t != 0 || n == 0 {
+    n = n + 1
+    t = t / 10
+  }
+  var o i64 = 0
+  if v < 0 {
+    store8(dst, 45)
+    o = 1
+  }
+  var i i64 = n
+  while i > 0 {
+    i = i - 1
+    store8((dst + o) + i, 48 - (x % 10))
+    x = x / 10
+  }
+  return o + n
+}
+
+// WNum appends lead, v in decimal, and "\r\n": ":5\r\n" or "$5\r\n".
+func WNum(c *Conn, lead i64, v i64) i64 {
+  var p i64 = Reserve(c, 24)
+  store8(p, lead)
+  var n i64 = 1 + PutInt(p + 1, v)
+  store8(p + n, 13)
+  store8((p + n) + 1, 10)
+  c.wlen = (c.wlen + n) + 2
+  return 0
+}
+
+func WInt(c *Conn, v i64) i64 {
+  return WNum(c, 58, v)
+}
+
+// WBulk appends a bulk string: "$<n>\r\n<bytes>\r\n".
+func WBulk(c *Conn, p i64, n i64) i64 {
+  WNum(c, 36, n)
+  var q i64 = Reserve(c, n + 2)
+  ovid/mem.Copy(q, p, n)
+  store8(q + n, 13)
+  store8((q + n) + 1, 10)
+  c.wlen = (c.wlen + n) + 2
+  return 0
+}
+
+func WNull(c *Conn) i64 {
+  return WLit(c, strptr("$-1\r\n"))
+}
+
+func WOK(c *Conn) i64 {
+  return WLit(c, strptr("+OK\r\n"))
+}
+
+// WErr appends "-<msg>\r\n".
+func WErr(c *Conn, msg i64) i64 {
+  WLit(c, strptr("-"))
+  WLit(c, msg)
+  return WLit(c, strptr("\r\n"))
+}
+
+const NEED i64 = -2
+const BAD i64 = -3
+
+// num reads a decimal number that ends in "\r\n" at p. It returns the
+// number (never below -1 for what the protocol sends), NEED when the line
+// is not all there yet, or BAD; s.np is the address after the line.
+func num(s *Server, p i64, end i64) i64 {
+  var neg bool = false
+  if p < end && load8(p) == 45 {
+    neg = true
+    p = p + 1
+  }
+  var v i64 = 0
+  var digits i64 = 0
+  while p < end && load8(p) >= 48 && load8(p) <= 57 && digits < 18 {
+    v = (v * 10) + (load8(p) - 48)
+    p = p + 1
+    digits = digits + 1
+  }
+  if (p + 1) >= end {
+    return NEED
+  }
+  if digits == 0 || load8(p) != 13 || load8(p + 1) != 10 {
+    return BAD
+  }
+  s.np = p + 2
+  if neg {
+    return 0 - v
+  }
+  return v
+}
+
+// growArgs makes room for n arguments.
+func growArgs(c *Conn, n i64) i64 {
+  if n > c.argcap {
+    while n > c.argcap {
+      c.argcap = c.argcap * 2
+    }
+    miniredis/store.Free(c.srv.heap, c.args)
+    c.args = miniredis/store.Alloc(c.srv.heap, c.argcap * 16)
+  }
+  return 0
+}
+
+// Parse reads one command at rpos. It returns 1 with the arguments in
+// args and rpos past the command, 0 when more bytes are needed, or -1 for
+// a protocol error.
+func Parse(c *Conn) i64 {
+  var s *Server = c.srv
+  var p i64 = c.rbuf + c.rpos
+  var end i64 = c.rbuf + c.rend
+  if p >= end {
+    return 0
+  }
+  if load8(p) != 42 {
+    return parseInline(c, p, end)
+  }
+  var n i64 = num(s, p + 1, end)
+  if n == NEED {
+    return 0
+  }
+  if n == BAD || n > MAXARGS {
+    return -1
+  }
+  if n < 0 {
+    n = 0
+  }
+  growArgs(c, n)
+  p = s.np
+  var i i64 = 0
+  while i < n {
+    if p >= end {
+      return 0
+    }
+    if load8(p) != 36 {
+      return -1
+    }
+    var len i64 = num(s, p + 1, end)
+    if len == NEED {
+      return 0
+    }
+    if len < 0 || len > MAXBULK {
+      return -1
+    }
+    p = s.np
+    if ((p + len) + 2) > end {
+      return 0
+    }
+    store64(c.args + (i * 16), p)
+    store64((c.args + (i * 16)) + 8, len)
+    p = (p + len) + 2
+    i = i + 1
+  }
+  c.argc = n
+  c.rpos = p - c.rbuf
+  return 1
+}
+
+// parseInline reads a command typed as a line of words: "PING\r\n".
+func parseInline(c *Conn, p i64, end i64) i64 {
+  var nl i64 = p
+  while nl < end && load8(nl) != 10 {
+    nl = nl + 1
+  }
+  if nl >= end {
+    return 0
+  }
+  var n i64 = 0
+  var q i64 = p
+  while q < nl {
+    while q < nl && (load8(q) == 32 || load8(q) == 13) {
+      q = q + 1
+    }
+    var start i64 = q
+    while q < nl && load8(q) != 32 && load8(q) != 13 {
+      q = q + 1
+    }
+    if q > start {
+      growKeep(c, n + 1)
+      store64(c.args + (n * 16), start)
+      store64((c.args + (n * 16)) + 8, q - start)
+      n = n + 1
+    }
+  }
+  c.argc = n
+  c.rpos = (nl + 1) - c.rbuf
+  return 1
+}
+
+// growKeep makes room for n arguments and keeps the ones already there.
+func growKeep(c *Conn, n i64) i64 {
+  if n > c.argcap {
+    var size i64 = c.argcap * 2
+    var b i64 = miniredis/store.Alloc(c.srv.heap, size * 16)
+    ovid/mem.Copy(b, c.args, c.argcap * 16)
+    miniredis/store.Free(c.srv.heap, c.args)
+    c.args = b
+    c.argcap = size
+  }
+  return 0
+}
