@@ -160,6 +160,9 @@ func runTask(t agent.Task, i int, repo, bin, ovid, pre, model string, budget flo
 	r := Result{Task: t.Name, Run: i}
 	name := fmt.Sprintf("%s-%d", t.Name, i)
 	work := filepath.Join(out, "work", name)
+	if err := os.RemoveAll(work); err != nil { // a reused -out must not leak an earlier run's edits
+		fatal(err)
+	}
 	if err := os.MkdirAll(work, 0o755); err != nil {
 		fatal(err)
 	}
