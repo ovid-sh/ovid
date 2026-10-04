@@ -14,7 +14,7 @@ Ovid is a small compiled language whose toolchain is built for agents: commands 
 ```sh
 go build -o bin/ovid ./cmd/ovid        # bin/ is gitignored
 go vet ./...
-go test ./...                           # everything, well under a second
+go test ./...                           # everything, a few seconds (most of it internal/tool)
 go test ./internal/tool -run TestCorpus                 # the tests/ corpus
 go test ./internal/tool -run TestCorpusRun/run/hello    # one corpus case
 go test ./internal/tool -run TestSelfHost               # Go and Ovid compilers agree byte for byte
@@ -33,7 +33,7 @@ bin/ovid build -C prog -o /tmp/s1          # Go compiles the Ovid compiler
 cmp /tmp/s1 /tmp/s2                        # must be byte-identical
 ```
 
-No third-party Go dependencies (`go.mod` has none). Built binaries only execute on Linux x86-64. Only the corpus adapts to other hosts (it builds each `run/` case and skips running it); the other tests that execute compiled programs (`internal/asm`, `internal/compile`, most of `internal/tool`) assume a Linux x86-64 host.
+No third-party Go dependencies (`go.mod` has none). Built binaries only execute on Linux x86-64. On other hosts, tests that execute compiled programs (the corpus, `internal/asm`, `internal/compile`, `internal/tool`) still build and check, then skip the run; the `*_linux_amd64_test.go` files build only on Linux x86-64.
 
 ## Architecture
 
