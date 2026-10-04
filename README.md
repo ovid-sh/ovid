@@ -28,7 +28,7 @@ ovid.mod              module <name> / entry <pkg> / optional std <dir>
 <pkg path>/*.ov       one directory per package; any number of files
 ```
 
-The package path is the directory path. `ovid/io` and `ovid/mem` ship with
+The package path is the directory path. `ovid/io`, `ovid/mem`, and `ovid/test` (`Eq`, `True`: a failing check prints got/want) ship with
 the toolchain (`std/`, embedded in the binary) and are used unless the module
 has its own copy or names a `std` directory.
 

@@ -149,7 +149,9 @@ ovid run [--] [args...]      program stdio and exit code pass through;
                              if the build fails: errors as JSON, exit 125
 ovid test [--run substr] [--list]
   {"fact":"test",id,ok,exit,ms,output} per test; a failure that returned a
-  value adds "returned_by": the return statements that can produce it.
+  value adds "returned_by": the return statements that can produce it;
+  if !ovid/test.Eq(io, got, want) { return 1 } also puts "got X, want Y"
+  in its output.
   A crash adds "signal", "at" (the statement that faulted), "stack" (it and
   each call leading to it, innermost first), and for a bad load or store
   "fault_addr"; a hung test reads "signal":"timeout".

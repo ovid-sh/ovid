@@ -1,0 +1,31 @@
+package ovid/test
+
+import ovid/io
+
+// Eq reports whether got equals want. If not, it writes
+// "got <got>, want <want>" to stderr, which ovid test shows as the failed
+// test's output:
+//   if !ovid/test.Eq(io, Sum(s), 10) {
+//     return 1
+//   }
+func Eq(io *ovid/io.Cap, got i64, want i64) bool {
+  if got == want {
+    return true
+  }
+  ovid/io.Eprint(strptr("got "))
+  ovid/io.WriteInt(io, 2, got)
+  ovid/io.Eprint(strptr(", want "))
+  ovid/io.WriteInt(io, 2, want)
+  ovid/io.Eprint(strptr("\n"))
+  return false
+}
+
+// True reports ok. If it is false, it writes msg (a NUL-terminated
+// literal: strptr("...")) and a newline to stderr.
+func True(ok bool, msg i64) bool {
+  if !ok {
+    ovid/io.Eprint(msg)
+    ovid/io.Eprint(strptr("\n"))
+  }
+  return ok
+}

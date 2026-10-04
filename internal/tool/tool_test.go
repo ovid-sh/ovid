@@ -494,6 +494,7 @@ func TestTestCommand(t *testing.T) {
 		"demo/main.ov": "package demo\nimport ovid/io\nfunc Two() i64 {\n  return 2\n}\nfunc main(io *ovid/io.Cap) i64 {\n  return 0\n}\n",
 		"demo/main_test.ov": `package demo
 import ovid/io
+import ovid/test
 func TestTwo(io *ovid/io.Cap) i64 {
   if Two() != 2 {
     return 1
@@ -501,7 +502,10 @@ func TestTwo(io *ovid/io.Cap) i64 {
   return 0
 }
 func TestFails(io *ovid/io.Cap) i64 {
-  return 3
+  if !ovid/test.Eq(io, Two(), 3) {
+    return 3
+  }
+  return 0
 }
 func TestCrash(io *ovid/io.Cap) i64 {
   return 1 / 0
@@ -539,7 +543,8 @@ func TestNil(io *ovid/io.Cap) i64 {
 	if at, _ := got["fn:demo.TestCrash"]["at"].(map[string]any); at["source"] != "  return 1 / 0" {
 		t.Fatalf("div crash %v", got["fn:demo.TestCrash"])
 	}
-	if rb := got["fn:demo.TestFails"]["returned_by"].([]any); len(rb) != 1 || rb[0].(map[string]any)["source"] != "  return 3" {
+	if rb := got["fn:demo.TestFails"]["returned_by"].([]any); len(rb) != 1 || rb[0].(map[string]any)["source"] != "    return 3" ||
+		got["fn:demo.TestFails"]["output"] != "got 2, want 3\n" {
 		t.Fatalf("returned_by %v", got["fn:demo.TestFails"])
 	}
 	s := last(t, b.String())
