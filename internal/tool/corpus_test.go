@@ -187,7 +187,8 @@ type wantErr struct {
 }
 
 var (
-	errDirective = regexp.MustCompile(`// error: ([a-z_]+)(?: (\d+))?((?: (?:expected|got|hint)="(?:[^"\\]|\\.)*")*)`)
+	// errDirective matches all of what follows one "// error:".
+	errDirective = regexp.MustCompile(`^ ([a-z_]+)(?: (\d+))?((?: (?:expected|got|hint)="(?:[^"\\]|\\.)*")*)\s*$`)
 	errAttr      = regexp.MustCompile(` (expected|got|hint)=("(?:[^"\\]|\\.)*")`)
 )
 
@@ -195,10 +196,17 @@ func (c *corpusCase) wantErrs() ([]wantErr, error) {
 	var ws []wantErr
 	for _, rel := range c.sortedFiles() {
 		for i, line := range strings.Split(c.files[rel], "\n") {
-			for _, m := range errDirective.FindAllStringSubmatch(line, -1) {
+			// Each "// error:" runs to the next one or the end of the line,
+			// and all of it must parse: a typo must not weaken the check.
+			for _, seg := range strings.Split(line, "// error:")[1:] {
+				m := errDirective.FindStringSubmatch(seg)
+				if m == nil {
+					return nil, fmt.Errorf("%s:%d: malformed comment `// error:%s`; want: code [col] [expected=\"...\"] [got=\"...\"] [hint=\"...\"]",
+						c.shown[rel], i+1, strings.TrimRight(seg, " "))
+				}
 				col, _ := strconv.Atoi(m[2])
 				w := wantErr{file: rel, line: i + 1, col: col, code: m[1], attrs: map[string]string{},
-					text: strings.TrimPrefix(m[0], "// error: ")}
+					text: strings.TrimSpace(seg)}
 				for _, a := range errAttr.FindAllStringSubmatch(m[3], -1) {
 					v, err := strconv.Unquote(a[2])
 					if err != nil {
