@@ -1033,6 +1033,16 @@ func TestSelfHost(t *testing.T) {
 	if d := ds[2]; d["ok"] != false || d["errors"] != float64(2) {
 		t.Fatalf("summary: %v", d)
 	}
+
+	// Like this compiler, its build prints only the receipt, or the errors
+	// and their count.
+	if out, _ := run(t, s1, "build", hello, "-o", hs, "--std", stdDir); len(lines(t, out)) != 1 || last(t, out)["output"] != hs {
+		t.Fatalf("build receipt: %s", out)
+	}
+	out, code = run(t, s1, "build", bad, "-o", hs, "--std", stdDir)
+	if d := last(t, out); code != 1 || len(lines(t, out)) != 3 || d["ok"] != false || d["errors"] != float64(2) || d["fact"] != nil {
+		t.Fatalf("failed build %d: %s", code, out)
+	}
 }
 
 func TestHints(t *testing.T) {

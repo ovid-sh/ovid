@@ -140,7 +140,7 @@ func CmdCheck(io *ovid/io.Cap) i64 {
   if m == 0 as *ovid/parse.Mod {
     return 1
   }
-  if ovid/check.Run(io, m) != 0 {
+  if ovid/check.Run(io, m, false) != 0 {
     return 1
   }
   return 0
@@ -169,7 +169,7 @@ func CmdBuild(io *ovid/io.Cap) i64 {
   if m == 0 as *ovid/parse.Mod {
     return 1
   }
-  if ovid/check.Run(io, m) != 0 {
+  if ovid/check.Run(io, m, true) != 0 {
     return 1
   }
   var out i64 = a.out

@@ -808,9 +808,11 @@ func ClaimDecls(c *Ch, kind i64, k *ovid/parse.Pkg, d *ovid/parse.Decl, o *ovid/
   return 0
 }
 
-// Run type-checks the loaded module m and prints error lines and a summary.
-// It returns the error count.
-func Run(io *ovid/io.Cap, m *ovid/parse.Mod) i64 {
+// Run type-checks the loaded module m, prints its error lines, and returns
+// the error count. For check (build false) it then prints the summary; for
+// build it prints {"ok":false,"errors":N} only when there are errors, since
+// the build receipt follows otherwise.
+func Run(io *ovid/io.Cap, m *ovid/parse.Mod, build bool) i64 {
   var c *Ch = ovid/io.Alloc(io, sizeof(Ch)) as *Ch
   c.io = io
   c.mod = m
@@ -860,6 +862,15 @@ func Run(io *ovid/io.Cap, m *ovid/parse.Mod) i64 {
     }
     k = k.next
   }
+  if build {
+    if c.errs != 0 {
+      WLit(c, strptr("{\"ok\":false,\"errors\":"), strlen("{\"ok\":false,\"errors\":"))
+      WNum(c, c.errs)
+      ovid/mem.WByte(c.io, c.b, 125)
+      Line(c)
+    }
+    return c.errs
+  }
   WLit(c, strptr("{\"fact\":\"summary\",\"ok\":"), strlen("{\"fact\":\"summary\",\"ok\":"))
   if c.errs == 0 {
     WLit(c, strptr("true"), strlen("true"))
@@ -873,7 +884,7 @@ func Run(io *ovid/io.Cap, m *ovid/parse.Mod) i64 {
   WLit(c, strptr(",\"funcs\":"), strlen(",\"funcs\":"))
   WNum(c, c.nfunc)
   WLit(c, strptr(",\"revision\":\""), strlen(",\"revision\":\""))
-  ovid/mem.WBytes(c.io, c.b, m.rev, 16)
+  ovid/mem.WBytes(c.io, c.b, ovid/parse.Revision(m), 16)
   ovid/mem.WByte(c.io, c.b, 34)
   ovid/mem.WByte(c.io, c.b, 125)
   Line(c)

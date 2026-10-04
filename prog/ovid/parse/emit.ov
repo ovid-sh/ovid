@@ -442,7 +442,7 @@ func Emit(m *Mod) i64 {
   e.b = ovid/mem.New(m.io, 1 << 20)
   m.json = e.b
   WL(e, strptr("{\"revision\":\""), 13)
-  WL(e, m.rev, 16)
+  WL(e, Revision(m), 16)
   WL(e, strptr("\",\"module\":"), 11)
   WS(e, m.namep, m.namen)
   WL(e, strptr(",\"entry\":"), 9)
