@@ -227,3 +227,39 @@ func TestDivModShift(t *testing.T) {
 		t.Fatalf("exit %d", code)
 	}
 }
+
+// TestBind: each declaration has its own local and type, a name resolves
+// to the declaration in scope, and sibling blocks reuse slots, so a frame
+// holds the most locals in scope at once, not every one the func declares.
+func TestBind(t *testing.T) {
+	v := func(name, typ string) *ir.Node { return &ir.Node{Op: "var", Name: name, Type: typ} }
+	use := func(name string) *ir.Node { return &ir.Node{Op: "expr", Val: &ir.Node{Op: "name", Name: name}} }
+	bT, bBool, useT, useBool := v("b", "*T"), v("b", "bool"), use("b"), use("b")
+	body := []*ir.Node{
+		v("a", "i64"),
+		{Op: "if", Then: []*ir.Node{bT, v("c", "i64"), useT}, Else: []*ir.Node{bBool, useBool}},
+		{Op: "if", Then: []*ir.Node{v("b", "i64")}},
+		{Op: "while", Body: []*ir.Node{v("d", "i64"), {Op: "if", Then: []*ir.Node{v("e", "i64")}}}},
+		v("f", "i64"),
+	}
+	c := &cg{pkg: &ir.Package{Path: "demo"}}
+	c.bindFunc(&ir.Func{Params: []ir.Param{{Name: "p", Type: "i64"}}, Body: body})
+	if len(c.locals) != 9 {
+		t.Fatalf("%d locals, want 9: one per param and var", len(c.locals))
+	}
+	// In scope at once at most: p, a, and the then branch's b and c, or p,
+	// a, and the loop's d and e.
+	if c.live != 4 {
+		t.Fatalf("live %d, want 4 (9 if siblings did not share slots)", c.live)
+	}
+	i, j := c.ref[useT.Val], c.ref[useBool.Val]
+	if i != c.ref[bT] || j != c.ref[bBool] || i == j {
+		t.Fatalf("b resolves to locals %d and %d, want %d and %d", i, j, c.ref[bT], c.ref[bBool])
+	}
+	if c.locals[i].typ != "*demo.T" || c.locals[j].typ != "bool" {
+		t.Fatalf("b has types %s and %s", c.locals[i].typ, c.locals[j].typ)
+	}
+	if c.locals[i].disp != c.locals[j].disp {
+		t.Fatalf("sibling b in slots %d and %d", c.locals[i].disp, c.locals[j].disp)
+	}
+}
