@@ -87,6 +87,136 @@ func (b *Buf) MovRegImm64(reg int, imm int64) {
 	b.emit(buf[:]...)
 }
 
+func (b *Buf) u32(v uint32) {
+	var buf [4]byte
+	binary.LittleEndian.PutUint32(buf[:], v)
+	b.emit(buf[:]...)
+}
+
+// MovRegImm encodes mov reg, imm in its shortest form: a 32-bit move that
+// zero-extends, a sign-extended imm32, or the full imm64.
+func (b *Buf) MovRegImm(reg int, imm int64) {
+	if imm >= 0 && imm <= 0x7fffffff {
+		if reg >= 8 {
+			b.emit(0x41)
+		}
+		b.emit(0xB8 + byte(reg&7))
+		b.u32(uint32(imm))
+		return
+	}
+	if imm >= -0x80000000 && imm < 0 {
+		b.emit(rex(true, false, false, reg >= 8), 0xC7, modrm(3, 0, byte(reg&7)))
+		b.u32(uint32(imm))
+		return
+	}
+	b.MovRegImm64(reg, imm)
+}
+
+// AluRaxImm encodes op rax, imm for the group-1 operation with /digit n
+// (0 add, 1 or, 4 and, 5 sub, 6 xor, 7 cmp); the imm is sign-extended.
+func (b *Buf) AluRaxImm(n int, imm int32) {
+	if imm >= -128 && imm <= 127 {
+		b.emit(0x48, 0x83, modrm(3, byte(n), RAX), byte(int8(imm)))
+		return
+	}
+	b.emit(0x48, 0x81, modrm(3, byte(n), RAX))
+	b.u32(uint32(imm))
+}
+
+// AluRaxMem encodes op rax, [rbp+disp].
+func (b *Buf) AluRaxMem(n int, disp int32) {
+	b.movMemRbp(byte(n*8+3), RAX, disp)
+}
+
+// AluMemRax encodes op [rbp+disp], rax.
+func (b *Buf) AluMemRax(n int, disp int32) {
+	b.movMemRbp(byte(n*8+1), RAX, disp)
+}
+
+// AluMemImm encodes op qword [rbp+disp], imm.
+func (b *Buf) AluMemImm(n int, disp int32, imm int32) {
+	if imm >= -128 && imm <= 127 {
+		b.movMemRbp(0x83, n, disp)
+		b.emit(byte(int8(imm)))
+		return
+	}
+	b.movMemRbp(0x81, n, disp)
+	b.u32(uint32(imm))
+}
+
+// MovMemRbpImm encodes mov qword [rbp+disp], imm (sign-extended).
+func (b *Buf) MovMemRbpImm(disp int32, imm int32) {
+	b.movMemRbp(0xC7, 0, disp)
+	b.u32(uint32(imm))
+}
+
+// ImulRaxImm encodes imul rax, rax, imm.
+func (b *Buf) ImulRaxImm(imm int32) {
+	if imm >= -128 && imm <= 127 {
+		b.emit(0x48, 0x6B, 0xC0, byte(int8(imm)))
+		return
+	}
+	b.emit(0x48, 0x69, 0xC0)
+	b.u32(uint32(imm))
+}
+
+// ImulRaxMem encodes imul rax, [rbp+disp].
+func (b *Buf) ImulRaxMem(disp int32) {
+	b.emit(0x48, 0x0F, 0xAF)
+	b.rbpOperand(RAX, disp)
+}
+
+// ShiftRaxImm encodes shl rax, n, or sar rax, n.
+func (b *Buf) ShiftRaxImm(sar bool, n byte) {
+	if sar {
+		b.emit(0x48, 0xC1, 0xF8, n)
+		return
+	}
+	b.emit(0x48, 0xC1, 0xE0, n)
+}
+
+// LoadMem loads rax from width bits at [base+disp], zero-extended. base
+// must be RAX or RCX.
+func (b *Buf) LoadMem(width, base int, disp int32) {
+	switch width {
+	case 8:
+		b.emit(0x48, 0x0F, 0xB6)
+	case 32:
+		b.emit(0x8B)
+	default:
+		b.emit(0x48, 0x8B)
+	}
+	b.memOperand(RAX, base, disp)
+}
+
+// StoreMemReg stores the low width bits (8 or 64) of src at [base+disp].
+// src and base must each be RAX or RCX.
+func (b *Buf) StoreMemReg(width, src, base int, disp int32) {
+	if width == 8 {
+		b.emit(0x88)
+	} else {
+		b.emit(0x48, 0x89)
+	}
+	b.memOperand(src, base, disp)
+}
+
+// StoreMemImm stores imm, as a byte or sign-extended to 64 bits, at
+// [base+disp]. base must be RAX or RCX.
+func (b *Buf) StoreMemImm(width, base int, disp int32, imm int32) {
+	if width == 8 {
+		b.emit(0xC6)
+		b.memOperand(0, base, disp)
+		b.emit(byte(imm))
+		return
+	}
+	b.emit(0x48, 0xC7)
+	b.memOperand(0, base, disp)
+	b.u32(uint32(imm))
+}
+
+// Leave encodes leave: mov rsp, rbp; pop rbp.
+func (b *Buf) Leave() { b.emit(0xC9) }
+
 // AbsImmLabel records that the imm64 just written (8 bytes ending at Pos)
 // should become the absolute virtual address of rodata[roOff].
 func (b *Buf) AbsImmLabel(roOff int) {
@@ -193,6 +323,11 @@ func (b *Buf) MovRcxMemRbp(disp int32) {
 func (b *Buf) movMemRbp(op byte, reg int, disp int32) {
 	b.emit(rex(true, reg >= 8, false, false))
 	b.emit(op)
+	b.rbpOperand(reg, disp)
+}
+
+// rbpOperand encodes the ModRM bytes for reg, [rbp+disp].
+func (b *Buf) rbpOperand(reg int, disp int32) {
 	if disp >= -128 && disp <= 127 {
 		b.emit(modrm(1, byte(reg&7), RBP))
 		b.emit(byte(int8(disp)))
@@ -217,6 +352,11 @@ func (b *Buf) MovMemRegDispRax(base int, disp int32) {
 func (b *Buf) memReg(op byte, reg, base int, disp int32, wide bool) {
 	b.emit(rex(wide, reg >= 8, false, base >= 8))
 	b.emit(op)
+	b.memOperand(reg, base, disp)
+}
+
+// memOperand encodes the ModRM bytes for reg, [base+disp].
+func (b *Buf) memOperand(reg, base int, disp int32) {
 	rb := byte(base & 7)
 	rg := byte(reg & 7)
 	if disp == 0 && rb != RBP && rb != RSP {

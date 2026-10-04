@@ -157,7 +157,7 @@ func Jl(c *Code, lab i64) i64 {
   return Jcc(c, 0x8C, lab)
 }
 
-func MovRegImm(c *Code, reg i64, imm i64) i64 {
+func MovRegImm64(c *Code, reg i64, imm i64) i64 {
   var rex i64 = 0x48
   if reg >= 8 {
     rex = 0x49
@@ -165,6 +165,166 @@ func MovRegImm(c *Code, reg i64, imm i64) i64 {
   E(c, rex)
   E(c, 0xB8 + (reg & 7))
   EU64(c, imm)
+  return 0
+}
+
+// MovRegImm encodes mov reg, imm in its shortest form: a 32-bit move that
+// zero-extends, a sign-extended imm32, or the full imm64.
+func MovRegImm(c *Code, reg i64, imm i64) i64 {
+  if imm >= 0 && imm <= 0x7fffffff {
+    if reg >= 8 {
+      E(c, 0x41)
+    }
+    E(c, 0xB8 + (reg & 7))
+    EU32(c, imm)
+    return 0
+  }
+  if imm >= (0 - 0x80000000) && imm < 0 {
+    var rex i64 = 0x48
+    if reg >= 8 {
+      rex = 0x49
+    }
+    E(c, rex)
+    E(c, 0xC7)
+    E(c, 192 + (reg & 7))
+    EU32(c, imm)
+    return 0
+  }
+  return MovRegImm64(c, reg, imm)
+}
+
+func Imm8(v i64) bool {
+  return v >= (0 - 128) && v <= 127
+}
+
+// AluRaxImm encodes op rax, imm for the group-1 operation with /digit n
+// (0 add, 1 or, 4 and, 5 sub, 6 xor, 7 cmp); the imm is sign-extended.
+func AluRaxImm(c *Code, n i64, imm i64) i64 {
+  E(c, 0x48)
+  if Imm8(imm) {
+    E(c, 0x83)
+    E(c, 192 + (n * 8))
+    E(c, imm)
+    return 0
+  }
+  E(c, 0x81)
+  E(c, 192 + (n * 8))
+  EU32(c, imm)
+  return 0
+}
+
+// AluRaxMem encodes op rax, [rbp+disp].
+func AluRaxMem(c *Code, n i64, disp i64) i64 {
+  return MovRbpDisp(c, (n * 8) + 3, 0, disp)
+}
+
+// AluMemRax encodes op [rbp+disp], rax.
+func AluMemRax(c *Code, n i64, disp i64) i64 {
+  return MovRbpDisp(c, (n * 8) + 1, 0, disp)
+}
+
+// AluMemImm encodes op qword [rbp+disp], imm.
+func AluMemImm(c *Code, n i64, disp i64, imm i64) i64 {
+  if Imm8(imm) {
+    MovRbpDisp(c, 0x83, n, disp)
+    E(c, imm)
+    return 0
+  }
+  MovRbpDisp(c, 0x81, n, disp)
+  EU32(c, imm)
+  return 0
+}
+
+// MovMemRbpImm encodes mov qword [rbp+disp], imm (sign-extended).
+func MovMemRbpImm(c *Code, disp i64, imm i64) i64 {
+  MovRbpDisp(c, 0xC7, 0, disp)
+  EU32(c, imm)
+  return 0
+}
+
+// ImulRaxImm encodes imul rax, rax, imm.
+func ImulRaxImm(c *Code, imm i64) i64 {
+  E(c, 0x48)
+  if Imm8(imm) {
+    E(c, 0x6B)
+    E(c, 0xC0)
+    E(c, imm)
+    return 0
+  }
+  E(c, 0x69)
+  E(c, 0xC0)
+  EU32(c, imm)
+  return 0
+}
+
+// ImulRaxMem encodes imul rax, [rbp+disp].
+func ImulRaxMem(c *Code, disp i64) i64 {
+  E(c, 0x48)
+  E(c, 0x0F)
+  E(c, 0xAF)
+  return RbpOperand(c, 0, disp)
+}
+
+// ShiftRaxImm encodes shl rax, n, or sar rax, n.
+func ShiftRaxImm(c *Code, sar bool, n i64) i64 {
+  E(c, 0x48)
+  E(c, 0xC1)
+  if sar {
+    E(c, 0xF8)
+  } else {
+    E(c, 0xE0)
+  }
+  E(c, n)
+  return 0
+}
+
+// LoadMem loads rax from width bits at [base+disp], zero-extended. base
+// must be rax (0) or rcx (1).
+func LoadMem(c *Code, width i64, base i64, disp i64) i64 {
+  if width == 8 {
+    E(c, 0x48)
+    E(c, 0x0F)
+    E(c, 0xB6)
+  } else if width == 32 {
+    E(c, 0x8B)
+  } else {
+    E(c, 0x48)
+    E(c, 0x8B)
+  }
+  return MemOperand(c, 0, base, disp)
+}
+
+// StoreMemReg stores the low width bits (8 or 64) of src at [base+disp].
+// src and base must each be rax (0) or rcx (1).
+func StoreMemReg(c *Code, width i64, src i64, base i64, disp i64) i64 {
+  if width == 8 {
+    E(c, 0x88)
+  } else {
+    E(c, 0x48)
+    E(c, 0x89)
+  }
+  return MemOperand(c, src, base, disp)
+}
+
+// StoreMemImm stores imm, as a byte or sign-extended to 64 bits, at
+// [base+disp]. base must be rax (0) or rcx (1).
+func StoreMemImm(c *Code, width i64, base i64, disp i64, imm i64) i64 {
+  if width == 8 {
+    E(c, 0xC6)
+    MemOperand(c, 0, base, disp)
+    E(c, imm)
+    return 0
+  }
+  E(c, 0x48)
+  E(c, 0xC7)
+  MemOperand(c, 0, base, disp)
+  EU32(c, imm)
+  return 0
+}
+
+// Leave encodes leave: mov rsp, rbp; pop rbp.
+func Leave(c *Code) i64 {
+  E(c, 0xC9)
   return 0
 }
 
@@ -381,6 +541,11 @@ func MovRbpDisp(c *Code, op i64, reg i64, disp i64) i64 {
   }
   E(c, rex)
   E(c, op)
+  return RbpOperand(c, reg, disp)
+}
+
+// RbpOperand encodes the ModRM bytes for reg, [rbp+disp].
+func RbpOperand(c *Code, reg i64, disp i64) i64 {
   if disp >= (0 - 128) && disp <= 127 {
     E(c, (64 + ((reg & 7) * 8)) + 5)
     E(c, disp)
@@ -421,6 +586,11 @@ func MemReg(c *Code, op i64, reg i64, base i64, disp i64) i64 {
   }
   E(c, rex)
   E(c, op)
+  return MemOperand(c, reg, base, disp)
+}
+
+// MemOperand encodes the ModRM bytes for reg, [base+disp].
+func MemOperand(c *Code, reg i64, base i64, disp i64) i64 {
   var rb i64 = base & 7
   var rg i64 = reg & 7
   if disp == 0 && rb != 5 && rb != 4 {
