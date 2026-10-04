@@ -2,8 +2,6 @@ package tool
 
 import (
 	"encoding/binary"
-	"os"
-	"os/exec"
 	"runtime"
 	"sync/atomic"
 	"syscall"
@@ -20,12 +18,11 @@ const (
 // faulting pc, the frame-pointer chain, and the fault address, then lets
 // the signal kill the process as usual. ok is false if tracing is not
 // allowed here, so the caller can run the program plainly.
-func runTraced(bin string, args []string, out *os.File, timeout time.Duration) (r procResult, ok bool) {
+func runTraced(bin string, args []string, pio procIO, timeout time.Duration) (r procResult, ok bool) {
 	// Every ptrace request must come from the thread that started the tracee.
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
-	cmd := exec.Command(bin, args...)
-	cmd.Stdout, cmd.Stderr = out, out
+	cmd := pio.command(bin, args)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Ptrace: true}
 	if err := cmd.Start(); err != nil {
 		return r, false
@@ -33,11 +30,13 @@ func runTraced(bin string, args []string, out *os.File, timeout time.Duration) (
 	defer cmd.Process.Release()
 	pid := cmd.Process.Pid
 	var timedOut atomic.Bool
-	t := time.AfterFunc(timeout, func() {
-		timedOut.Store(true)
-		syscall.Kill(pid, syscall.SIGKILL)
-	})
-	defer t.Stop()
+	if timeout > 0 {
+		t := time.AfterFunc(timeout, func() {
+			timedOut.Store(true)
+			syscall.Kill(pid, syscall.SIGKILL)
+		})
+		defer t.Stop()
+	}
 	started := false
 	for {
 		var ws syscall.WaitStatus

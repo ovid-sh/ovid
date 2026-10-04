@@ -5,6 +5,7 @@ import (
 	"debug/elf"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"ovid/internal/module"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // repo is the repository root, found from this package's directory.
@@ -536,6 +538,138 @@ func Four() i64 {
 	if code := Rename(dir, "Width", "NewPoint", false, &b); code == 0 {
 		t.Fatalf("expected conflict: %s", b.String())
 	}
+}
+
+// TestRunCrash: a program that faults under ovid run gets its exit code
+// passed through, and stderr names the statement and the calls that led to it.
+func TestRunCrash(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("crash sites need ptrace")
+	}
+	dir := mkmod(t, demo(`package demo
+
+import ovid/io
+
+type Node struct {
+  v i64
+}
+
+func Get(n *Node) i64 {
+  return n.v
+}
+
+func main(io *ovid/io.Cap) i64 {
+  ovid/io.Print(strptr("before\n"))
+  return Get(0 as *Node)
+}
+`))
+	stdout, stderr := filepath.Join(dir, "out"), filepath.Join(dir, "err")
+	code := withStdio(t, stdout, stderr, func() int { return Run(dir, nil, io.Discard) })
+	if code != 128+11 {
+		t.Fatalf("exit %d", code)
+	}
+	if out, _ := os.ReadFile(stdout); string(out) != "before\n" {
+		t.Fatalf("stdout %q", out)
+	}
+	errb, _ := os.ReadFile(stderr)
+	r := last(t, string(errb))
+	at, _ := r["at"].(map[string]any)
+	stack, _ := r["stack"].([]any)
+	if r["error"] != "killed" || r["fault_addr"] != "0x0" || at["id"] != "st:demo.Get:1" || len(stack) != 2 {
+		t.Fatalf("stderr: %s", errb)
+	}
+	if outer, _ := stack[1].(map[string]any); outer["id"] != "st:demo.main:2" {
+		t.Fatalf("caller: %s", errb)
+	}
+}
+
+// TestRunStdio: a program that exits normally gets ovid run's stdin, writes
+// its own stdout and stderr, and its exit code passes through, whether it
+// runs traced or plainly (the fallback where ptrace is unavailable).
+func TestRunStdio(t *testing.T) {
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("ovid programs are linux/amd64 binaries")
+	}
+	dir := mkmod(t, demo(`package demo
+
+import ovid/io
+
+func main(io *ovid/io.Cap) i64 {
+  var buf i64 = ovid/io.Alloc(io, 64)
+  var n i64 = ovid/io.Read(0, buf, 64)
+  ovid/io.Stdout(buf, n)
+  ovid/io.Stderr(strptr("to stderr\n"), 10)
+  return 3
+}
+`))
+	in := filepath.Join(dir, "in")
+	if err := os.WriteFile(in, []byte("from stdin\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	open := func(name string) *os.File {
+		f, err := os.Create(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { f.Close() })
+		return f
+	}
+	check := func(how string, code int, out, errOut string) {
+		t.Helper()
+		o, _ := os.ReadFile(filepath.Join(dir, out))
+		e, _ := os.ReadFile(filepath.Join(dir, errOut))
+		if code != 3 || string(o) != "from stdin\n" || string(e) != "to stderr\n" {
+			t.Fatalf("%s: exit %d, stdout %q, stderr %q", how, code, o, e)
+		}
+	}
+
+	stdin, err := os.Open(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stdin.Close()
+	si := os.Stdin
+	os.Stdin = stdin
+	code := withStdio(t, filepath.Join(dir, "out"), filepath.Join(dir, "err"), func() int { return Run(dir, nil, io.Discard) })
+	os.Stdin = si
+	check("run", code, "out", "err")
+
+	bin := filepath.Join(dir, "bin", "demo")
+	var b bytes.Buffer
+	if Build(dir, bin, &b) != 0 {
+		t.Fatal(b.String())
+	}
+	for name, runner := range map[string]func(string, []string, procIO, time.Duration) procResult{"traced": runProc, "plain": runPlain} {
+		stdin, err := os.Open(in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pr := runner(bin, nil, procIO{stdin, open(name + ".out"), open(name + ".err")}, 0)
+		stdin.Close()
+		if pr.err != nil || !pr.exited {
+			t.Fatalf("%s: %+v", name, pr)
+		}
+		check(name, pr.code, name+".out", name+".err")
+	}
+}
+
+// withStdio runs f with os.Stdout and os.Stderr sent to files.
+func withStdio(t *testing.T, stdout, stderr string, f func() int) int {
+	t.Helper()
+	o, err := os.Create(stdout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer o.Close()
+	e, err := os.Create(stderr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e.Close()
+	so, se := os.Stdout, os.Stderr
+	os.Stdout, os.Stderr = o, e
+	defer func() { os.Stdout, os.Stderr = so, se }()
+	return f()
 }
 
 func TestTestCommand(t *testing.T) {
