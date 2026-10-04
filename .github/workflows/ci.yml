@@ -22,6 +22,12 @@ jobs:
           go-version: stable
       - run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
       - run: go vet ./...
+      # The toolchain itself must build on other hosts, even where the tests
+      # cannot run there: platform-specific files are easy to tag too loosely.
+      - run: |
+          for t in linux/arm64 windows/amd64; do
+            GOOS=${t%/*} GOARCH=${t#*/} go vet ./... || exit 1
+          done
       - run: go test -count=1 ./...
 
   # Everything that does not execute an emitted binary must pass on a Mac too (#9).
