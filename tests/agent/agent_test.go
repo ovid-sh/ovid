@@ -1,9 +1,11 @@
 package agent
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -63,6 +65,70 @@ func TestTasks(t *testing.T) {
 				t.Fatalf("solution does not meet the goal:\n%s\nsolution output:\n%s", strings.Join(bad, "\n"), out)
 			}
 		})
+	}
+}
+
+// TestReplayRequest checks 07-replay's story, which TestTasks cannot: its
+// start already meets the goal, so any refused request passes there. The
+// hash the task gives must be st:tally.Count:2's in the module as it was
+// before the lost delete (start/ with the increment twice); sent once, that
+// delete leaves exactly start/, and sent again it is refused as stale and
+// writes nothing.
+func TestReplayRequest(t *testing.T) {
+	ovid := buildOvid(t)
+	task, err := os.ReadFile("07-replay/task.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile("(?m)^ovid delete (st:tally\\.Count:2) --expect ([0-9a-f]{12})$").FindStringSubmatch(string(task))
+	if m == nil {
+		t.Fatal("task.md gives no `ovid delete st:tally.Count:2 --expect H`")
+	}
+	if sol, err := os.ReadFile("07-replay/solution.sh"); err != nil || !strings.Contains(string(sol), m[0]) {
+		t.Fatalf("solution.sh does not send the request task.md gives, %q", m[0])
+	}
+	id, hash := m[1], m[2]
+
+	start := Snapshot("07-replay/start")
+	work := t.TempDir()
+	if err := copyTree("07-replay/start", work); err != nil {
+		t.Fatal(err)
+	}
+	src := filepath.Join(work, "tally/main.ov")
+	b, err := os.ReadFile(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const inc = "  x = x + 1\n"
+	if strings.Count(string(b), inc) != 1 {
+		t.Fatalf("start/ should have one %q", inc)
+	}
+	if err := os.WriteFile(src, []byte(strings.Replace(string(b), inc, inc+inc, 1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, code := ovidRun(ovid, work, "show", id, "--json")
+	var shown struct{ ID, Hash, Text string }
+	if code != 0 || json.Unmarshal([]byte(strings.SplitN(out, "\n", 2)[0]), &shown) != nil {
+		t.Fatalf("show %s: exit %d\n%s", id, code, out)
+	}
+	if shown.ID != id || shown.Text != "x = x + 1" || shown.Hash != hash {
+		t.Fatalf("before the delete, %s is %q with hash %s; task.md gives %s", shown.ID, shown.Text, shown.Hash, hash)
+	}
+
+	if out, code := ovidRun(ovid, work, "delete", id, "--expect", hash); code != 0 {
+		t.Fatalf("the request: exit %d\n%s", code, out)
+	}
+	after := Snapshot(work)
+	if d := Changed(start, after); len(d) > 0 {
+		t.Fatalf("after the delete, differs from start/: %v", d)
+	}
+	out, code = ovidRun(ovid, work, "delete", id, "--expect", hash)
+	if code != 2 || !strings.Contains(out, `"error":"stale"`) {
+		t.Fatalf("the replay: exit %d, want 2 and stale\n%s", code, out)
+	}
+	if d := Changed(after, Snapshot(work)); len(d) > 0 {
+		t.Fatalf("the refused replay wrote: %v", d)
 	}
 }
 

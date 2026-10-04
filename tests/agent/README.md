@@ -44,6 +44,9 @@ exit 0. A task marked `xfail` must still fail, with exactly its listed
 problems, so that a different failure is not mistaken for the known one;
 when its bug is fixed the test says so, and the mark is removed. That checks both the graders and the commands the
 solutions use (rename, a stale edit, a replayed edit, concurrent writers).
+`07-replay` starts out meeting its goal, so `TestReplayRequest` also checks
+its request against the module it was read from: the hash is the one the
+statement had then, the delete lands once, and the replay is refused.
 
 ## With a model
 
