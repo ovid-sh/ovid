@@ -15,6 +15,12 @@ func Eq(a i64, an i64, b i64, bn i64) bool {
     return false
   }
   var i i64 = 0
+  while (i + 8) <= an {
+    if load64(a + i) != load64(b + i) {
+      return false
+    }
+    i = i + 8
+  }
   while i < an {
     if load8(a + i) != load8(b + i) {
       return false
@@ -33,6 +39,14 @@ func EqC(p i64, lit i64, n i64) bool {
 // Copy copies n bytes from src to dst and returns n.
 func Copy(dst i64, src i64, n i64) i64 {
   var i i64 = 0
+  // Eight bytes at a time, unless dst starts inside the word being read:
+  // there the byte loop's result (the bytes repeat) is the defined one.
+  if dst < src || (dst - src) >= 8 {
+    while (i + 8) <= n {
+      store64(dst + i, load64(src + i))
+      i = i + 8
+    }
+  }
   while i < n {
     store8(dst + i, load8(src + i))
     i = i + 1
