@@ -215,7 +215,7 @@ func Run(dir string, args []string, w io.Writer) int {
 		return pr.code
 	}
 	r := map[string]any{"ok": false, "error": "killed", "exit": 128 + int(pr.signal)}
-	describeCrash(m, marks, pr, r)
+	describeCrash(m, exe, marks, pr, r)
 	emit(os.Stderr, r)
 	return 128 + int(pr.signal)
 }

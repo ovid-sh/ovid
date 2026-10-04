@@ -684,6 +684,42 @@ func main(io *ovid/io.Cap) i64 {
 	}
 }
 
+// TestRunStoreLiteral: a store into a strptr literal faults, since rodata
+// is read-only, and the hint says so; a store into a copy works.
+func TestRunStoreLiteral(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("fault addresses need ptrace")
+	}
+	src := `package demo
+
+import ovid/io
+import ovid/mem
+
+func main(io *ovid/io.Cap) i64 {
+  var p i64 = strptr("abc")
+  COPY
+  store8(p + 1, 66)
+  return load8(p + 1)
+}
+`
+	dir := mkmod(t, demo(strings.Replace(src, "COPY", "", 1)))
+	stderr := filepath.Join(dir, "err")
+	if code := withStdio(t, os.DevNull, stderr, func() int { return Run(dir, nil, io.Discard) }); code != 128+11 {
+		t.Fatalf("exit %d", code)
+	}
+	errb, _ := os.ReadFile(stderr)
+	r := last(t, string(errb))
+	at, _ := r["at"].(map[string]any)
+	if hint, _ := r["hint"].(string); !strings.Contains(hint, "string literal") || at["id"] != "st:demo.main:2" {
+		t.Fatalf("stderr: %s", errb)
+	}
+
+	dir = mkmod(t, demo(strings.Replace(src, "COPY", "var b i64 = ovid/io.Alloc(io, 4)\n  ovid/mem.Copy(b, p, 4)\n  p = b", 1)))
+	if code := withStdio(t, os.DevNull, stderr, func() int { return Run(dir, nil, io.Discard) }); code != 66 {
+		t.Fatalf("store into a copy: exit %d", code)
+	}
+}
+
 // TestRunStdio: a program that exits normally gets ovid run's stdin, writes
 // its own stdout and stderr, and its exit code passes through, whether it
 // runs traced or plainly (the fallback where ptrace is unavailable).
