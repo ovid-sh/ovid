@@ -59,6 +59,9 @@ func Rename(dir, q, to string, dryRun bool, w io.Writer) int {
 	if err != nil {
 		return fail(w, "not_found", err.Error(), "")
 	}
+	if sameID(locs) {
+		return failAmbiguousID(w, m, locs)
+	}
 	if len(locs) > 1 {
 		var ids []string
 		for _, l := range locs {

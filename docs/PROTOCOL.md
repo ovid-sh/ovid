@@ -128,10 +128,11 @@ below. Codes:
 | `write` | writing failed | edit: `written_files`, the files already renamed into place |
 | `syntax` | the module does not parse; refs, rename, and move need a parsed module | edit: `op`, `file`, `line`, `col` of the op whose text broke it |
 | `check` | an edit would add check errors (or leave any, with `--require-clean`); nothing was written | `errors`, `errors_before`; the new diagnostics precede it |
-| `stale` | exit 2. An `expect` hash no longer matches, or the module `revision` moved, or a file changed on disk while the edit ran | `id`, `hash`, `text` (the current source), `decl`, `decl_hash`; `revision` for a revision guard |
+| `stale` | exit 2. An `expect` hash no longer matches, or the module `revision` moved, or a file changed on disk while the edit ran | `id`, `hash`, `text` (the current source), `decl`, `decl_hash`; `revision` for a revision guard; `id`, `copies` (as for `ambiguous_id`) when no copy of a duplicated id has the hash |
 | `expect_required` | an edit op has no guard: no `expect`, no request `revision` (`--rev`), no `--force`. Every op needs one, decl ids included; only `append` into a package path does not | `op` |
 | `not_found` | an id or name resolves to nothing | |
 | `ambiguous` | a name resolves to several decls | the hint lists the full ids |
+| `ambiguous_id` | an id names several nodes (see Duplicated ids) and the edit op has no `expect` to pick one, or the command (refs, rename, move) cannot pick one | `id`, `copies`: `[{file,line,end_line,hash,decl_hash}]` (`decl_hash` for a `st:`/`ex:` id); edit: `op` |
 | `bad_edit` | a malformed op, or a request or op with a key it does not have (misspelled, or in another case), with the same key twice, or with a field that belongs to another op (a replace with a `before`, a delete with a `text`); nothing was written | `op`, when one op is at fault |
 | `overlap` | two ops of one edit touch the same source | |
 | `std` | the target is in a shipped package | |
@@ -252,6 +253,22 @@ hash or its decl's; the two are equally strict. `revision`
 the module, and the files of the shipped packages the module imports, so a
 new toolchain with a changed standard library moves it too. Both are the
 leading digits of a sha256; the tools keep the whole digest internally.
+
+### Duplicated ids
+
+A module that declares a name twice in one package (`func F` in both
+`a.ov` and `b.ov`) has two nodes with one id, and so do their params,
+statements, and expressions; `check` reports the duplicate. Every copy is
+indexed: `outline` lists each at its own `file` and `line` with its own
+hash and `"id_copies":N`, and `show` and `grep` find each where it is. An
+edit addresses one copy by giving its hash as `expect` (for a `st:`/`ex:`
+id, the node's hash or its decl copy's). Without an `expect`, the op fails
+with `ambiguous_id`, which lists the copies; `--rev` and `--force` do not
+choose one. An `expect` no copy has is `stale` (exit 2). Copies with the
+same hash have the same text, so the op takes the first of them, the one
+`outline` lists first. `refs`, `rename`, and `move` cannot choose a copy
+and fail with `ambiguous_id`: delete one copy, or replace it under another
+name, first.
 
 ## Guards
 

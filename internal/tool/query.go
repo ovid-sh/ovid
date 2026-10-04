@@ -103,14 +103,16 @@ func pkgFiles(m *module.Module, p *ir.Package) []string {
 
 func declLocs(m *module.Module, p *ir.Package) []*module.Loc {
 	var out []*module.Loc
-	for _, c := range p.Consts {
-		out = append(out, m.Index[c.ID])
+	// Each node's own Loc, so every copy of a duplicated id is listed
+	// where it is.
+	for i := range p.Consts {
+		out = append(out, m.LocOf(&p.Consts[i]))
 	}
-	for _, t := range p.Types {
-		out = append(out, m.Index[t.ID])
+	for i := range p.Types {
+		out = append(out, m.LocOf(&p.Types[i]))
 	}
-	for _, f := range p.Funcs {
-		out = append(out, m.Index[f.ID])
+	for i := range p.Funcs {
+		out = append(out, m.LocOf(&p.Funcs[i]))
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		a, b := out[i].Span, out[j].Span
@@ -124,7 +126,11 @@ func declLocs(m *module.Module, p *ir.Package) []*module.Loc {
 
 func declLine(m *module.Module, l *module.Loc) map[string]any {
 	file, a, b, _ := m.Where(l.Span)
-	r := map[string]any{"id": l.ID, "kind": l.Kind, "sig": sigOf(l), "file": file, "line": a.Line, "end_line": b.Line, "hash": m.Hash(l.ID)}
+	r := map[string]any{"id": l.ID, "kind": l.Kind, "sig": sigOf(l), "file": file, "line": a.Line, "end_line": b.Line, "hash": m.LocHash(l)}
+	if n := len(m.Copies(l.ID)); n > 1 {
+		// A duplicate, which check reports; an edit picks a copy by its hash.
+		r["id_copies"] = n
+	}
 	if doc := docComment(m.Files[l.Span.File].Src, l.Span.Off); doc != "" {
 		r["doc"] = doc
 	}
@@ -194,7 +200,7 @@ func Show(dir string, ids []string, withIDs, asJSON, exprs bool, w io.Writer) in
 		docAt := f.Pos(l.Full.Off)
 		if asJSON {
 			r := map[string]any{"id": l.ID, "kind": l.Kind, "file": file, "line": a.Line, "end_line": b.Line,
-				"hash": m.Hash(l.ID), "decl": l.Decl, "parent": l.Parent, "text": m.Text(l.Full)}
+				"hash": m.LocHash(l), "decl": l.Decl, "parent": l.Parent, "text": m.Text(l.Full)}
 			if l.Full.Off < l.Span.Off {
 				r["doc_line"] = docAt.Line
 				r["doc"] = docComment(f.Src, l.Span.Off)
@@ -209,7 +215,7 @@ func Show(dir string, ids []string, withIDs, asJSON, exprs bool, w io.Writer) in
 				es := []map[string]any{}
 				for _, e := range exprsIn(m, l) {
 					_, ea, _, _ := m.Where(e.Span)
-					x := map[string]any{"id": e.ID, "line": ea.Line, "col": ea.Col, "text": m.Text(e.Span), "hash": m.Hash(e.ID)}
+					x := map[string]any{"id": e.ID, "line": ea.Line, "col": ea.Col, "text": m.Text(e.Span), "hash": m.LocHash(e)}
 					if t := types[e.ID]; t != "" {
 						x["type"] = t
 					}
@@ -221,7 +227,7 @@ func Show(dir string, ids []string, withIDs, asJSON, exprs bool, w io.Writer) in
 			continue
 		}
 		// The line range is the printed text's, doc comment included.
-		hdr := fmt.Sprintf("// %s %s %s:%d-%d hash=%s", l.Kind, l.ID, file, docAt.Line, b.Line, m.Hash(l.ID))
+		hdr := fmt.Sprintf("// %s %s %s:%d-%d hash=%s", l.Kind, l.ID, file, docAt.Line, b.Line, m.LocHash(l))
 		if l.Decl != "" && l.Decl != l.ID {
 			hdr += " in=" + l.Decl
 		}
@@ -236,7 +242,7 @@ func Show(dir string, ids []string, withIDs, asJSON, exprs bool, w io.Writer) in
 		if withIDs && (exprs || l.Kind == "stmt" || l.Kind == "expr") {
 			for _, e := range exprsIn(m, l) {
 				_, ea, _, _ := m.Where(e.Span)
-				line := fmt.Sprintf("//   %s %d:%d %s  hash=%s", e.ID, ea.Line, ea.Col, oneLine(m.Text(e.Span), 72), m.Hash(e.ID))
+				line := fmt.Sprintf("//   %s %d:%d %s  hash=%s", e.ID, ea.Line, ea.Col, oneLine(m.Text(e.Span), 72), m.LocHash(e))
 				if t := types[e.ID]; t != "" {
 					line += " type=" + t
 				}
@@ -255,7 +261,7 @@ func Show(dir string, ids []string, withIDs, asJSON, exprs bool, w io.Writer) in
 func exprsIn(m *module.Module, l *module.Loc) []*module.Loc {
 	var out []*module.Loc
 	visit := func(c *ir.Node) {
-		if e := m.Index[c.ID]; e != nil && e.Kind == "expr" {
+		if e := m.LocOf(c); e != nil && e.Kind == "expr" {
 			out = append(out, e)
 		}
 	}
@@ -369,6 +375,9 @@ func Refs(dir, q string, page Page, w io.Writer) int {
 	locs, err := m.Lookup(q)
 	if err != nil {
 		return fail(w, "not_found", err.Error(), "")
+	}
+	if sameID(locs) {
+		return failAmbiguousID(w, m, locs)
 	}
 	if len(locs) > 1 {
 		var ids []string

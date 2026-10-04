@@ -72,6 +72,7 @@ type Loc struct {
 	// replace and delete swap or remove. For every other node it is Span.
 	Full ir.Span
 	Node any
+	decl *Loc // the copy of the enclosing decl this node is in
 }
 
 type Module struct {
@@ -84,10 +85,16 @@ type Module struct {
 	Std map[string]bool
 	// Errors are syntax and layout problems found while loading.
 	Errors []Diag
+	// Index maps each id to its node, the first in load order when
+	// several share it (check reports the duplicate); Order lists each id
+	// once. Copies lists every node of an id, and Locs every node.
 	Index  map[string]*Loc
 	Order  []string
-	hashes map[string]string // full digests, filled on first Hash
-	modSrc []byte            // ovid.mod as read
+	locs   []*Loc
+	copies map[string][]*Loc // ids that more than one node has
+	byNode map[any]*Loc
+	hashes map[*Loc]string // full digests, filled on first Hash
+	modSrc []byte          // ovid.mod as read
 }
 
 // Diag is one error with its location resolved.
@@ -141,7 +148,7 @@ func load(dir string, overlay map[string][]byte, noTests bool) (*Module, error) 
 	if err != nil {
 		return nil, err
 	}
-	m := &Module{Root: root, Std: map[string]bool{}, Index: map[string]*Loc{}}
+	m := &Module{Root: root, Std: map[string]bool{}, Index: map[string]*Loc{}, copies: map[string][]*Loc{}, byNode: map[any]*Loc{}}
 	modSrc, err := os.ReadFile(filepath.Join(root, "ovid.mod"))
 	if err != nil {
 		return nil, err
@@ -383,48 +390,84 @@ func (m *Module) DisplayPath(f *File) string {
 	return f.Abs
 }
 
-func (m *Module) add(l *Loc) {
+// add indexes l, a node of decl (nil for a package), and returns it.
+func (m *Module) add(l *Loc, decl *Loc) *Loc {
 	if l.ID == "" {
-		return
+		return l
 	}
-	if _, dup := m.Index[l.ID]; dup {
-		return
+	l.decl = decl
+	if decl == nil {
+		l.decl = l
 	}
 	l.Full = l.Span
 	switch l.Kind {
 	case "func", "type", "const":
 		l.Full.Off = DocStart(m.Files[l.Span.File].Src, l.Span.Off)
 	}
+	m.locs = append(m.locs, l)
+	m.byNode[l.Node] = l
+	if first, dup := m.Index[l.ID]; dup {
+		if m.copies[l.ID] == nil {
+			m.copies[l.ID] = []*Loc{first}
+		}
+		m.copies[l.ID] = append(m.copies[l.ID], l)
+		return l
+	}
 	m.Index[l.ID] = l
 	m.Order = append(m.Order, l.ID)
+	return l
 }
+
+// Copies lists every node with the given id in load order (by file, then
+// position): one for a well-formed module, several where declarations
+// share the id (check reports them), none for an unknown id.
+func (m *Module) Copies(id string) []*Loc {
+	if c := m.copies[id]; c != nil {
+		return c
+	}
+	if l := m.Index[id]; l != nil {
+		return []*Loc{l}
+	}
+	return nil
+}
+
+// Locs lists every indexed node in load order, each copy of a duplicated
+// id included.
+func (m *Module) Locs() []*Loc { return m.locs }
+
+// LocOf is the node indexed for an ir node (a *ir.Func, *ir.Node, ...).
+func (m *Module) LocOf(node any) *Loc { return m.byNode[node] }
+
+// DeclLoc is the copy of the top-level decl that l is in (l itself for a
+// decl): the one whose hash a st:/ex: hash is bound to.
+func (m *Module) DeclLoc(l *Loc) *Loc { return l.decl }
 
 func (m *Module) index() {
 	for pi := range m.Prog.Packages {
 		pkg := &m.Prog.Packages[pi]
-		m.add(&Loc{ID: pkg.ID, Kind: "package", Pkg: pkg.Path, Span: pkg.Span, Node: pkg})
+		m.add(&Loc{ID: pkg.ID, Kind: "package", Pkg: pkg.Path, Span: pkg.Span, Node: pkg}, nil)
 		for i := range pkg.Imports {
 			im := &pkg.Imports[i]
-			m.add(&Loc{ID: im.ID, Kind: "import", Pkg: pkg.Path, Decl: im.ID, Parent: pkg.ID, Span: im.Span, Node: im})
+			m.add(&Loc{ID: im.ID, Kind: "import", Pkg: pkg.Path, Decl: im.ID, Parent: pkg.ID, Span: im.Span, Node: im}, nil)
 		}
 		for i := range pkg.Consts {
 			c := &pkg.Consts[i]
-			m.add(&Loc{ID: c.ID, Kind: "const", Pkg: pkg.Path, Decl: c.ID, Parent: pkg.ID, Span: c.Span, Node: c})
+			m.add(&Loc{ID: c.ID, Kind: "const", Pkg: pkg.Path, Decl: c.ID, Parent: pkg.ID, Span: c.Span, Node: c}, nil)
 		}
 		for i := range pkg.Types {
 			t := &pkg.Types[i]
-			m.add(&Loc{ID: t.ID, Kind: "type", Pkg: pkg.Path, Decl: t.ID, Parent: pkg.ID, Span: t.Span, Node: t})
+			tl := m.add(&Loc{ID: t.ID, Kind: "type", Pkg: pkg.Path, Decl: t.ID, Parent: pkg.ID, Span: t.Span, Node: t}, nil)
 			for j := range t.Fields {
 				f := &t.Fields[j]
-				m.add(&Loc{ID: f.ID, Kind: "field", Pkg: pkg.Path, Decl: t.ID, Parent: t.ID, Span: f.Span, Node: f})
+				m.add(&Loc{ID: f.ID, Kind: "field", Pkg: pkg.Path, Decl: t.ID, Parent: t.ID, Span: f.Span, Node: f}, tl)
 			}
 		}
 		for i := range pkg.Funcs {
 			fn := &pkg.Funcs[i]
-			m.add(&Loc{ID: fn.ID, Kind: "func", Pkg: pkg.Path, Decl: fn.ID, Parent: pkg.ID, Span: fn.Span, Node: fn})
+			fl := m.add(&Loc{ID: fn.ID, Kind: "func", Pkg: pkg.Path, Decl: fn.ID, Parent: pkg.ID, Span: fn.Span, Node: fn}, nil)
 			for j := range fn.Params {
 				pa := &fn.Params[j]
-				m.add(&Loc{ID: pa.ID, Kind: "param", Pkg: pkg.Path, Decl: fn.ID, Parent: fn.ID, Span: pa.Span, Node: pa})
+				m.add(&Loc{ID: pa.ID, Kind: "param", Pkg: pkg.Path, Decl: fn.ID, Parent: fn.ID, Span: pa.Span, Node: pa}, fl)
 			}
 			var walk func(n *ir.Node, parent string)
 			walk = func(n *ir.Node, parent string) {
@@ -432,7 +475,7 @@ func (m *Module) index() {
 				if ir.IsStmt(n.Op) {
 					kind = "stmt"
 				}
-				m.add(&Loc{ID: n.ID, Kind: kind, Pkg: pkg.Path, Decl: fn.ID, Parent: parent, Span: n.Span, Node: n})
+				m.add(&Loc{ID: n.ID, Kind: kind, Pkg: pkg.Path, Decl: fn.ID, Parent: parent, Span: n.Span, Node: n}, fl)
 				for _, c := range n.Children() {
 					walk(c, n.ID)
 				}
@@ -491,27 +534,15 @@ func (m *Module) Text(s ir.Span) string {
 // one elsewhere in it, changes the hash of every statement in it, so a
 // stale st:/ex: id never matches, not even on a text-identical twin that
 // inherited its position; a change to another decl changes nothing. It is
-// a staleness check, not a cache key.
-func (m *Module) Hash(id string) string {
-	if m.hashes == nil {
-		m.hashes = map[string]string{}
-		seen := map[string]int{}
-		for _, oid := range m.Order {
-			l := m.Index[oid]
-			text := m.Text(l.Full)
-			in := text
-			if l.Kind == "stmt" || l.Kind == "expr" {
-				k := l.Kind + "\x00" + l.Decl + "\x00" + text
-				// The decl's digest, which covers its text; it precedes its
-				// statements in Order, so it is already known.
-				in = fmt.Sprintf("%s\x00%d\x00%s", k, seen[k], m.hashes[l.Decl])
-				seen[k]++
-			}
-			sum := sha256.Sum256([]byte(in))
-			m.hashes[oid] = hex.EncodeToString(sum[:])
-		}
-	}
-	if h := m.hashes[id]; h != "" {
+// a staleness check, not a cache key. Where several nodes share the id,
+// it is the first one's; LocHash gives each its own.
+func (m *Module) Hash(id string) string { return m.LocHash(m.Index[id]) }
+
+// LocHash is Hash of one node, so of one copy of a duplicated id: copies
+// with different text have different hashes. A statement's is bound to
+// the copy of the decl it is in.
+func (m *Module) LocHash(l *Loc) string {
+	if h := m.LocDigest(l); h != "" {
 		return h[:12]
 	}
 	return ""
@@ -519,9 +550,35 @@ func (m *Module) Hash(id string) string {
 
 // Digest is the full sha256 that Hash prints the first 12 digits of. The
 // short form guards an edit; this one is wide enough to key a cache.
-func (m *Module) Digest(id string) string {
-	m.Hash(id)
-	return m.hashes[id]
+func (m *Module) Digest(id string) string { return m.LocDigest(m.Index[id]) }
+
+// LocDigest is Digest of one node.
+func (m *Module) LocDigest(l *Loc) string {
+	if l == nil {
+		return ""
+	}
+	if m.hashes == nil {
+		m.hashes = map[*Loc]string{}
+		type key struct {
+			decl *Loc
+			k    string
+		}
+		seen := map[key]int{}
+		for _, o := range m.locs {
+			text := m.Text(o.Full)
+			in := text
+			if o.Kind == "stmt" || o.Kind == "expr" {
+				k := key{o.decl, o.Kind + "\x00" + o.Decl + "\x00" + text}
+				// The decl's digest, which covers its text; it precedes its
+				// statements, so it is already known.
+				in = fmt.Sprintf("%s\x00%d\x00%s", k.k, seen[k], m.hashes[o.decl])
+				seen[k]++
+			}
+			sum := sha256.Sum256([]byte(in))
+			m.hashes[o] = hex.EncodeToString(sum[:])
+		}
+	}
+	return m.hashes[l]
 }
 
 // Revision is the first 16 digits of RevisionDigest: enough to tell an
@@ -578,8 +635,8 @@ func (m *Module) IsStd(fi int) bool { return strings.HasPrefix(m.Files[fi].Path,
 
 // Lookup finds an id, also accepting a bare name or pkg.Name for decls.
 func (m *Module) Lookup(q string) ([]*Loc, error) {
-	if l, ok := m.Index[q]; ok {
-		return []*Loc{l}, nil
+	if _, ok := m.Index[q]; ok {
+		return m.Copies(q), nil
 	}
 	var out []*Loc
 	for _, id := range m.Order {
@@ -591,7 +648,7 @@ func (m *Module) Lookup(q string) ([]*Loc, error) {
 		}
 		name := id[strings.LastIndex(id, ".")+1:]
 		if q == name || q == l.Pkg+"."+name || pkgSuffix(l.Pkg, q, name) {
-			out = append(out, l)
+			out = append(out, m.Copies(id)...)
 		}
 	}
 	if len(out) == 0 && strings.Contains(q, ".") {

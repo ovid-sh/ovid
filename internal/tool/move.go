@@ -60,6 +60,9 @@ func planMove(dir, q, to, file string, base map[string][]byte, w io.Writer) (*pl
 	if err != nil {
 		return nil, fail(w, "not_found", err.Error(), "")
 	}
+	if sameID(locs) {
+		return nil, failAmbiguousID(w, m, locs)
+	}
 	if len(locs) > 1 {
 		var ids []string
 		for _, l := range locs {
@@ -305,8 +308,8 @@ func planMove(dir, q, to, file string, base map[string][]byte, w io.Writer) (*pl
 
 // filePkg is the package a module file belongs to.
 func filePkg(m *module.Module, fi int) string {
-	for _, id := range m.Order {
-		if l := m.Index[id]; l.Span.File == fi {
+	for _, l := range m.Locs() {
+		if l.Span.File == fi {
 			return l.Pkg
 		}
 	}
