@@ -46,6 +46,12 @@ Also: ovid build [-o out], ovid dump (program as JSON), ovid version
 (commit and binary hash: which ovid is this?), ovid help <topic>.
 All commands take -C <dir> (default: the module containing the cwd).
 
+The language at a glance (all of it: ovid help language):
+  i64, bool, *T; var x i64 = 0; if/else if/else; while; no for/break/continue
+  var p *T = ovid/io.Alloc(io, sizeof(T)) as *T     structs live on the heap
+  ovid/io.Print(strptr("hi\n")); ovid/io.PrintInt(io, n)   output
+  var sp bool = c == 32 || c == 9                   && || ! work anywhere
+
 Topics: ovid help language | commands | edit | std | ids
 `
 
@@ -84,14 +90,16 @@ field reads p.f, casts e as *T (i64 address to pointer and back),
 load8/load32/load64(addr), strptr("lit") / strlen("lit"), sizeof(T).
 Binary operators, Go precedence: || && == != < <= > >= + - | ^ * / % << >> &
 (>> is arithmetic). Unary: ! (bool), - and ^ (i64). Comparisons give bool;
-if/while conditions must be bool.
+if/while conditions must be bool. && and || short-circuit and are ordinary
+values: var sp bool = c == 32 || c == 9 || c == 10.
 
 Strings: there is no string type. strptr("hi\n") is the address of an
 interned NUL-terminated literal and strlen("hi\n") is its length (3),
-computed by the compiler, so never count bytes by hand:
-  ovid/io.Stdout(strptr("total: "), strlen("total: "))
-Literals are NUL-terminated, so ovid/io.Print(strptr("total: ")) works too;
-ovid/io.PrintInt(io, n) prints a number, Eprint writes to stderr.
+computed by the compiler, so never count bytes by hand. Literals are
+NUL-terminated, so printing one needs only its address:
+  ovid/io.Print(strptr("total: "))     // Eprint writes to stderr
+  ovid/io.PrintInt(io, n)              // a number in decimal
+  ovid/io.Stdout(p, n)                 // n bytes at p, for non-literals
 
 Memory: no implicit allocation. ovid/io.Alloc(io, nbytes) returns an i64
 address from the heap the runtime maps; cast it: var p *Pair = raw as *Pair.
@@ -338,7 +346,7 @@ func Greeting() i64 {
 }
 
 func main(io *ovid/io.Cap) i64 {
-  ovid/io.Stdout(Greeting(), strlen("hello, world\n"))
+  ovid/io.Print(Greeting())
   return 0
 }
 `,
