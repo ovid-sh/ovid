@@ -1,6 +1,6 @@
-// The heap grows past the first 128 MiB region: 200 one-MiB blocks, then
-// one block bigger than a region. Every block starts zeroed and keeps what
-// was stored in it.
+// The heap grows past the first 128 MiB region: 200 one-MiB blocks, one
+// block bigger than a region, then 100 more. Every block starts zeroed, and
+// after all of them each still holds what was stored at both of its ends.
 // exit: 0
 // stdout: "5"
 package demo
@@ -9,34 +9,42 @@ import ovid/io
 
 func main(io *ovid/io.Cap) i64 {
   var mib i64 = 1 << 20
-  var first i64 = ovid/io.Alloc(io, mib)
-  store64(first, 41)
-  var prev i64 = first
-  var i i64 = 1
-  while i < 200 {
-    var p i64 = ovid/io.Alloc(io, mib)
-    if p == 0 || p == prev {
-      return 1
+  var n i64 = 300
+  var tab i64 = ovid/io.Alloc(io, n * 8)
+  var big i64 = 0
+  var i i64 = 0
+  while i < n {
+    if i == 200 {
+      big = ovid/io.Alloc(io, 300 * mib)
+      if load64(big) != 0 || load64((big + (300 * mib)) - 8) != 0 {
+        return 1
+      }
+      store64(big, 7)
+      store64((big + (300 * mib)) - 8, 8)
     }
-    if load64(p) != 0 || load64((p + mib) - 8) != 0 {
+    var p i64 = ovid/io.Alloc(io, mib)
+    if p == 0 {
       return 2
     }
-    store64(p, i)
-    store64((p + mib) - 8, i)
-    prev = p
+    if load64(p) != 0 || load64((p + mib) - 8) != 0 {
+      return 3
+    }
+    store64(p, i + 1)
+    store64((p + mib) - 8, 0 - (i + 1))
+    store64(tab + (i * 8), p)
     i = i + 1
   }
-  var big i64 = ovid/io.Alloc(io, 300 * mib)
-  if load64(big) != 0 || load64((big + (300 * mib)) - 8) != 0 {
-    return 3
-  }
-  store64((big + (300 * mib)) - 8, 7)
-  var after i64 = ovid/io.Alloc(io, 64)
-  if load64(after) != 0 {
-    return 4
-  }
+  // PrintInt takes scratch from the heap and hands it back.
   ovid/io.PrintInt(io, 5)
-  if load64(first) != 41 || load64(prev) != 199 {
+  i = 0
+  while i < n {
+    var q i64 = load64(tab + (i * 8))
+    if load64(q) != i + 1 || load64((q + mib) - 8) != 0 - (i + 1) {
+      return 4
+    }
+    i = i + 1
+  }
+  if load64(big) != 7 || load64((big + (300 * mib)) - 8) != 8 {
     return 5
   }
   return 0
