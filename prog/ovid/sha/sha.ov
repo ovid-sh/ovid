@@ -7,24 +7,6 @@ func Add(a i64, b i64) i64 {
   return (a + b) & 0xFFFFFFFF
 }
 
-func Not32(x i64) i64 {
-  return (x ^ 0xFFFFFFFF) & 0xFFFFFFFF
-}
-
-func Rotr(x i64, n i64) i64 {
-  var v i64 = x & 0xFFFFFFFF
-  if n == 0 {
-    return v
-  }
-  var r i64 = (v >> n) & 0xFFFFFFFF
-  var l i64 = (v << (32 - n)) & 0xFFFFFFFF
-  return (r | l) & 0xFFFFFFFF
-}
-
-func Shr(x i64, n i64) i64 {
-  return (x >> n) & 0xFFFFFFFF
-}
-
 func LoadBE(p i64) i64 {
   var b0 i64 = load8(p)
   var b1 i64 = load8(p + 1)
@@ -66,21 +48,31 @@ func KWord(i i64) i64 {
   return v & 0xFFFFFFFF
 }
 
-func Block(h i64, chunk i64, w i64) i64 {
+// KTable returns the 64 round constants as 8-byte words, parsed once.
+func KTable(io *ovid/io.Cap) i64 {
+  var k i64 = ovid/io.Alloc(io, 512)
+  var i i64 = 0
+  while i < 64 {
+    store64(k + (i * 8), KWord(i))
+    i = i + 1
+  }
+  return k
+}
+
+// Block folds one 64-byte chunk into h. w is 512 bytes of scratch and k is
+// KTable's result. Every word stays below 2^32, so a rotate is two shifts.
+func Block(h i64, chunk i64, w i64, k i64) i64 {
   var i i64 = 0
   while i < 16 {
     store64(w + (i * 8), LoadBE(chunk + (i * 4)))
     i = i + 1
   }
   while i < 64 {
-    var w15 i64 = load64(w + ((i - 15) * 8))
-    var w2 i64 = load64(w + ((i - 2) * 8))
-    var s0 i64 = (Rotr(w15, 7) ^ Rotr(w15, 18)) ^ Shr(w15, 3)
-    var s1 i64 = (Rotr(w2, 17) ^ Rotr(w2, 19)) ^ Shr(w2, 10)
-    var acc i64 = Add(load64(w + ((i - 16) * 8)), s0)
-    acc = Add(acc, load64(w + ((i - 7) * 8)))
-    acc = Add(acc, s1)
-    store64(w + (i * 8), acc)
+    var x i64 = load64(w + ((i - 15) * 8))
+    var y i64 = load64(w + ((i - 2) * 8))
+    var s0 i64 = (((x >> 7) | (x << 25)) ^ ((x >> 18) | (x << 14))) ^ (x >> 3)
+    var s1 i64 = (((y >> 17) | (y << 15)) ^ ((y >> 19) | (y << 13))) ^ (y >> 10)
+    store64(w + (i * 8), (((load64(w + ((i - 16) * 8)) + s0) + load64(w + ((i - 7) * 8))) + s1) & 0xFFFFFFFF)
     i = i + 1
   }
   var a i64 = load64(h + 0)
@@ -93,23 +85,19 @@ func Block(h i64, chunk i64, w i64) i64 {
   var hh i64 = load64(h + 56)
   i = 0
   while i < 64 {
-    var sig1 i64 = (Rotr(e, 6) ^ Rotr(e, 11)) ^ Rotr(e, 25)
-    var ch i64 = ((e & f) ^ (Not32(e) & g)) & 0xFFFFFFFF
-    var t1 i64 = Add(hh, sig1)
-    t1 = Add(t1, ch)
-    t1 = Add(t1, KWord(i))
-    t1 = Add(t1, load64(w + (i * 8)))
-    var sig0 i64 = (Rotr(a, 2) ^ Rotr(a, 13)) ^ Rotr(a, 22)
-    var maj i64 = (((a & b) ^ (a & c)) ^ (b & c)) & 0xFFFFFFFF
-    var t2 i64 = Add(sig0, maj)
+    var sig1 i64 = (((e >> 6) | (e << 26)) ^ ((e >> 11) | (e << 21))) ^ ((e >> 25) | (e << 7))
+    var ch i64 = (e & f) ^ ((e ^ 0xFFFFFFFF) & g)
+    var t1 i64 = (((hh + sig1) + ch) + load64(k + (i * 8))) + load64(w + (i * 8))
+    var sig0 i64 = (((a >> 2) | (a << 30)) ^ ((a >> 13) | (a << 19))) ^ ((a >> 22) | (a << 10))
+    var maj i64 = ((a & b) ^ (a & c)) ^ (b & c)
     hh = g
     g = f
     f = e
-    e = Add(d, t1)
+    e = (d + t1) & 0xFFFFFFFF
     d = c
     c = b
     b = a
-    a = Add(t1, t2)
+    a = (t1 + (sig0 + maj)) & 0xFFFFFFFF
     i = i + 1
   }
   store64(h + 0, Add(load64(h + 0), a))
@@ -139,10 +127,11 @@ func Sum(io *ovid/io.Cap, data i64, n i64, out i64) i64 {
   var h i64 = ovid/io.Alloc(io, 64)
   var w i64 = ovid/io.Alloc(io, 512)
   var pad i64 = ovid/io.Alloc(io, 128)
+  var k i64 = KTable(io)
   Init(h)
   var off i64 = 0
   while (off + 64) <= n {
-    Block(h, data + off, w)
+    Block(h, data + off, w, k)
     off = off + 64
   }
   var tlen i64 = n - off
@@ -154,7 +143,7 @@ func Sum(io *ovid/io.Cap, data i64, n i64, out i64) i64 {
       store8(pad + tlen, 0)
       tlen = tlen + 1
     }
-    Block(h, pad, w)
+    Block(h, pad, w, k)
     tlen = 0
   }
   while tlen < 56 {
@@ -168,7 +157,7 @@ func Sum(io *ovid/io.Cap, data i64, n i64, out i64) i64 {
     bits = bits >> 8
     bi = bi - 1
   }
-  Block(h, pad, w)
+  Block(h, pad, w, k)
   var i i64 = 0
   while i < 8 {
     StoreBE(out + (i * 4), load64(h + (i * 8)))
