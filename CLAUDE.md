@@ -58,7 +58,7 @@ The Go pipeline, one package per stage under `internal/`:
 
 ### Ids, hashes, and edits
 
-Decl ids (`fn:pkg.Name`, `ty:`, `cn:`, `fld:`, `pa:`, `pkg:`, `im:`) are names and stable. `st:`/`ex:` ids are positions numbered per function in parse order, so any insert or delete above renumbers them; edits to them must carry an `expect` hash. An edit is all-or-nothing: under the module lock it is planned, the module is reparsed and checked in memory (`module.LoadOverlay`), and it is refused if it adds check errors (the guard compares the errors themselves, not their count) or if a hash/revision is stale (exit 2).
+Decl ids (`fn:pkg.Name`, `ty:`, `cn:`, `fld:`, `pa:`, `pkg:`, `im:`) are names and stable. `st:`/`ex:` ids are positions numbered per function in parse order, so any insert or delete above renumbers them, and their hashes are bound to the enclosing decl's whole text. Every edit op must carry a guard (`expect`, the request `revision`/`--rev`, or `--force`), decl ids included; only `append` into a package path goes without. Request keys are decoded strictly (unknown or repeated keys are `bad_edit`). An edit is all-or-nothing: under the module lock it is planned, the module is reparsed and checked in memory (`module.LoadOverlay`), and it is refused if it adds check errors (the guard compares the errors themselves, not their count) or if a hash/revision is stale (exit 2).
 
 ## Tests
 

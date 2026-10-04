@@ -614,6 +614,76 @@ func TestGuardsPerDecl(t *testing.T) {
 	}
 }
 
+// TestEveryEditNeedsAGuard: an op on a decl id needs expect, a revision, or
+// force, like one on a st: id; only an append of new decls to a package,
+// which overwrites nothing, goes without (#22).
+func TestEveryEditNeedsAGuard(t *testing.T) {
+	dir := mkmod(t, demo(twinSrc))
+	src := mainOv(t, dir)
+	h := hashOf(t, dir, "fn:demo.H")
+	body := "func H() i64 {\n  return 8\n}"
+	for _, op := range []EditOp{
+		{Op: "replace", ID: "fn:demo.H", Text: body},
+		{Op: "replace", ID: "H", Text: body},
+		{Op: "delete", ID: "fn:demo.H"},
+		{Op: "insert", After: "fn:demo.H", Text: "func K() i64 {\n  return 1\n}"},
+		{Op: "append", Into: "fn:demo.H", Text: "return 9"},
+	} {
+		if code, r := edit1(t, dir, op); code != ExitFail || r["error"] != "expect_required" || r["op"] != 0.0 {
+			t.Errorf("%v unguarded: %d %v", op, code, r)
+		}
+	}
+	// The same through a JSON batch.
+	if r, code := editJSON(t, dir, []any{map[string]any{"op": "replace", "id": "fn:demo.H", "text": body}}); code != ExitFail || r["error"] != "expect_required" {
+		t.Errorf("batch unguarded: %d %v", code, r)
+	}
+	// An expect on a package append would guard nothing.
+	if code, r := edit1(t, dir, EditOp{Op: "append", Into: "demo", Expect: h, Text: "func K() i64 {\n  return 1\n}"}); code != ExitFail || r["error"] != "bad_edit" {
+		t.Errorf("append with expect: %d %v", code, r)
+	}
+	if got := mainOv(t, dir); got != src {
+		t.Fatalf("a refused edit wrote:\n%s", got)
+	}
+
+	// Two agents read H; the first replace goes through, the second is stale.
+	a := EditOp{Op: "replace", ID: "fn:demo.H", Expect: h, Text: body}
+	if code, r := edit1(t, dir, a); code != 0 {
+		t.Fatalf("first: %d %v", code, r)
+	}
+	b := a
+	b.Text = "func H() i64 {\n  return 9\n}"
+	refused(t, dir, b)
+
+	// A revision guards the whole request; a stale one refuses it.
+	rev := last(t, func() string { var o bytes.Buffer; Check(dir, false, &o); return o.String() }())["revision"].(string)
+	var out bytes.Buffer
+	if code := runEdit(dir, &EditReq{Ops: []EditOp{{Op: "delete", ID: "fn:demo.H"}}}, EditOpts{Revision: "0123456789abcdef"}, &out); code != ExitStale {
+		t.Fatalf("stale revision: %d %s", code, out.String())
+	}
+	out.Reset()
+	if code := runEdit(dir, &EditReq{Ops: []EditOp{{Op: "replace", ID: "fn:demo.H", Text: body}}}, EditOpts{Revision: rev}, &out); code != 0 {
+		t.Fatalf("revision: %d %s", code, out.String())
+	}
+	// --force is the explicit opt-out.
+	out.Reset()
+	if code := runEdit(dir, &EditReq{Ops: []EditOp{{Op: "replace", ID: "fn:demo.H", Text: "func H() i64 {\n  return 10\n}"}}}, EditOpts{Force: true}, &out); code != 0 {
+		t.Fatalf("force: %d %s", code, out.String())
+	}
+
+	// A package append needs no guard, and replaying it is refused.
+	k := EditOp{Op: "append", Into: "demo", Text: "func K() i64 {\n  return 1\n}"}
+	if code, r := edit1(t, dir, k); code != 0 {
+		t.Fatalf("append: %d %v", code, r)
+	}
+	src = mainOv(t, dir)
+	if code, r := edit1(t, dir, k); code != ExitFail || r["error"] != "check" {
+		t.Fatalf("replayed append: %d %v", code, r)
+	}
+	if got := mainOv(t, dir); got != src {
+		t.Fatalf("a replayed append wrote:\n%s", got)
+	}
+}
+
 func contains(xs []string, s string) bool {
 	for _, x := range xs {
 		if x == s {
@@ -725,7 +795,7 @@ func TestEditInsertAppend(t *testing.T) {
 		t.Fatalf("exit %d", code)
 	}
 	// A syntax error rejects the batch and writes nothing.
-	r, code = editJSON(t, dir, []any{map[string]any{"op": "append", "into": "fn:demo.main", "text": "x = (1"}})
+	r, code = editJSON(t, dir, []any{map[string]any{"op": "append", "into": "fn:demo.main", "expect": hashOf(t, dir, "fn:demo.main"), "text": "x = (1"}})
 	if code == 0 || r["error"] != "syntax" {
 		t.Fatalf("syntax %d %v", code, r)
 	}

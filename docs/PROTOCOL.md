@@ -67,7 +67,7 @@ below. Codes:
 | `syntax` | the module does not parse; refs, rename, and move need a parsed module | edit: `op`, `file`, `line`, `col` of the op whose text broke it |
 | `check` | an edit would add check errors (or leave any, with `--require-clean`); nothing was written | `errors`, `errors_before`; the new diagnostics precede it |
 | `stale` | exit 2. An `expect` hash no longer matches, or the module `revision` moved, or a file changed on disk while the edit ran | `id`, `hash`, `text` (the current source), `decl`, `decl_hash`; `revision` for a revision guard |
-| `expect_required` | an edit names a `st:`/`ex:` id without `expect` (pass `--force` to skip) | `op` |
+| `expect_required` | an edit op has no guard: no `expect`, no request `revision` (`--rev`), no `--force`. Every op needs one, decl ids included; only `append` into a package path does not | `op` |
 | `not_found` | an id or name resolves to nothing | |
 | `ambiguous` | a name resolves to several decls | the hint lists the full ids |
 | `bad_edit` | a malformed op, or a request or op with a key it does not have (misspelled, or in another case) or with the same key twice; nothing was written | `op`, when one op is at fault |
@@ -109,7 +109,7 @@ does not match its directory, or a file sits in the module root). From the check
 `ovid help ids` gives the id forms. Decl ids (`fn:`, `ty:`, `cn:`, `fld:`,
 `pa:`, `pkg:`, `im:`) are names and survive edits elsewhere. `st:` and `ex:`
 ids are positions, counted per function, and are renumbered by any insert or
-delete above them; an edit to one must carry `expect`. `show` of a
+delete above them. `show` of a
 statement lists the `ex:` ids inside it with their hashes (`--exprs` does it
 for a whole decl), so one expression can be replaced on its own.
 
@@ -128,6 +128,27 @@ hash or its decl's; the two are equally strict. `revision`
 the module, and the files of the shipped packages the module imports, so a
 new toolchain with a changed standard library moves it too. Both are the
 leading digits of a sha256; the tools keep the whole digest internally.
+
+## Guards
+
+Every edit op (`edit`, `replace`, `insert`, `append`, `delete`) must carry
+a guard, decl ids included:
+
+- `expect`: the hash of the node the op names (its id, insert's `before`/
+  `after`, append's `into`), from `outline`, `show`, or a receipt; for a
+  `st:`/`ex:` node its decl's hash works too;
+- or the request's `revision` (`--rev` on the command line), which
+  covers the whole module;
+- or `--force`, which skips every guard.
+
+Without one the op fails with `expect_required` and nothing is written; a
+guard that no longer matches fails with `stale` (exit 2). The exception is
+`append` into a package path: it names no node and overwrites no code, and
+replaying it is refused by the checker as a `duplicate_name`, so it needs no
+guard; an `expect` on it is `bad_edit`. `rename` and `move` take no guard
+for the same reason: they carry no code, are planned from the module as it
+is under the lock, and a replay is refused (the old name is gone, or the decl
+is already in that package).
 
 ## Receipts
 

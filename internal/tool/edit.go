@@ -190,9 +190,11 @@ func unknownKey(keys, allowed []string) string {
 // EditOpts are edit's flags. By default an edit that adds check errors is
 // refused; RequireClean also refuses one that leaves any, and AllowBroken
 // writes it anyway (a step in a multi-edit change). Show adds each changed
-// decl's new source to the result.
+// decl's new source to the result. Revision (--rev) is the request's
+// revision guard given on the command line. Force skips every guard.
 type EditOpts struct {
 	DryRun, RequireClean, AllowBroken, Show, Force bool
+	Revision                                       string
 }
 
 // Edit applies a batch of ops atomically: all of them or none.
@@ -249,6 +251,12 @@ func runEdit(dir string, req *EditReq, o EditOpts, w io.Writer) int {
 	if err != nil {
 		return fail(w, "load", err.Error(), "")
 	}
+	if o.Revision != "" {
+		if req.Revision != "" && req.Revision != o.Revision {
+			return fail(w, "bad_edit", "--rev "+o.Revision+" and the request's revision "+req.Revision+" disagree; nothing was written", "give the revision once")
+		}
+		req.Revision = o.Revision
+	}
 	if req.Revision != "" && req.Revision != m.Revision() {
 		emit(w, map[string]any{"ok": false, "error": "stale", "message": "module revision changed", "revision": m.Revision(),
 			"hint": "drop revision and use per-op expect hashes so unrelated edits do not conflict"})
@@ -256,7 +264,7 @@ func runEdit(dir string, req *EditReq, o EditOpts, w io.Writer) int {
 	}
 	var sps []*splice
 	for i, op := range req.Ops {
-		s, e := planOp(m, i, op, o.Force)
+		s, e := planOp(m, i, op, o.Force, req.Revision != "")
 		if e != nil {
 			r := map[string]any{"ok": false, "error": e.code, "message": e.msg, "op": i}
 			if e.hint != "" {
@@ -445,15 +453,23 @@ func declOfID(id string) string {
 	return rest
 }
 
-// checkExpect guards an op on l with the hash the caller read.
-func checkExpect(m *module.Module, l *module.Loc, expect string, force bool) *editErr {
+// checkExpect guards an op on l with the hash the caller read. Every op
+// needs a guard: its own expect, the request's revision (rev, already
+// checked by the caller), or force. A decl id is a name, but two agents
+// replacing the same func would otherwise both get ok, the second
+// silently undoing the first.
+func checkExpect(m *module.Module, l *module.Loc, expect string, force, rev bool) *editErr {
 	positional := l.Kind == "stmt" || l.Kind == "expr"
-	if force || (expect == "" && !positional) {
+	if force || (expect == "" && rev) {
 		return nil
 	}
 	if expect == "" {
-		return &editErr{code: "expect_required", msg: l.ID + " is a position, so an edit to it needs --expect: the hash of " + l.Decl + " (in the header `ovid show` printed) or of the node",
-			hint: "ids after an insert are renumbered; the hash proves the id still means what you read. --force skips the check"}
+		if positional {
+			return &editErr{code: "expect_required", msg: l.ID + " is a position, so an edit to it needs --expect: the hash of " + l.Decl + " (in the header `ovid show` printed) or of the node",
+				hint: "ids after an insert are renumbered; the hash proves the id still means what you read. --rev REV guards with the whole module instead; --force skips the check"}
+		}
+		return &editErr{code: "expect_required", msg: "an edit to " + l.ID + " needs a guard: --expect with its hash, from `ovid outline`, `ovid show`, or the last edit's receipt",
+			hint: "without one, a second agent's edit would silently replace the first. --rev REV guards with the whole module instead; --force skips the check"}
 	}
 	if expect == m.Hash(l.ID) || (positional && expect == m.Hash(l.Decl)) {
 		return nil
@@ -544,7 +560,7 @@ func newIDs(m *module.Module, sps []*splice, nops int, show bool) []map[string]a
 	return out
 }
 
-func planOp(m *module.Module, i int, op EditOp, force bool) ([]*splice, *editErr) {
+func planOp(m *module.Module, i int, op EditOp, force, rev bool) ([]*splice, *editErr) {
 	target := op.ID
 	switch op.Op {
 	case "insert":
@@ -567,7 +583,7 @@ func planOp(m *module.Module, i int, op EditOp, force bool) ([]*splice, *editErr
 	}
 	if op.Op == "append" {
 		if p := findPkg(m, target); p != nil {
-			return appendDecl(m, i, p, op)
+			return appendDecl(m, i, p, op, force)
 		}
 	}
 	l := m.Index[target]
@@ -585,7 +601,7 @@ func planOp(m *module.Module, i int, op EditOp, force bool) ([]*splice, *editErr
 	if m.IsStd(l.Span.File) {
 		return nil, &editErr{code: "std", msg: target + " is in a shipped package", hint: "copy the package into the module to change it"}
 	}
-	if e := checkExpect(m, l, op.Expect, force); e != nil {
+	if e := checkExpect(m, l, op.Expect, force, rev); e != nil {
 		return nil, e
 	}
 	f := m.Files[l.Span.File]
@@ -665,9 +681,18 @@ func findPkg(m *module.Module, q string) *ir.Package {
 	return nil
 }
 
-func appendDecl(m *module.Module, i int, p *ir.Package, op EditOp) ([]*splice, *editErr) {
+func appendDecl(m *module.Module, i int, p *ir.Package, op EditOp, force bool) ([]*splice, *editErr) {
 	if m.Std[p.Path] {
 		return nil, &editErr{code: "std", msg: p.Path + " is a shipped package", hint: "copy it into the module to change it"}
+	}
+	// The one op that needs no guard: it names no existing node and
+	// overwrites no code, and replaying it, or racing another writer that
+	// added the same name, is refused by the checker (duplicate_name). A
+	// package path has no hash, so an expect here would be ignored; refuse
+	// it rather than let the caller think it guarded anything.
+	if op.Expect != "" && !force {
+		return nil, &editErr{code: "bad_edit", msg: "append into package " + p.Path + " names no node, so it takes no expect",
+			hint: "drop expect; to guard against any change to the module, give the request a revision (--rev REV)"}
 	}
 	text := strings.TrimRight(reindent(op.Text, "", true), "\n")
 	if op.File != "" {
