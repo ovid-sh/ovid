@@ -89,9 +89,8 @@ written `util.F()`.
 
 ## Self-hosting
 
-`prog/` is the compiler again, written in Ovid (about 7,200 lines across eight
-packages, including a JSON parser, SHA-256, an x86-64 assembler, and an ELF
-writer). It reads `ovid.mod` and `.ov` files itself and offers only
+`prog/` is the compiler again, written in Ovid (about 6,200 lines across seven
+packages, including SHA-256, an x86-64 assembler, and an ELF writer). It reads `ovid.mod` and `.ov` files itself and offers only
 `check`, `build`, and `dump`; give it the standard library with
 `--std <dir>`, since only the Go binary embeds it. The agent commands
 (`show`, `refs`, `grep`, `edit`, `rename`, `move`, `test`) exist only in the
