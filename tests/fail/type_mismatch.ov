@@ -1,0 +1,11 @@
+package demo
+
+import ovid/io
+
+func Add(a i64, b i64) i64 {
+  return a + b
+}
+
+func main(io *ovid/io.Cap) i64 {
+  return Add(1, true) // error: type_mismatch 17
+}

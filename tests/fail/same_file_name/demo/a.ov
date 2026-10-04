@@ -1,0 +1,8 @@
+// Two files of this case end in demo/a.ov. The diagnostic belongs to the
+// other one and must not be matched against this one.
+package demo
+import ovid/io
+import util/demo
+func main(io *ovid/io.Cap) i64 {
+  return util/demo.One()
+}

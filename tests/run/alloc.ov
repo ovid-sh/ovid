@@ -1,0 +1,9 @@
+// exit: 42
+package demo
+import ovid/io
+func main(io *ovid/io.Cap) i64 {
+  var p i64 = ovid/io.Alloc(io, 8)
+  store64(p, 40)
+  store64(p, load64(p) + 2)
+  return load64(p)
+}

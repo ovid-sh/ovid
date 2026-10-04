@@ -1,0 +1,14 @@
+// exit: 48
+package demo
+import ovid/io
+import ovid/mem
+type Tri struct {
+  a i64
+  b i64
+  next *Tri
+}
+func main(io *ovid/io.Cap) i64 {
+  var t *Tri = ovid/io.Alloc(io, sizeof(Tri)) as *Tri
+  t.next = t
+  return sizeof(Tri) + sizeof(ovid/mem.Buf)
+}

@@ -1,0 +1,15 @@
+// exit: 60
+package demo
+import ovid/io
+func F(x i64) i64 {
+  if x == 1 {
+    return 10
+  } else if x == 2 {
+    return 20
+  } else {
+    return 30
+  }
+}
+func main(io *ovid/io.Cap) i64 {
+  return F(1) + F(2) + F(3)
+}

@@ -1,0 +1,6 @@
+// exit: 10
+package demo
+import ovid/io
+func main(io *ovid/io.Cap) i64 {
+  return (1 + 2) * 3 + 1
+}

@@ -1,0 +1,5 @@
+package util
+const Zero i64 = 0
+func Three() i64 {
+  return 3
+}

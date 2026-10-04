@@ -1,0 +1,16 @@
+// && and || do not evaluate the right side when the left decides.
+// exit: 7
+package demo
+import ovid/io
+func Boom() i64 {
+  return 1 / 0
+}
+func main(io *ovid/io.Cap) i64 {
+  if false && Boom() == 1 {
+    return 1
+  }
+  if true || Boom() == 1 {
+    return 7
+  }
+  return 0
+}
