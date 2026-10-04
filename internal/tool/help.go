@@ -243,7 +243,9 @@ ovid move <id|name>... <pkg> [--file pkg/x.ov] [--dry-run]
   Moves funcs, types, or consts (with doc comments) to pkg, creating it if
   needed; requalifies every use and adds the imports files now need.
   Refuses changes that add check errors. Several names move in order, all or
-  none: on a failure every file is put back.
+  none: each move is planned in memory over the ones before it, and only
+  when all pass are the files written, together; --dry-run writes nothing.
+  One receipt per name, then {"ok":true,"moved":[...],"to","written"}.
 ovid init <dir> [--name N]   writes ovid.mod, <N>/main.ov, <N>/main_test.ov
 ovid dump [--pkg P] [-o file]
   the program as one JSON document, not paged and large (megabytes for a

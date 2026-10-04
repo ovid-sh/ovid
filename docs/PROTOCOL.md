@@ -139,8 +139,8 @@ below. Codes:
 | `conflict` | a rename or move would collide with an existing name | |
 | `bad_move` | a move to the same package, of `main`, or into a file outside the package dir | |
 | `unsupported` | the command does not work on this kind of node | |
-| `rolled_back` | one move of several failed and every file was put back | `moved_before_failure` |
-| `restore` | putting files back after a failed move failed; the module may be half-moved | |
+| `rolled_back` | one move of several failed; nothing was written | `moved_before_failure` |
+| `restore` | no longer produced: a move of several decls is planned in memory and written once | |
 | `bad_pattern` | grep's regexp does not compile | |
 | `compile`, `run`, `dump` | the backend, the launch (the program could not be placed or started; see above), or the dump failed | |
 | `init`, `exists` | init could not write, or `ovid.mod` already exists | |
@@ -288,7 +288,12 @@ afterwards (nonzero only with `--allow-broken`). Edit adds
 `"ops":[{"ids":[ID...],"decls":[{"id":ID,"hash":H}]}]`, one per op: the ids
 it wrote and the new hashes of the decls it touched, so a follow-up edit can
 `expect` them without reading again. Rename adds `from`, `id`, `to`, `refs`,
-`edits`; move adds `from`, `to` (the new id), `file`, `refs`, `edits`.
+`edits`; move adds `from`, `to` (the new id), `file`, `refs`, `edits`. A
+move of several decls prints one such receipt per decl, in order, then
+`{"ok":true,"moved":[NAME...],"to":PKG,"written":BOOL}`. Each move is
+planned in memory over the ones before it, and only when every one has
+passed are the files written, together, as one edit's are; `--dry-run`
+touches no file.
 `refs` counts the uses the checker resolved to the declaration, the same
 ones `ovid refs` lists; rename rewrites exactly their name tokens and the
 declaration's own, so a field, local, or declaration of the same spelling

@@ -298,6 +298,87 @@ func runEdit(dir string, req *EditReq, o EditOpts, w io.Writer) int {
 
 // applySplices applies text splices, reparses, checks, and writes.
 func applySplices(w io.Writer, dir string, m *module.Module, sps []*splice, ops []EditOp, dryRun bool, guard int, show bool, extra map[string]any) int {
+	p, code := planSplices(w, dir, m, nil, sps, ops, guard, show, extra)
+	if p == nil {
+		return code
+	}
+	if !dryRun {
+		if code := commitFiles(w, p.m, p.loaded, p.overlay); code != ExitOK {
+			return code
+		}
+	}
+	return p.emit(w, dryRun)
+}
+
+// planned is an edit applied in memory and checked, not yet written.
+type planned struct {
+	// loaded is the source each file was planned from; overlay is the new
+	// source of the changed files. Both are keyed by absolute path.
+	loaded, overlay map[string][]byte
+	m               *module.Module // the module the plan was made from
+	after           *checked
+	worse           bool
+	res             map[string]any // the receipt, less "written"
+}
+
+// emit writes the receipt of p, as written or as a dry run.
+func (p *planned) emit(w io.Writer, dryRun bool) int {
+	p.after.writeDiags(w)
+	res := map[string]any{"written": !dryRun}
+	for k, v := range p.res {
+		res[k] = v
+	}
+	// A dry run asks "would this be fine?": not if it adds errors.
+	if dryRun && p.worse {
+		res["ok"] = false
+		res["error"] = "check"
+		res["message"] = "the change would add check errors"
+		emit(w, res)
+		return ExitFail
+	}
+	emit(w, res)
+	return ExitOK
+}
+
+// commitFiles writes files (new source by absolute path) in one
+// module.WriteFiles, once it is sure that none of them changed on disk
+// since loaded (the source the plan was made from) was read. A file loaded
+// does not have is one the plan creates, so it must not exist yet. It
+// returns ExitOK, or writes why not and returns the exit code.
+func commitFiles(w io.Writer, m *module.Module, loaded, files map[string][]byte) int {
+	// Ovid writers are serialized by the module lock; this catches an
+	// editor or script that changed a file while the edit was planned.
+	var paths []string
+	for abs := range files {
+		paths = append(paths, abs)
+	}
+	sort.Strings(paths)
+	for _, abs := range paths {
+		now, err := os.ReadFile(abs)
+		was, known := loaded[abs]
+		if err == nil && string(now) != string(was) || err != nil && known {
+			emit(w, map[string]any{"ok": false, "error": "stale", "message": rel(m, abs) + " changed on disk while the edit ran; nothing was written",
+				"hint": "run the edit again; ids and hashes are read fresh each time"})
+			return ExitStale
+		}
+	}
+	if done, err := module.WriteFiles(files, 0); err != nil {
+		var files []string
+		for _, abs := range done {
+			files = append(files, rel(m, abs))
+		}
+		emit(w, map[string]any{"ok": false, "error": "write", "message": err.Error(), "written_files": files,
+			"hint": "files in written_files have the new text and the rest the old; check git status"})
+		return ExitFail
+	}
+	return ExitOK
+}
+
+// planSplices applies splices to m's sources in memory, reparses, and
+// checks the result. base holds the files earlier steps changed in memory
+// (m was loaded over it); the new module is loaded over base and this
+// step's changes. On failure it writes why and returns a nil plan.
+func planSplices(w io.Writer, dir string, m *module.Module, base map[string][]byte, sps []*splice, ops []EditOp, guard int, show bool, extra map[string]any) (*planned, int) {
 	loaded := map[string][]byte{}
 	for _, f := range m.Files {
 		if f.Abs != "" {
@@ -314,14 +395,14 @@ func applySplices(w io.Writer, dir string, m *module.Module, sps []*splice, ops 
 		sort.SliceStable(list, func(i, j int) bool { return list[i].off < list[j].off })
 		for i := 1; i < len(list); i++ {
 			if list[i].off < list[i-1].end {
-				return fail(w, "overlap", fmt.Sprintf("ops %d and %d touch overlapping source", list[i-1].op, list[i].op),
+				return nil, fail(w, "overlap", fmt.Sprintf("ops %d and %d touch overlapping source", list[i-1].op, list[i].op),
 					"split them into separate edits, or replace the enclosing node once")
 			}
 		}
 		// Splice the bytes the plan was made from, not a fresh read.
 		old, known := loaded[abs]
 		if !list[0].isNew && !known {
-			return fail(w, "read", abs+" is not a file of this module", "")
+			return nil, fail(w, "read", abs+" is not a file of this module", "")
 		}
 		var out []byte
 		prev := 0
@@ -350,13 +431,20 @@ func applySplices(w io.Writer, dir string, m *module.Module, sps []*splice, ops 
 			}
 			emit(w, map[string]any{"ok": false, "error": "syntax", "message": perr.Msg, "op": op, "file": rel(m, abs),
 				"line": pos.Line, "col": pos.Col, "source": f.Line(pos.Line), "hint": "nothing was written"})
-			return ExitFail
+			return nil, ExitFail
 		}
 	}
 	before := runCheck(m)
-	nm, err := module.LoadOverlay(dir, overlay)
+	full := map[string][]byte{}
+	for k, v := range base {
+		full[k] = v
+	}
+	for k, v := range overlay {
+		full[k] = v
+	}
+	nm, err := module.LoadOverlay(dir, full)
 	if err != nil {
-		return fail(w, "load", err.Error(), "")
+		return nil, fail(w, "load", err.Error(), "")
 	}
 	after := runCheck(nm)
 	added := newDiags(before.diags, after.diags)
@@ -371,34 +459,13 @@ func applySplices(w io.Writer, dir string, m *module.Module, sps []*splice, ops 
 		emit(w, map[string]any{"ok": false, "error": "check", "message": "the change leaves check errors; nothing was written",
 			"errors": len(after.diags), "errors_before": len(before.diags),
 			"hint": "fix the text, or pass --allow-broken to write it anyway"})
-		return ExitFail
+		return nil, ExitFail
 	}
-	if !dryRun {
-		// Ovid writers are serialized by the module lock; this catches an
-		// editor or script that changed a file while the edit was planned.
-		for _, abs := range changed {
-			if now, err := os.ReadFile(abs); err == nil && string(now) != string(loaded[abs]) {
-				emit(w, map[string]any{"ok": false, "error": "stale", "message": rel(m, abs) + " changed on disk while the edit ran; nothing was written",
-					"hint": "run the edit again; ids and hashes are read fresh each time"})
-				return ExitStale
-			}
-		}
-		if done, err := module.WriteFiles(overlay, 0); err != nil {
-			var files []string
-			for _, abs := range done {
-				files = append(files, rel(m, abs))
-			}
-			emit(w, map[string]any{"ok": false, "error": "write", "message": err.Error(), "written_files": files,
-				"hint": "files in written_files have the new text and the rest the old; check git status"})
-			return ExitFail
-		}
-	}
-	after.writeDiags(w)
 	var files []string
 	for _, abs := range changed {
 		files = append(files, rel(m, abs))
 	}
-	res := map[string]any{"ok": true, "written": !dryRun, "files": files, "check_ok": len(after.diags) == 0,
+	res := map[string]any{"ok": true, "files": files, "check_ok": len(after.diags) == 0,
 		"errors": len(after.diags), "errors_before": len(before.diags), "revision": nm.Revision()}
 	if ops != nil {
 		res["ops"] = newIDs(nm, sps, len(ops), show)
@@ -406,16 +473,7 @@ func applySplices(w io.Writer, dir string, m *module.Module, sps []*splice, ops 
 	for k, v := range extra {
 		res[k] = v
 	}
-	// A dry run asks "would this be fine?": not if it adds errors.
-	if dryRun && worse {
-		res["ok"] = false
-		res["error"] = "check"
-		res["message"] = "the change would add check errors"
-		emit(w, res)
-		return ExitFail
-	}
-	emit(w, res)
-	return ExitOK
+	return &planned{m: m, loaded: loaded, overlay: overlay, after: after, worse: worse, res: res}, ExitOK
 }
 
 // newDiags returns the diagnostics in after that before does not have,
