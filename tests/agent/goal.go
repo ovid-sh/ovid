@@ -4,6 +4,7 @@ package agent
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -39,10 +40,17 @@ type Goal struct {
 	// StartPasses marks a task whose start already meets the goal: the
 	// task is to leave it so (a replayed request, for one).
 	StartPasses bool `json:"start_passes"`
-	// Xfail names the issue that makes the reference solution fail today.
-	// The deterministic test then requires the failure, so that a fix is
-	// noticed and the mark removed.
-	Xfail string `json:"xfail"`
+	// Xfail marks a task whose reference solution fails today because of
+	// a known bug. The deterministic test then requires exactly that
+	// failure, so that a fix is noticed and the mark removed, and any other
+	// failure is still one.
+	Xfail *Xfail `json:"xfail"`
+}
+
+// Xfail is the bug and the problems Grade reports because of it.
+type Xfail struct {
+	Issue    string   `json:"issue"`
+	Problems []string `json:"problems"`
 }
 
 // Run is one execution of the built program, in a fresh directory that
@@ -52,7 +60,9 @@ type Run struct {
 	Stdin  string            `json:"stdin"`
 	Files  map[string]string `json:"files"`
 	Stdout string            `json:"stdout"`
-	Exit   int               `json:"exit"`
+	// Stderr, when set, is a regexp standard error must match.
+	Stderr string `json:"stderr"`
+	Exit   int    `json:"exit"`
 }
 
 // Match is a regexp over the module's .ov files (or one, by module-relative
@@ -79,9 +89,12 @@ func Load(dir string) ([]Task, error) {
 			continue
 		}
 		d := filepath.Join(dir, e.Name())
+		if e.Name() == "run" {
+			continue // the harness, not a task
+		}
 		g, err := os.ReadFile(filepath.Join(d, "goal.json"))
 		if err != nil {
-			continue // not a task (the harness, for one)
+			return nil, err
 		}
 		t := Task{Name: e.Name(), Dir: d}
 		dec := json.NewDecoder(bytes.NewReader(g))
@@ -246,35 +259,82 @@ func run(exe, dir string, r Run) string {
 	cmd := exec.Command(exe, r.Args...)
 	cmd.Dir = dir
 	cmd.Stdin = strings.NewReader(r.Stdin)
-	var out bytes.Buffer
-	cmd.Stdout = &out
+	out, errb := &capped{}, &capped{}
+	cmd.Stdout, cmd.Stderr = out, errb
 	done := make(chan error, 1)
 	if err := cmd.Start(); err != nil {
 		return err.Error()
 	}
 	go func() { done <- cmd.Wait() }()
+	var msgs []string
 	select {
 	case <-done:
-	case <-time.After(10 * time.Second):
+		if code := cmd.ProcessState.ExitCode(); code != r.Exit {
+			msgs = append(msgs, fmt.Sprintf("exit %d, want %d", code, r.Exit))
+		}
+	case <-time.After(runTimeout):
 		cmd.Process.Kill()
 		<-done
-		return "timed out after 10s"
+		msgs = append(msgs, fmt.Sprintf("timed out after %v", runTimeout))
 	}
-	var msgs []string
-	if code := cmd.ProcessState.ExitCode(); code != r.Exit {
-		msgs = append(msgs, fmt.Sprintf("exit %d, want %d", code, r.Exit))
-	}
-	if out.String() != r.Stdout {
+	if out.over {
+		msgs = append(msgs, fmt.Sprintf("stdout over %d bytes", outLimit))
+	} else if out.String() != r.Stdout {
 		msgs = append(msgs, fmt.Sprintf("stdout %q, want %q", cut(out.String()), r.Stdout))
+	}
+	if r.Stderr != "" {
+		if re, err := regexp.Compile(r.Stderr); err != nil {
+			msgs = append(msgs, fmt.Sprintf("bad regexp %q: %v", r.Stderr, err))
+		} else if !re.MatchString(errb.String()) {
+			msgs = append(msgs, fmt.Sprintf("stderr %q does not match %q", cut(errb.String()), r.Stderr))
+		}
 	}
 	return strings.Join(msgs, "; ")
 }
 
+// Limits on what an agent's program can make the grader do; vars so the
+// tests can shorten them.
+var (
+	runTimeout  = 10 * time.Second // per execution of the built program
+	ovidTimeout = 2 * time.Minute  // per ovid command; ovid test runs the agent's tests
+	outLimit    = 1 << 20          // bytes of output kept from either
+)
+
+// ovidRun runs an ovid command on root and returns its output and exit
+// code, or -1 with a note if it runs past ovidTimeout.
 func ovidRun(ovid, root string, args ...string) (string, int) {
-	cmd := exec.Command(ovid, append([]string{args[0], "-C", root}, args[1:]...)...)
-	out, _ := cmd.CombinedOutput()
-	return string(out), cmd.ProcessState.ExitCode()
+	ctx, cancel := context.WithTimeout(context.Background(), ovidTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, ovid, append([]string{args[0], "-C", root}, args[1:]...)...)
+	out := &capped{}
+	cmd.Stdout, cmd.Stderr = out, out
+	cmd.Run()
+	if ctx.Err() != nil {
+		return fmt.Sprintf("timed out after %v", ovidTimeout), -1
+	}
+	return out.String(), cmd.ProcessState.ExitCode()
 }
+
+// capped keeps the first outLimit bytes written to it and notes the rest,
+// so a program printing in a loop cannot exhaust memory. The buffer is a
+// field, not embedded: an embedded one's ReadFrom would let io.Copy
+// bypass Write.
+type capped struct {
+	buf  bytes.Buffer
+	over bool
+}
+
+func (c *capped) Write(p []byte) (int, error) {
+	if room := outLimit - c.buf.Len(); len(p) > room {
+		c.over = true
+		c.buf.Write(p[:max(room, 0)])
+	} else {
+		c.buf.Write(p)
+	}
+	return len(p), nil
+}
+
+func (c *capped) String() string { return c.buf.String() }
 
 func clip(s string) string { return cut(strings.TrimSpace(s)) }
 

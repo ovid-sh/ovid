@@ -6,7 +6,7 @@
     {"args": ["noeol"], "files": {"noeol": "  one\ttwo  three"}, "stdout": "0 3 16\n"},
     {"args": ["blank"], "files": {"blank": "\n\n \r\n\t\n"}, "stdout": "4 0 7\n"},
     {"args": ["utf8"], "files": {"utf8": "héllo wörld\n"}, "stdout": "1 2 14\n"},
-    {"args": ["missing"], "stdout": "", "exit": 1},
-    {"stdout": "", "exit": 1}
+    {"args": ["missing"], "stdout": "", "stderr": "\\S", "exit": 1},
+    {"stdout": "", "stderr": "\\S", "exit": 1}
   ]
 }

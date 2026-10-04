@@ -3,5 +3,11 @@
   "start_passes": true,
   "runs": [{"stdout": "1\n"}],
   "contains": [{"re": "^  x = x \\+ 1$", "count": 1}],
-  "xfail": "#22"
+  "xfail": {
+    "issue": "#22",
+    "problems": [
+      "\"^  x = x \\\\+ 1$\" matches 0 times, want 1",
+      "run 0 []: stdout \"0\\n\", want \"1\\n\""
+    ]
+  }
 }

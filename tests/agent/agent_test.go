@@ -4,8 +4,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestTasks checks the exercise itself, without a model: each task's goal
@@ -45,15 +47,18 @@ func TestTasks(t *testing.T) {
 			cmd.Dir = work
 			cmd.Env = append(os.Environ(), "PATH="+filepath.Dir(ovid)+string(os.PathListSeparator)+os.Getenv("PATH"))
 			out, err := cmd.CombinedOutput()
-			if err != nil && task.Goal.Xfail == "" {
+			if err != nil {
 				t.Fatalf("solution.sh: %v\n%s", err, out)
 			}
 			bad = Grade(ovid, work, task.Goal)
+			x := task.Goal.Xfail
 			switch {
-			case task.Goal.Xfail != "" && len(bad) == 0:
-				t.Fatalf("the solution now meets the goal: %s looks fixed; drop xfail from goal.json", task.Goal.Xfail)
-			case task.Goal.Xfail != "":
-				t.Logf("fails as expected (%s): %s", task.Goal.Xfail, strings.Join(bad, "; "))
+			case x != nil && len(bad) == 0:
+				t.Fatalf("the solution now meets the goal: %s looks fixed; drop xfail from goal.json", x.Issue)
+			case x != nil && !slices.Equal(bad, x.Problems):
+				t.Fatalf("fails, but not as %s does:\n%s\nwant:\n%s", x.Issue, strings.Join(bad, "\n"), strings.Join(x.Problems, "\n"))
+			case x != nil:
+				t.Logf("fails as expected (%s): %s", x.Issue, strings.Join(bad, "; "))
 			case len(bad) > 0:
 				t.Fatalf("solution does not meet the goal:\n%s\nsolution output:\n%s", strings.Join(bad, "\n"), out)
 			}
@@ -70,4 +75,53 @@ func buildOvid(t *testing.T) string {
 		t.Fatalf("go build: %v\n%s", err, out)
 	}
 	return bin
+}
+
+// TestGradeBounds checks that a program printing forever and a test that
+// never returns are failures, not a hung or exhausted grader.
+func TestGradeBounds(t *testing.T) {
+	if !CanRun {
+		t.Skip("grading runs programs; they execute only on linux/amd64")
+	}
+	ovid := buildOvid(t)
+	defer func(r, o time.Duration, l int) { runTimeout, ovidTimeout, outLimit = r, o, l }(runTimeout, ovidTimeout, outLimit)
+	runTimeout, ovidTimeout, outLimit = 500*time.Millisecond, 500*time.Millisecond, 1000
+	work := t.TempDir()
+	write := func(f, s string) {
+		p := filepath.Join(work, f)
+		os.MkdirAll(filepath.Dir(p), 0o755)
+		if err := os.WriteFile(p, []byte(s), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("ovid.mod", "module loop\nentry loop\n")
+	write("loop/main.ov", `package loop
+
+import ovid/io
+
+func main(io *ovid/io.Cap) i64 {
+  while true {
+    ovid/io.Print(strptr("y\n"))
+  }
+  return 0
+}
+`)
+	write("loop/main_test.ov", `package loop
+
+import ovid/io
+
+func TestForever(io *ovid/io.Cap) i64 {
+  var n i64 = 0
+  while true {
+    n = n + 1
+  }
+  return 0
+}
+`)
+	bad := strings.Join(Grade(ovid, work, Goal{Runs: []Run{{Stdout: "y\n"}}, Tests: []string{"TestForever"}}), "\n")
+	for _, want := range []string{"ovid test exits -1: timed out", "stdout over"} {
+		if !strings.Contains(bad, want) {
+			t.Errorf("want %q in:\n%s", want, bad)
+		}
+	}
 }

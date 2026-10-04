@@ -8,5 +8,11 @@
     {"re": "t\\.Node\\b", "count": 3}
   ],
   "lacks": [{"re": "\\*Node\\b"}, {"re": "sizeof\\(Node\\)"}],
-  "xfail": "#21"
+  "xfail": {
+    "issue": "#21",
+    "problems": [
+      "\"t\\\\.Node\\\\b\" matches 2 times, want 3",
+      "run 0 []: stdout \"9\\n\", want \"7\\n\""
+    ]
+  }
 }

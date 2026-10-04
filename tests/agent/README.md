@@ -24,21 +24,25 @@ NN-name/
 | `check` | `ovid check` reports no errors |
 | `tests` | `ovid test` passes and these tests ran and passed |
 | `inject` | test files the grader adds to a copy of the module before `ovid test`, so behaviour is checked independently of the agent's own tests |
-| `runs` | the built program run with `args`, `stdin`, and `files` in its working directory, compared on `stdout` and `exit` |
+| `runs` | the built program run with `args`, `stdin`, and `files` in its working directory, compared on `stdout` and `exit`; `stderr`, when set, is a regexp standard error must match |
 | `contains`, `lacks` | regexps over the module's `.ov` files (`file` narrows to one, `count` wants an exact number) |
 | `start_passes` | the start already meets the goal and the task is to leave it so |
-| `xfail` | the issue that makes the reference solution fail today |
+| `xfail` | `issue`, the bug that makes the reference solution fail today, and `problems`, exactly what the grader reports because of it |
 
 The grader works on a copy of the module and never trusts what the agent
 says it did: `ok:true` from a rename is not a passed rename unless the
-program still does what it did.
+program still does what it did. It bounds what the agent's code can make
+it do: each ovid command gets two minutes (`ovid test` runs the agent's
+tests), each run of the program ten seconds, and each keeps at most 1 MiB
+of output.
 
 ## Without a model
 
 `go test ./tests/agent` runs in CI. For each task, the goal must fail on
-`start/` (unless `start_passes`) and pass after `solution.sh`. A task
-marked `xfail` must still fail; when its bug is fixed the test says so, and
-the mark is removed. That checks both the graders and the commands the
+`start/` (unless `start_passes`) and pass after `solution.sh`, which must
+exit 0. A task marked `xfail` must still fail, with exactly its listed
+problems, so that a different failure is not mistaken for the known one;
+when its bug is fixed the test says so, and the mark is removed. That checks both the graders and the commands the
 solutions use (rename, a stale edit, a replayed edit, concurrent writers).
 
 ## With a model
