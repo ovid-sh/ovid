@@ -569,8 +569,12 @@ func CheckExpr(c *Ch, n *ovid/parse.Node) i64 {
     return SetTy(c, fn.typp, fn.typn)
   }
   if op == ovid/parse.OP_SYSCALL {
+    // The privilege goes with where the package was loaded from, not its
+    // path: a std line in ovid.mod can supply an ovid/io too.
     if !ovid/mem.Eq(c.pathp, c.pathn, strptr("ovid/io"), strlen("ovid/io")) {
       Err(c, strptr("syscall_forbidden"), strlen("syscall_forbidden"), strptr("only ovid/io"), strlen("only ovid/io"))
+    } else if c.pkg.toolchain == 0 {
+      Err(c, strptr("syscall_forbidden"), strlen("syscall_forbidden"), strptr("only the toolchain's ovid/io (--std)"), strlen("only the toolchain's ovid/io (--std)"))
     }
     var a *ovid/parse.Node = n.args
     if ovid/parse.CountNodes(a) != 7 {

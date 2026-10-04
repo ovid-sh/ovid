@@ -9,6 +9,8 @@ import ovid/sha
 // func index (see IndexFuncs).
 // nerr counts load errors (bad ovid.mod, syntax, layout); they have already
 // been printed as JSON lines.
+// stdtc is set when the std dir is the toolchain's own, the one --std
+// names; a std line in ovid.mod resolves imports but grants no syscall.
 type Mod struct {
   io *ovid/io.Cap
   dirp i64
@@ -34,6 +36,7 @@ type Mod struct {
   nmissing i64
   missing i64
   hint *ovid/mem.Buf
+  stdtc i64
 }
 
 // Cmp compares byte strings like Go's < on strings: -1, 0, or 1.
@@ -164,6 +167,7 @@ func ReadMod(m *Mod, src i64, n i64, stdp i64, stdn i64) i64 {
   if stdn != 0 {
     m.stdp = stdp
     m.stdn = stdn
+    m.stdtc = 1
   } else if sdn != 0 {
     if load8(sdp) == 47 {
       m.stdp = sdp
@@ -346,6 +350,12 @@ func AddPackage(m *Mod, k *Pkg) i64 {
         ovid/mem.WBytes(m.io, m.hint, k.pathp, k.pathn)
         ovid/mem.WByte(m.io, m.hint, 96)
         LoadErr(m, strptr("layout"), 6, f, one.off, lb)
+      } else if k.reserved != 0 {
+        var rb *ovid/mem.Buf = Msg(m.io, strptr("package "), 8)
+        ovid/mem.WBytes(m.io, rb, k.pathp, k.pathn)
+        ovid/mem.WBytes(m.io, rb, strptr(" is a std package; a module may not define its own"), strlen(" is a std package; a module may not define its own"))
+        m.hint = Msg(m.io, strptr("move this package to a path std does not use; std packages cannot be replaced"), strlen("move this package to a path std does not use; std packages cannot be replaced"))
+        LoadErr(m, strptr("reserved_path"), 13, f, one.off, rb)
       } else if k.ok == 0 {
         k.ok = 1
         k.file = one.file
@@ -431,6 +441,23 @@ func HavePkg(m *Mod, p i64, n i64) bool {
   return false
 }
 
+// StdHas reports whether the std dir has a package at p[0:n], a directory
+// with a .ov file in it. A module package may not take such a path.
+func StdHas(m *Mod, p i64, n i64) bool {
+  if m.stdn == 0 {
+    return false
+  }
+  var dir i64 = Path(m.io, m.stdp, m.stdn, p, n)
+  var e *File = ListDir(m.io, dir)
+  while e != 0 as *File {
+    if !EntIsDir(m.io, dir, e) && HasOvSuffix(e.relp, e.reln) {
+      return true
+    }
+    e = e.next
+  }
+  return false
+}
+
 // StdPass adds, in path order, every imported package the module does not
 // have, from the std dir. It returns how many were looked for.
 func StdPass(m *Mod) i64 {
@@ -471,7 +498,7 @@ func StdPass(m *Mod) i64 {
   if m.stdn == 0 {
     var b *ovid/mem.Buf = Msg(m.io, strptr("module imports "), 15)
     ovid/mem.WBytes(m.io, b, need.pathp, need.pathn)
-    ovid/mem.WBytes(m.io, b, strptr(" but has no `std <dir>` line in ovid.mod; add one or pass --std <dir> (the directory holding ovid/io and ovid/mem)"), strlen(" but has no `std <dir>` line in ovid.mod; add one or pass --std <dir> (the directory holding ovid/io and ovid/mem)"))
+    ovid/mem.WBytes(m.io, b, strptr(" but no std dir is given; pass --std <dir> (the directory holding ovid/io and ovid/mem). A std line in ovid.mod also resolves imports, but its ovid/io may not call syscall"), strlen(" but no std dir is given; pass --std <dir> (the directory holding ovid/io and ovid/mem). A std line in ovid.mod also resolves imports, but its ovid/io may not call syscall"))
     LoadErr(m, strptr("no_std"), 6, 0 as *File, 0, b)
     return 0
   }
@@ -529,6 +556,7 @@ func StdPass(m *Mod) i64 {
     } else {
       var k2 *Pkg = GroupFor(m, sorted.pathp, sorted.pathn)
       k2.std = 1
+      k2.toolchain = m.stdtc
       k2.files = files
       AddPackage(m, k2)
     }
@@ -629,6 +657,9 @@ func Load(io *ovid/io.Cap, dirp i64, dirn i64, stdp i64, stdn i64) *Mod {
   Walk(m, root, 0, 0)
   var k *Pkg = m.pkgs
   while k != 0 as *Pkg {
+    if k.pathn != 0 && StdHas(m, k.pathp, k.pathn) {
+      k.reserved = 1
+    }
     AddPackage(m, k)
     k = k.next
   }

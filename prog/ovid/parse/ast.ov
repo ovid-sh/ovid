@@ -104,7 +104,10 @@ type Decl struct {
   live i64
 }
 
-// Pkg is one package: the merged result of its files.
+// Pkg is one package: the merged result of its files. std is set for one
+// loaded from a std dir, and toolchain when that dir is the toolchain's
+// own (--std): only such an ovid/io may call syscall. reserved marks a
+// module package whose path a std package has.
 type Pkg struct {
   pathp i64
   pathn i64
@@ -122,6 +125,8 @@ type Pkg struct {
   next *Pkg
   std i64
   ok i64
+  toolchain i64
+  reserved i64
 }
 
 // File is one source file. rel is the module-relative path (std:<pkg>/<f>

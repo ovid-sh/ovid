@@ -583,8 +583,13 @@ func (c *checker) expr0(e *env, n *ir.Node) string {
 	case "call":
 		return c.call(e, n)
 	case "syscall":
+		// The privilege goes with where the package was loaded from, not
+		// its path: a std dir named in ovid.mod can supply an ovid/io too.
 		if c.pkg.Path != "ovid/io" {
 			c.issue(Issue{Code: "syscall_forbidden", ID: n.ID, Message: "syscall is only valid in package ovid/io", Hint: "call an ovid/io function instead"})
+		} else if !c.pkg.Toolchain {
+			c.issue(Issue{Code: "syscall_forbidden", ID: n.ID, Message: "syscall is only valid in the ovid/io that ships with the toolchain",
+				Hint: "a std line in ovid.mod changes where imports resolve but grants no syscall; delete it to use the standard library built into ovid"})
 		}
 		if len(n.Args) != 7 {
 			c.issue(Issue{Code: "arity", ID: n.ID, Message: "syscall takes 7 arguments", Expected: "7", Got: fmt.Sprint(len(n.Args))})

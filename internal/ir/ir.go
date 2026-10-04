@@ -32,6 +32,11 @@ type Package struct {
 	Types   []TypeDecl `json:"types,omitempty"`
 	Funcs   []Func     `json:"funcs,omitempty"`
 	Span    Span       `json:"-"`
+	// Toolchain is set by the loader for a package that came from the
+	// toolchain's own standard library, not from the module or a std dir
+	// that ovid.mod names. Only such an ovid/io may call syscall, so it is
+	// never read from JSON.
+	Toolchain bool `json:"-"`
 }
 
 type Import struct {

@@ -76,7 +76,9 @@ type Module struct {
 	Entry string
 	Files []*File
 	Prog  *ir.Program
-	// Std is true for packages loaded from the toolchain rather than the module.
+	// Std is true for packages loaded from a std dir rather than the module:
+	// the toolchain's own, or the one ovid.mod names. Only the toolchain's
+	// grants ovid/io its syscall (see ir.Package.Toolchain).
 	Std map[string]bool
 	// Errors are syntax and layout problems found while loading.
 	Errors []Diag
@@ -212,7 +214,9 @@ func LoadOverlay(dir string, overlay map[string][]byte) (*Module, error) {
 	sort.Strings(paths)
 	have := map[string]bool{}
 	for _, pk := range paths {
-		m.addPackage(pk, byPkg[pk])
+		// A module package may not take the path of a std package: it
+		// would replace the shipped one for every importer.
+		m.addPackage(pk, byPkg[pk], pk != "" && len(stdFiles(stdDir, pk)) > 0, false)
 		have[pk] = true
 	}
 
@@ -237,7 +241,10 @@ func LoadOverlay(dir string, overlay map[string][]byte) (*Module, error) {
 				continue
 			}
 			m.Std[pk] = true
-			m.addPackage(pk, files)
+			// Only the embedded std is the toolchain's own. A std line
+			// changes where imports resolve, but what it points at is
+			// module input and gets no privilege.
+			m.addPackage(pk, files, false, stdDir == "")
 		}
 	}
 	sort.SliceStable(m.Prog.Packages, func(i, j int) bool { return m.Prog.Packages[i].Path < m.Prog.Packages[j].Path })
@@ -280,7 +287,10 @@ func stdFiles(dir, pkg string) []*File {
 	return out
 }
 
-func (m *Module) addPackage(pkgPath string, files []*File) {
+// addPackage parses files as package pkgPath and merges them. reserved
+// marks a module package whose path a std package has; toolchain, one
+// loaded from the toolchain's own std.
+func (m *Module) addPackage(pkgPath string, files []*File, reserved, toolchain bool) {
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	var merged *ir.Package
 	for _, f := range files {
@@ -306,6 +316,12 @@ func (m *Module) addPackage(pkgPath string, files []*File) {
 				"the package path is the directory path; write `package "+pkgPath+"`"))
 			continue
 		}
+		if reserved {
+			m.Errors = append(m.Errors, m.diagAt(idx, pkg.Span.Off, pkg.Span.End, "reserved_path",
+				"package "+pkgPath+" is a std package; a module may not define its own",
+				"move this package to a path std does not use; std packages cannot be replaced"))
+			continue
+		}
 		if merged == nil {
 			merged = pkg
 			continue
@@ -324,6 +340,7 @@ func (m *Module) addPackage(pkgPath string, files []*File) {
 		merged.Funcs = append(merged.Funcs, pkg.Funcs...)
 	}
 	if merged != nil {
+		merged.Toolchain = toolchain
 		m.Prog.Packages = append(m.Prog.Packages, *merged)
 	}
 }

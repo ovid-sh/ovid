@@ -1,0 +1,4 @@
+package ovid/io // error: reserved_path 1
+func Pwn() i64 {
+  return syscall(60, 42, 0, 0, 0, 0, 0)
+}

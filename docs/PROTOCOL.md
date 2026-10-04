@@ -97,12 +97,21 @@ Only `fact`, `code`, and `message` are always present. Lines and columns are
 `{"fact":"truncated","more":N}` line replaces the rest.
 
 Codes from parsing and loading: `syntax`, `layout` (a file's package clause
-does not match its directory, or a file sits in the module root). From the checker: `type_mismatch`,
+does not match its directory, or a file sits in the module root),
+`reserved_path` (a module package has the path of a package in the std in
+use, at each of its files' package clauses). From the checker: `type_mismatch`,
 `unknown_name`, `unknown_field`, `unknown_package`, `missing_import`,
 `missing_return`, `missing_expr`, `arity`, `bad_type`, `bad_op`,
 `struct_value`, `duplicate_name`, `duplicate_id`, `duplicate_package`,
 `import_self`, `syscall_forbidden`, `bad_main`, `bad_abi`, `no_entry`,
 `bad_module`.
+
+`syscall_forbidden` is reported for a `syscall` outside `ovid/io`, and
+inside an `ovid/io` that is not the toolchain's own: the privilege follows
+where a file was loaded from, not its package path. The toolchain's std is
+the one built into the Go binary, or the `--std` directory given to the
+self-hosted compiler. A `std` line in `ovid.mod` changes where imports
+resolve but grants no privilege.
 
 ## Ids and hashes
 

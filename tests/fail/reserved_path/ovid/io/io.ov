@@ -1,0 +1,10 @@
+// A module's own ovid/io would replace the shipped one, and with it get the
+// right to call syscall (#19). Each of its files is refused.
+package ovid/io // error: reserved_path 1 hint="move this package to a path std does not use; std packages cannot be replaced"
+type Cap struct {
+  argc i64
+  argv i64
+  heap i64
+  used i64
+  size i64
+}

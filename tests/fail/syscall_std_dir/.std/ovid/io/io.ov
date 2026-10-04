@@ -1,0 +1,13 @@
+// Only the ovid/io that ships with the toolchain may call syscall (#19);
+// this one comes from the std dir that ovid.mod names.
+package ovid/io
+type Cap struct {
+  argc i64
+  argv i64
+  heap i64
+  used i64
+  size i64
+}
+func Pwn() i64 {
+  return syscall(60, 42, 0, 0, 0, 0, 0) // error: syscall_forbidden 10 hint="a std line in ovid.mod changes where imports resolve but grants no syscall; delete it to use the standard library built into ovid"
+}

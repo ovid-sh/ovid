@@ -307,6 +307,68 @@ func TestCorpusFail(t *testing.T) {
 	}
 }
 
+// TestCorpusFailSelfHost has the self-hosted checker check the tests/fail
+// cases about where syscall is allowed: it must report the same codes at the
+// same places as this one. A case gets the toolchain's std (--std) unless
+// its ovid.mod names one, as the Go toolchain falls back to its embedded
+// std. The rest of the corpus is not compared yet (#15, #39).
+func TestCorpusFailSelfHost(t *testing.T) {
+	cases := map[string]bool{"fail/syscall_forbidden": true, "fail/reserved_path": true, "fail/syscall_std_dir": true}
+	needExec(t)
+	g1 := filepath.Join(t.TempDir(), "g1")
+	var b bytes.Buffer
+	if code := Build(filepath.Join(repo(t), "prog"), g1, &b); code != 0 {
+		t.Fatalf("go build of prog: %s", b.String())
+	}
+	stdDir := filepath.Join(repo(t), "std")
+	// places renders a check's diagnostics as sorted "file:line:col: code"
+	// lines, with files made absolute.
+	places := func(out string) []string {
+		var ps []string
+		for _, ln := range strings.Split(strings.TrimSpace(out), "\n") {
+			var d struct {
+				Fact, Code, File string
+				Line, Col        int
+			}
+			if err := json.Unmarshal([]byte(ln), &d); err != nil {
+				t.Fatalf("not JSON: %q", ln)
+			}
+			if d.Fact != "error" {
+				continue
+			}
+			if d.File != "" {
+				d.File, _ = filepath.Abs(d.File)
+			}
+			ps = append(ps, fmt.Sprintf("%s:%d:%d: %s", d.File, d.Line, d.Col, d.Code))
+		}
+		sort.Strings(ps)
+		return ps
+	}
+	for _, c := range corpus(t, "fail") {
+		if !cases[c.name] {
+			continue
+		}
+		delete(cases, c.name)
+		t.Run(c.name, func(t *testing.T) {
+			b.Reset()
+			Check(c.root, false, &b)
+			want := places(b.String())
+			args := []string{"check", c.root}
+			mod, _ := os.ReadFile(filepath.Join(c.root, "ovid.mod"))
+			if !regexp.MustCompile(`(?m)^\s*std\s`).Match(mod) {
+				args = append(args, "--std", stdDir)
+			}
+			out, _ := run(t, g1, args...)
+			if got := places(out); strings.Join(got, "\n") != strings.Join(want, "\n") {
+				t.Fatalf("tests/%s: self-hosted check reports\n  %s\nwant\n  %s", c.name, strings.Join(got, "\n  "), strings.Join(want, "\n  "))
+			}
+		})
+	}
+	for name := range cases {
+		t.Errorf("no case tests/%s", name)
+	}
+}
+
 // TestCorpusDirectives: a run case with a second exit is refused, while
 // stdout and args add up across lines.
 func TestCorpusDirectives(t *testing.T) {

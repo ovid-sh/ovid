@@ -134,7 +134,8 @@ Control flow, all of it:
 Programs: the entry package (ovid.mod "entry") has
   func main(io *ovid/io.Cap) i64    // result is the exit code
 io is the capability for argv, heap, and syscalls. syscall(...) is only
-allowed inside ovid/io; everyone else calls ovid/io funcs.
+allowed inside the ovid/io that ships with the toolchain; everyone else
+calls ovid/io funcs. A module may not define a package with a std path.
 
 Tests: any func TestX(io *ovid/io.Cap) i64 in any module package; 0 passes,
 anything else fails (the value is reported as the exit code).

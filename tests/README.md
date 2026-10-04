@@ -9,7 +9,9 @@ A case is either
 - a single `.ov` file with `package demo`, which the runner places at
   `demo/main.ov` of a module named `demo`, or
 - a directory with its own `ovid.mod`, for programs that need several files
-  or packages. Its comments may sit in any of its `.ov` files.
+  or packages. Its comments may sit in any of its `.ov` files, including
+  those of a std dir it names with `std .std`: a dot directory, so that the
+  module itself leaves it out.
 
 ## `run/`: programs that must build and run
 

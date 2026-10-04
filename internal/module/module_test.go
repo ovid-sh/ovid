@@ -62,3 +62,55 @@ func TestHashTellsTwinsApart(t *testing.T) {
 		t.Fatal("an unknown id has a hash")
 	}
 }
+
+// TestToolchainProvenance: only packages from the embedded std are the
+// toolchain's; the same paths from a std dir that ovid.mod names are not,
+// and a module package may not take a std package's path.
+func TestToolchainProvenance(t *testing.T) {
+	d := t.TempDir()
+	write := func(rel, src string) {
+		t.Helper()
+		p := filepath.Join(d, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("ovid.mod", "module m\nentry m\n")
+	write("m/m.ov", "package m\nimport ovid/io\nimport ovid/mem\nimport ovid/x\nfunc main(io *ovid/io.Cap) i64 {\n  return 0\n}\n")
+	write("ovid/x/x.ov", "package ovid/x\n")
+	toolchain := func() map[string]bool {
+		t.Helper()
+		m, err := Load(d)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(m.Errors) != 0 {
+			t.Fatalf("load errors %+v", m.Errors)
+		}
+		out := map[string]bool{}
+		for _, p := range m.Prog.Packages {
+			out[p.Path] = p.Toolchain
+		}
+		return out
+	}
+	if got := toolchain(); len(got) != 4 || !got["ovid/io"] || !got["ovid/mem"] || got["m"] || got["ovid/x"] {
+		t.Fatalf("embedded std: %v", got)
+	}
+	write(".std/ovid/io/io.ov", "package ovid/io\n")
+	write(".std/ovid/mem/mem.ov", "package ovid/mem\n")
+	write("ovid.mod", "module m\nentry m\nstd .std\n")
+	if got := toolchain(); len(got) != 4 || got["ovid/io"] || got["ovid/mem"] {
+		t.Fatalf("std line: %v", got)
+	}
+	write("ovid/mem/mem.ov", "package ovid/mem\n")
+	m, err := Load(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Errors) != 1 || m.Errors[0].Code != "reserved_path" || m.Errors[0].Line != 1 || m.Errors[0].Col != 1 {
+		t.Fatalf("a module ovid/mem: %+v", m.Errors)
+	}
+}
