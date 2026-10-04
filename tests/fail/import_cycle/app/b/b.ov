@@ -1,0 +1,5 @@
+package app/b
+import app/a
+func B() i64 {
+  return app/a.A() + 1
+}

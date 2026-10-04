@@ -94,7 +94,8 @@ and `strlen("…")`, and are read-only. Memory is `load8/32/64`, `store8/64`, an
 capability for argv, the heap, and syscalls, and `syscall` is only allowed in
 `ovid/io`. Other packages' funcs and consts spell the import path:
 `ovid/mem.Copy(d, s, n)`, `ovid/io.O_RDONLY`; a one-segment import may be
-written `util.F()`.
+written `util.F()`. Imports may not form a cycle (`import_cycle`), so the
+packages are a DAG.
 
 ## Self-hosting
 

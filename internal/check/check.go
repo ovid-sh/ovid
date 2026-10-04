@@ -252,6 +252,9 @@ func Run(p *ir.Program) *Result {
 		}
 	}
 
+	for i := range p.Packages {
+		c.checkCycle(&p.Packages[i])
+	}
 	c.checkEntry(p)
 
 	for i := range p.Packages {
@@ -286,6 +289,48 @@ func stdPackages() []string {
 	})
 	sort.Strings(pkgs)
 	return pkgs
+}
+
+// checkCycle reports import_cycle once for each cycle whose lexically
+// least package is root: at the first import of root, in source order,
+// that leads back to root through packages whose paths sort after it.
+// The search walks imports in source order, so it finds the same cycle
+// path whatever order the packages were loaded in. Packages must form a
+// DAG, so that each can be checked and compiled once its imports are.
+func (c *checker) checkCycle(root *ir.Package) {
+	seen := map[string]bool{}
+	var path []string
+	var walk func(pkg *ir.Package) bool
+	walk = func(pkg *ir.Package) bool {
+		if seen[pkg.Path] {
+			return false
+		}
+		seen[pkg.Path] = true
+		path = append(path, pkg.Path)
+		for _, im := range pkg.Imports {
+			if im.Path == root.Path {
+				path = append(path, root.Path)
+				return true
+			}
+			if next, ok := c.pkgs[im.Path]; ok && im.Path > root.Path && walk(next) {
+				return true
+			}
+		}
+		path = path[:len(path)-1]
+		return false
+	}
+	for _, im := range root.Imports {
+		next, ok := c.pkgs[im.Path]
+		if !ok || im.Path <= root.Path {
+			continue
+		}
+		path = []string{root.Path}
+		if walk(next) {
+			c.issue(Issue{Code: "import_cycle", ID: im.ID, Message: "import cycle: " + strings.Join(path, " -> "),
+				Hint: "packages may not import each other, directly or through others; move what they share into a package both import"})
+			return
+		}
+	}
 }
 
 func (c *checker) checkEntry(p *ir.Program) {

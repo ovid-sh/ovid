@@ -47,6 +47,10 @@ type Ch struct {
   hd *ovid/parse.Decl
   ho *ovid/parse.Decl
   hn *ovid/parse.Node
+  croot *ovid/parse.Pkg
+  cpath i64
+  cn i64
+  cep i64
 }
 
 func WLit(c *Ch, p i64, n i64) i64 {
@@ -1042,6 +1046,96 @@ func Funcs(c *Ch, k *ovid/parse.Pkg) i64 {
   return 0
 }
 
+// Less reports whether the bytes at a sort before those at b, as Go
+// compares strings.
+func Less(ap i64, an i64, bp i64, bn i64) bool {
+  var i i64 = 0
+  while i < an && i < bn {
+    var x i64 = load8(ap + i)
+    var y i64 = load8(bp + i)
+    if x != y {
+      return x < y
+    }
+    i = i + 1
+  }
+  return an < bn
+}
+
+// Walk carries CheckCycle's search into package k, pushing it on c.cpath:
+// true when an import of k leads back to c.croot through packages whose
+// paths sort after the root's, with c.cpath then holding the cycle.
+func Walk(c *Ch, k *ovid/parse.Pkg) bool {
+  if k.mark == c.cep {
+    return false
+  }
+  k.mark = c.cep
+  store64(c.cpath + (c.cn * 8), k as i64)
+  c.cn = c.cn + 1
+  var r *ovid/parse.Pkg = c.croot
+  var im *ovid/parse.Decl = k.ims
+  while im != 0 as *ovid/parse.Decl {
+    if ovid/mem.Eq(im.namep, im.namen, r.pathp, r.pathn) {
+      store64(c.cpath + (c.cn * 8), r as i64)
+      c.cn = c.cn + 1
+      return true
+    }
+    if Less(r.pathp, r.pathn, im.namep, im.namen) {
+      var t *ovid/parse.Pkg = FindPkg(c, im.namep, im.namen)
+      if t != 0 as *ovid/parse.Pkg {
+        if Walk(c, t) {
+          return true
+        }
+      }
+    }
+    im = im.next
+  }
+  c.cn = c.cn - 1
+  return false
+}
+
+// CheckCycle reports import_cycle once for each cycle whose lexically
+// least package is r: at the first import of r, in source order, that
+// leads back to r through packages whose paths sort after it. The search
+// walks imports in source order, so it finds the same cycle path whatever
+// order the packages were loaded in. Packages must form a DAG, so that
+// each can be checked and compiled once its imports are.
+func CheckCycle(c *Ch, r *ovid/parse.Pkg) i64 {
+  c.croot = r
+  c.cep = c.cep + 1
+  var im *ovid/parse.Decl = r.ims
+  while im != 0 as *ovid/parse.Decl {
+    var t *ovid/parse.Pkg = 0 as *ovid/parse.Pkg
+    if Less(r.pathp, r.pathn, im.namep, im.namen) {
+      t = FindPkg(c, im.namep, im.namen)
+    }
+    if t != 0 as *ovid/parse.Pkg {
+      store64(c.cpath, r as i64)
+      c.cn = 1
+      if Walk(c, t) {
+        var mb *ovid/mem.Buf = ovid/mem.New(c.io, 64)
+        ovid/mem.WBytes(c.io, mb, strptr("import cycle: "), strlen("import cycle: "))
+        var i i64 = 0
+        while i < c.cn {
+          var k *ovid/parse.Pkg = load64(c.cpath + (i * 8)) as *ovid/parse.Pkg
+          if i != 0 {
+            ovid/mem.WBytes(c.io, mb, strptr(" -> "), 4)
+          }
+          ovid/mem.WBytes(c.io, mb, k.pathp, k.pathn)
+          i = i + 1
+        }
+        HereDecl(c, H_IMPORT, r, im, im)
+        c.pathp = r.pathp
+        c.pathn = r.pathn
+        Err(c, strptr("import_cycle"), strlen("import_cycle"), mb.data, mb.len)
+        c.pathn = 0
+        return 1
+      }
+    }
+    im = im.next
+  }
+  return 0
+}
+
 // Run type-checks the loaded module m, prints its error lines, and returns
 // the error count. For check (build false) it then prints the summary; for
 // build it prints {"ok":false,"errors":N} only when there are errors, since
@@ -1091,6 +1185,12 @@ func Run(io *ovid/io.Cap, m *ovid/parse.Mod, build bool) i64 {
     Types(c, k)
     Funcs(c, k)
     c.pathn = 0
+    k = k.next
+  }
+  c.cpath = ovid/io.Alloc(io, (npkg + 1) * 8)
+  k = m.pkgs
+  while k != 0 as *ovid/parse.Pkg {
+    CheckCycle(c, k)
     k = k.next
   }
   CheckMain(c)

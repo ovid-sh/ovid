@@ -126,6 +126,7 @@ type Pkg struct {
   next *Pkg
   std i64
   ok i64
+  mark i64
 }
 
 // File is one source file. rel is the module-relative path (std:<pkg>/<f>

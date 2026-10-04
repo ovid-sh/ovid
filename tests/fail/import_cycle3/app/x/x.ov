@@ -1,0 +1,9 @@
+package app/x
+import app/w
+import app/y // error: import_cycle 1
+func X() i64 {
+  return app/w.W() + 1
+}
+func UsesY() i64 {
+  return app/y.Y()
+}

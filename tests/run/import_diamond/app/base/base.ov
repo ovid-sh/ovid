@@ -1,0 +1,2 @@
+package app/base
+const Ten i64 = 10
