@@ -165,6 +165,21 @@ does not match its directory, or a file sits in the module root). From the check
 `import_self`, `syscall_forbidden`, `bad_main`, `bad_abi`, `no_entry`,
 `bad_module`.
 
+## Paths
+
+A `file` in a record, and each entry of a receipt's `files`, is by default
+relative to the working directory ovid was started in, so that it can be
+opened as it stands. It is absolute when the file lies more than one
+directory above that.
+
+With `OVID_PATHS=module` in the environment, every such path is relative to
+the module root instead, with forward slashes, and a file of a shipped
+package reads `std:<package>/<file>`. The same module at the same revision
+then reports the same paths wherever it is and wherever ovid runs, which is
+what comparing or replaying records between two copies of a module needs (a
+sandbox's and its host's). `OVID_PATHS=cwd` is the default; any other value
+is a usage error.
+
 ## Ids and hashes
 
 `ovid help ids` gives the id forms. Decl ids (`fn:`, `ty:`, `cn:`, `fld:`,
