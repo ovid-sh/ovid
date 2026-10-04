@@ -1,0 +1,106 @@
+// stdout: "leaf 0\nframe 0\nloop 3\nimm 6442450943\n"
+// exit: 0
+package demo
+import ovid/io
+
+// Dirty leaves values in every register a local can live in and in its
+// frame, for the funcs called after it to find if they do not clear their
+// own.
+func Dirty(a i64, b i64, c i64, d i64, e i64, f i64) i64 {
+  var g i64 = a * 1111
+  var h i64 = b * 2222
+  var i i64 = c * 3333
+  var j i64 = d * 4444
+  var k i64 = e * 5555
+  var l i64 = f * 6666
+  var m i64 = g + h
+  var n i64 = i + j
+  var o i64 = k + l
+  return (((((((g + h) + i) + j) + k) + l) + m) + n) + o
+}
+
+// Leaf declares locals without a value. They live in registers a call
+// would clobber, which hold what Dirty left.
+func Leaf(a i64) i64 {
+  var x i64
+  var y i64
+  var z bool
+  var p *Box
+  if a > 100 {
+    x = 1
+    y = 2
+  }
+  if z || p != 0 as *Box {
+    return 99
+  }
+  return x + y
+}
+
+type Box struct {
+  v i64
+}
+
+// Frame does the same with more locals than there are registers, in a
+// func that calls, so some are in its frame.
+func Frame(a i64) i64 {
+  var b i64 = Id(a)
+  var c i64 = Id(a)
+  var d i64 = Id(a)
+  var e i64 = Id(a)
+  var f i64 = Id(a)
+  var s i64
+  var t i64
+  var u i64
+  var v i64
+  if a > 100 {
+    s = b + c
+    t = d + e
+    u = f
+    v = 1
+  }
+  return (((((((s + t) + u) + v) + b) + c) + d) + e) + f
+}
+
+func Id(a i64) i64 {
+  return a
+}
+
+// Loop declares a local without a value inside a loop: it is zero each
+// time round, not what the last turn left.
+func Loop() i64 {
+  var sum i64 = 0
+  var i i64 = 0
+  while i < 3 {
+    var t i64
+    t = t + 1
+    sum = sum + t
+    i = i + 1
+  }
+  return sum
+}
+
+// Imm adds two constants that fit 32 bits only as unsigned.
+func Imm() i64 {
+  var a i64 = 0xffffffff
+  var b i64 = 0x80000000
+  return a + b
+}
+
+func Line(io *ovid/io.Cap, name i64, v i64) i64 {
+  ovid/io.Print(name)
+  ovid/io.PrintInt(io, v)
+  ovid/io.Print(strptr("\n"))
+  return 0
+}
+
+func main(io *ovid/io.Cap) i64 {
+  Dirty(1, 2, 3, 4, 5, 6)
+  var leaf i64 = Leaf(1)
+  Dirty(1, 2, 3, 4, 5, 6)
+  var frame i64 = Frame(0)
+  Line(io, strptr("leaf "), leaf)
+  Line(io, strptr("frame "), frame)
+  Line(io, strptr("loop "), Loop())
+  Line(io, strptr("imm "), Imm())
+  return 0
+}

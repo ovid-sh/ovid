@@ -96,7 +96,7 @@ func (b *Buf) u32(v uint32) {
 // MovRegImm encodes mov reg, imm in its shortest form: a 32-bit move that
 // zero-extends, a sign-extended imm32, or the full imm64.
 func (b *Buf) MovRegImm(reg int, imm int64) {
-	if imm >= 0 && imm <= 0x7fffffff {
+	if imm >= 0 && imm <= 0xffffffff {
 		if reg >= 8 {
 			b.emit(0x41)
 		}

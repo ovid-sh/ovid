@@ -296,7 +296,8 @@ func (c *cg) emitFunc(pkg *ir.Package, fn *ir.Func) error {
 	c.b.PushReg(asm.RBP)
 	c.b.MovRegReg(asm.RBP, asm.RSP)
 	// The frame is not cleared: the checker lets no local be read before
-	// its declaration has run, and a temp is written before it is read.
+	// its declaration has run, a declaration always writes its local (zero
+	// when it gives no value), and a temp is written before it is read.
 	c.b.SubRspImm(frame)
 	for i, r := range c.saved {
 		c.b.MovMemRbpReg(r, c.saveBase-int32(8*(i+1)))
@@ -581,11 +582,18 @@ func (c *cg) emitStmts(stmts []*ir.Node) error {
 func (c *cg) emitStmt(s *ir.Node) error {
 	switch s.Op {
 	case "var", "assign":
-		if s.Val == nil && s.Op == "var" {
-			return nil
-		}
 		if _, ok := c.locals[s.Name]; !ok {
 			return fmt.Errorf("%s %s", s.Op, s.Name)
+		}
+		if s.Val == nil && s.Op == "var" {
+			// A declaration without a value makes the local zero, each
+			// time it runs: the frame is not cleared on entry.
+			if r, ok := c.regs[s.Name]; ok {
+				c.b.MovRegImm(r, 0)
+			} else {
+				c.b.MovMemRbpImm(c.locals[s.Name], 0)
+			}
+			return nil
 		}
 		return c.emitAssign(s.Name, s.Val)
 	case "setfield":
@@ -644,6 +652,9 @@ func (c *cg) emitStmt(s *ir.Node) error {
 		if err := c.emitStmts(s.Body); err != nil {
 			return err
 		}
+		// The test is the while statement's code, not its body's last
+		// statement's: a fault in the condition is reported at the while.
+		c.mark(s.ID)
 		c.b.Mark(test)
 		return c.emitJump(s.Cond, 0, body, true)
 	default:
