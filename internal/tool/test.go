@@ -1,6 +1,7 @@
 package tool
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -135,10 +136,17 @@ func Test(dir, filter string, list bool, w io.Writer) int {
 			code = -1
 			describeCrash(m, marks, pr, r)
 		}
+		// The runtime ends a program it could not get memory for with this
+		// code and message; no return statement of the test produced it.
+		oom := pr.exited && code == compile.ExitOOM && bytes.HasSuffix(out, []byte("out of memory\n"))
+		if oom {
+			r["error"] = "out_of_memory"
+			r["hint"] = "the kernel refused the program memory: an Alloc too large to map, or a host or limit too small for the heap's first 128 MiB region"
+		}
 		r["ok"] = ok
 		if !ok {
 			r["exit"] = code
-			if r["signal"] == nil {
+			if r["signal"] == nil && !oom {
 				if rs := returnsOf(m, t.id, code); len(rs) > 0 {
 					r["returned_by"] = rs
 				}

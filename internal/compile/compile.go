@@ -16,6 +16,10 @@ import (
 // The self-hosted compiler emits the same size.
 const heapSize int64 = 128 << 20
 
+// ExitOOM is the exit code of a program the kernel refused memory, here
+// and in ovid/io.Map (EX_OSERR).
+const ExitOOM = 71
+
 // Compile emits a statically linked executable.
 func Compile(p *ir.Program) ([]byte, error) {
 	bin, _, err := CompileMap(p)
@@ -204,8 +208,20 @@ func (c *cg) emitStartup(mainLab int) error {
 	c.b.MovRegReg(asm.RDI, asm.RAX)
 	c.b.MovRegImm64(asm.RAX, 60)
 	c.b.Syscall()
+	// The first region was refused: say "out of memory\n" on standard error
+	// (the text is pushed, there being no rodata to point at yet) and exit
+	// as ovid/io.Map does.
 	c.b.Mark(fail)
-	c.b.MovRegImm64(asm.RDI, 125)
+	c.b.MovRegImm64(asm.RAX, 0xa79726f6d65) // "emory\n"
+	c.b.PushReg(asm.RAX)
+	c.b.MovRegImm64(asm.RAX, 0x6d20666f2074756f) // "out of m"
+	c.b.PushReg(asm.RAX)
+	c.b.MovRegImm64(asm.RDI, 2)
+	c.b.MovRegReg(asm.RSI, asm.RSP)
+	c.b.MovRegImm64(asm.RDX, 14)
+	c.b.MovRegImm64(asm.RAX, 1)
+	c.b.Syscall()
+	c.b.MovRegImm64(asm.RDI, ExitOOM)
 	c.b.MovRegImm64(asm.RAX, 60)
 	c.b.Syscall()
 	return nil

@@ -3,6 +3,7 @@
 package tool
 
 import (
+	"bytes"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -119,5 +120,70 @@ func main(io *ovid/io.Cap) i64 {
 	}
 	if want := []uint64{128 << 20, 100 << 20, 128 << 20}; !slices.Equal(sizes, want) {
 		t.Fatalf("mmap sizes %v, want %v: the startup region, the large block, and a second region", sizes, want)
+	}
+}
+
+// TestOutOfMemoryAtStartup stages the refusal of the heap's first region
+// with an address-space limit, which refuses the mapping whatever its
+// flags: the program says so and exits 71, in both compilers' output.
+func TestOutOfMemoryAtStartup(t *testing.T) {
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("no sh to set the limit with")
+	}
+	dir := mkmod(t, demo("package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  return 0\n}\n"))
+	goBin := mustBuild(t, dir)
+	g1 := mustBuild(t, filepath.Join(repo(t), "prog"))
+	selfBin := filepath.Join(t.TempDir(), "self")
+	if out, code := run(t, g1, "build", dir, "-o", selfBin, "--std", filepath.Join(repo(t), "std")); code != 0 {
+		t.Fatalf("self-hosted build %d: %s", code, out)
+	}
+	for _, bin := range []string{goBin, selfBin} {
+		if out, code := run(t, bin); code != 0 || out != "" {
+			t.Fatalf("%s without a limit: exit %d %q", bin, code, out)
+		}
+		// ulimit -v counts KiB: 64 MiB of address space, half a region.
+		cmd := exec.Command(sh, "-c", `ulimit -v 65536 && exec "$0"`, bin)
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout, cmd.Stderr = &stdout, &stderr
+		err := cmd.Run()
+		ee, _ := err.(*exec.ExitError)
+		if ee == nil || ee.ExitCode() != 71 || stderr.String() != "out of memory\n" || stdout.Len() != 0 {
+			t.Fatalf("%s under the limit: %v, stdout %q, stderr %q; want exit 71 and \"out of memory\\n\" on stderr", bin, err, stdout.String(), stderr.String())
+		}
+	}
+}
+
+// TestTestReportsOutOfMemory: a test the runtime ended for want of memory
+// is reported as that, and no return statement of the test is blamed.
+func TestTestReportsOutOfMemory(t *testing.T) {
+	dir := mkmod(t, demo(`package demo
+import ovid/io
+func TestHuge(io *ovid/io.Cap) i64 {
+  var p i64 = ovid/io.Alloc(io, 1 << 47)
+  return p & 1
+}
+func TestReturns71(io *ovid/io.Cap) i64 {
+  return 71
+}
+func main(io *ovid/io.Cap) i64 {
+  return 0
+}
+`))
+	var b bytes.Buffer
+	if code := Test(dir, "", false, &b); code != ExitFail {
+		t.Fatalf("exit %d:\n%s", code, b.String())
+	}
+	rs := lines(t, b.String())
+	if len(rs) != 3 {
+		t.Fatalf("want two tests and a summary:\n%s", b.String())
+	}
+	huge, plain := rs[0], rs[1]
+	if huge["id"] != "fn:demo.TestHuge" || huge["error"] != "out_of_memory" || huge["exit"] != float64(71) || huge["returned_by"] != nil || huge["ok"] != false {
+		t.Fatalf("TestHuge: %v", huge)
+	}
+	// The same code from a return statement is an ordinary failure.
+	if plain["id"] != "fn:demo.TestReturns71" || plain["error"] != nil || plain["returned_by"] == nil {
+		t.Fatalf("TestReturns71: %v", plain)
 	}
 }

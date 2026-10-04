@@ -47,6 +47,11 @@ stays to report it (`"signal":"interrupt"`).
 `run` otherwise exits with the program's own code, or 128 + the signal
 number if a signal killed it, so any value is possible there.
 
+An Ovid program that the kernel refuses memory, for its heap's first region
+at startup or for a later `Alloc`, writes `out of memory` to stderr and
+exits 71. `run` passes that through, and `test` reports the test with
+`"error":"out_of_memory"` and no `returned_by`.
+
 ## Failures
 
 A failed request ends with

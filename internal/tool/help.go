@@ -103,7 +103,7 @@ NUL-terminated, so printing one needs only its address:
 
 Memory: no implicit allocation. ovid/io.Alloc(io, nbytes) returns an i64
 address of zeroed bytes from the heap, which grows as needed and is never
-freed; it does not return 0 (out of memory ends the program, exit 125).
+freed; it does not return 0 (out of memory ends the program, exit 71).
 Cast the address: var p *Pair = raw as *Pair.
 Each struct field takes 8 bytes, so a struct is 8 * fields bytes; never
 count them by hand, write sizeof(T) (T a struct; path.T for another
@@ -160,6 +160,7 @@ ovid test [--run substr] [--list]
   A crash adds "signal", "at" (the statement that faulted), "stack" (it and
   each call leading to it, innermost first), and for a bad load or store
   "fault_addr"; a hung test reads "signal":"timeout".
+  A test the kernel refused memory reads "error":"out_of_memory", exit 71.
   --list prints the tests without running them.
 ovid outline [--pkg P] [--all] [--uses]
   Per decl: id, kind, sig, file, line, end_line, hash, and when present
