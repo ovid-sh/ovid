@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // repo is the repository root, found from this package's directory.
@@ -563,6 +564,76 @@ func main(io *ovid/io.Cap) i64 {
 	}
 	if outer, _ := stack[1].(map[string]any); outer["id"] != "st:demo.main:2" {
 		t.Fatalf("caller: %s", errb)
+	}
+}
+
+// TestRunStdio: a program that exits normally gets ovid run's stdin, writes
+// its own stdout and stderr, and its exit code passes through, whether it
+// runs traced or plainly (the fallback where ptrace is unavailable).
+func TestRunStdio(t *testing.T) {
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("ovid programs are linux/amd64 binaries")
+	}
+	dir := mkmod(t, demo(`package demo
+
+import ovid/io
+
+func main(io *ovid/io.Cap) i64 {
+  var buf i64 = ovid/io.Alloc(io, 64)
+  var n i64 = ovid/io.Read(0, buf, 64)
+  ovid/io.Stdout(buf, n)
+  ovid/io.Stderr(strptr("to stderr\n"), 10)
+  return 3
+}
+`))
+	in := filepath.Join(dir, "in")
+	if err := os.WriteFile(in, []byte("from stdin\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	open := func(name string) *os.File {
+		f, err := os.Create(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { f.Close() })
+		return f
+	}
+	check := func(how string, code int, out, errOut string) {
+		t.Helper()
+		o, _ := os.ReadFile(filepath.Join(dir, out))
+		e, _ := os.ReadFile(filepath.Join(dir, errOut))
+		if code != 3 || string(o) != "from stdin\n" || string(e) != "to stderr\n" {
+			t.Fatalf("%s: exit %d, stdout %q, stderr %q", how, code, o, e)
+		}
+	}
+
+	stdin, err := os.Open(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stdin.Close()
+	si := os.Stdin
+	os.Stdin = stdin
+	code := withStdio(t, filepath.Join(dir, "out"), filepath.Join(dir, "err"), func() int { return Run(dir, nil, io.Discard) })
+	os.Stdin = si
+	check("run", code, "out", "err")
+
+	bin := filepath.Join(dir, "bin", "demo")
+	var b bytes.Buffer
+	if Build(dir, bin, &b) != 0 {
+		t.Fatal(b.String())
+	}
+	for name, runner := range map[string]func(string, []string, procIO, time.Duration) procResult{"traced": runProc, "plain": runPlain} {
+		stdin, err := os.Open(in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pr := runner(bin, nil, procIO{stdin, open(name + ".out"), open(name + ".err")}, 0)
+		stdin.Close()
+		if pr.err != nil || !pr.exited {
+			t.Fatalf("%s: %+v", name, pr)
+		}
+		check(name, pr.code, name+".out", name+".err")
 	}
 }
 
