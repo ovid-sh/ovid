@@ -96,44 +96,43 @@ func move(dir, q, to, file string, dryRun bool, w io.Writer) int {
 		need[fi][p] = true
 	}
 	movedNeedsFrom := false
-	requalify := func(r ref, old, target string) {
-		fsrc := m.Files[r.span.File].Src
-		for _, o := range refToken(m, r, old) {
-			k := [2]int{r.span.File, o}
-			if seen[k] {
-				continue
+	requalify := func(r ref, target string) {
+		fi, o := r.tok.File, r.tok.Off
+		fsrc := m.Files[fi].Src
+		k := [2]int{fi, o}
+		if seen[k] {
+			return
+		}
+		seen[k] = true
+		moved := inMoved(fi, o)
+		here := filePkg(m, fi)
+		if moved {
+			here = to
+		}
+		want := ""
+		if here != target {
+			want = target + "."
+		}
+		qs := o
+		if o > 0 && fsrc[o-1] == '.' {
+			qs = o - 1
+			for qs > 0 && (identByte(fsrc[qs-1]) || fsrc[qs-1] == '/') {
+				qs--
 			}
-			seen[k] = true
-			moved := inMoved(r.span.File, o)
-			here := filePkg(m, r.span.File)
-			if moved {
-				here = to
+		}
+		if string(fsrc[qs:o]) == want {
+			return
+		}
+		qq := qual{fi, qs, o, want}
+		if moved {
+			inner = append(inner, qq)
+			if target == from {
+				movedNeedsFrom = true
 			}
-			want := ""
-			if here != target {
-				want = target + "."
-			}
-			qs := o
-			if o > 0 && fsrc[o-1] == '.' {
-				qs = o - 1
-				for qs > 0 && (identByte(fsrc[qs-1]) || fsrc[qs-1] == '/') {
-					qs--
-				}
-			}
-			if string(fsrc[qs:o]) == want {
-				continue
-			}
-			qq := qual{r.span.File, qs, o, want}
-			if moved {
-				inner = append(inner, qq)
-				if target == from {
-					movedNeedsFrom = true
-				}
-			} else {
-				outer = append(outer, qq)
-				if want != "" {
-					needImport(r.span.File, target)
-				}
+		} else {
+			outer = append(outer, qq)
+			if want != "" {
+				needImport(fi, target)
 			}
 		}
 	}
@@ -147,7 +146,7 @@ func move(dir, q, to, file string, dryRun bool, w io.Writer) int {
 		if m.IsStd(r.span.File) {
 			continue
 		}
-		requalify(r, name, to)
+		requalify(r, to)
 	}
 	// Inside the moved text, uses of its old and new neighbours change too.
 	for _, pk := range []string{from, to} {
@@ -162,7 +161,7 @@ func move(dir, q, to, file string, dryRun bool, w io.Writer) int {
 			}
 			for _, r := range lrs {
 				if inMoved(r.span.File, r.span.Off) {
-					requalify(r, nameOf(l), pk)
+					requalify(r, pk)
 				}
 			}
 		}
