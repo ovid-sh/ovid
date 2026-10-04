@@ -1043,6 +1043,17 @@ func TestSelfHost(t *testing.T) {
 	if d := last(t, out); code != 1 || len(lines(t, out)) != 3 || d["ok"] != false || d["errors"] != float64(2) || d["fact"] != nil {
 		t.Fatalf("failed build %d: %s", code, out)
 	}
+	// A module that does not parse ends the same way for build, and with
+	// the summary for check.
+	broken := mkmod(t, demo("package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  return (\n}\n"))
+	out, code = run(t, s1, "build", broken, "-o", hs, "--std", stdDir)
+	if d := last(t, out); code != 1 || len(lines(t, out)) != 2 || lines(t, out)[0]["code"] != "syntax" || d["ok"] != false || d["errors"] != float64(1) || d["fact"] != nil {
+		t.Fatalf("build of a syntax error %d: %s", code, out)
+	}
+	out, code = run(t, s1, "check", broken, "--std", stdDir)
+	if d := last(t, out); code != 1 || d["fact"] != "summary" || d["ok"] != false || d["errors"] != float64(1) {
+		t.Fatalf("check of a syntax error %d: %s", code, out)
+	}
 }
 
 func TestHints(t *testing.T) {
