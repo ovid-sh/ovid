@@ -153,11 +153,11 @@ func main() {
 		}
 		os.Exit(tool.Grep(dirArg(a, 1), a.pos[0], a.vals["pkg"], a.bools["std"], w))
 	case "edit":
-		a := parse(cmd, argv, []string{"C"}, []string{"dry-run", "require-clean", "show"})
+		a := parse(cmd, argv, []string{"C"}, []string{"dry-run", "require-clean", "allow-broken", "show"})
 		if len(a.pos) != 1 {
-			usageErr(cmd, "usage: ovid edit <file|-> [--dry-run] [--require-clean] [--show]; see ovid help edit")
+			usageErr(cmd, "usage: ovid edit <file|-> [--dry-run] [--require-clean|--allow-broken] [--show]; see ovid help edit")
 		}
-		os.Exit(tool.Edit(dirArg(a, 1), a.pos[0], tool.EditOpts{DryRun: a.bools["dry-run"], RequireClean: a.bools["require-clean"], Show: a.bools["show"]}, w))
+		os.Exit(tool.Edit(dirArg(a, 1), a.pos[0], tool.EditOpts{DryRun: a.bools["dry-run"], RequireClean: a.bools["require-clean"], AllowBroken: a.bools["allow-broken"], Show: a.bools["show"]}, w))
 	case "rename":
 		a := parse(cmd, argv, []string{"C"}, []string{"dry-run"})
 		if len(a.pos) != 2 {
@@ -174,7 +174,7 @@ func main() {
 	case "replace", "insert", "append", "delete":
 		// One edit op with its text on stdin (or --text-file), so a shell
 		// heredoc carries code without JSON escaping.
-		a := parse(cmd, argv, []string{"C", "expect", "before", "after", "file", "text-file"}, []string{"dry-run", "require-clean", "show"})
+		a := parse(cmd, argv, []string{"C", "expect", "before", "after", "file", "text-file"}, []string{"dry-run", "require-clean", "allow-broken", "show"})
 		op := tool.EditOp{Op: cmd, Expect: a.vals["expect"], File: a.vals["file"]}
 		from := a.vals["text-file"]
 		if from == "" && cmd != "delete" {
@@ -197,7 +197,7 @@ func main() {
 			}
 			op.ID = a.pos[0]
 		}
-		os.Exit(tool.EditOne(dirArg(a, 1<<30), op, from, tool.EditOpts{DryRun: a.bools["dry-run"], RequireClean: a.bools["require-clean"], Show: a.bools["show"]}, w))
+		os.Exit(tool.EditOne(dirArg(a, 1<<30), op, from, tool.EditOpts{DryRun: a.bools["dry-run"], RequireClean: a.bools["require-clean"], AllowBroken: a.bools["allow-broken"], Show: a.bools["show"]}, w))
 	default:
 		usageErr("", "unknown command "+cmd+"; commands: init check build run test outline show refs grep edit replace insert append delete rename move dump version help")
 	}

@@ -89,10 +89,12 @@ func parseEditReq(raw []byte) (*EditReq, error) {
 	return &req, nil
 }
 
-// EditOpts are edit's flags. Show adds each changed decl's new source to
-// the result.
+// EditOpts are edit's flags. By default an edit that adds check errors is
+// refused; RequireClean also refuses one that leaves any, and AllowBroken
+// writes it anyway (a step in a multi-edit change). Show adds each changed
+// decl's new source to the result.
 type EditOpts struct {
-	DryRun, RequireClean, Show bool
+	DryRun, RequireClean, AllowBroken, Show bool
 }
 
 // Edit applies a batch of ops atomically: all of them or none.
@@ -167,9 +169,12 @@ func runEdit(dir string, req *EditReq, o EditOpts, w io.Writer) int {
 		}
 		sps = append(sps, s...)
 	}
-	guard := guardNone
-	if o.RequireClean {
+	guard := guardNoWorse
+	switch {
+	case o.RequireClean:
 		guard = guardClean
+	case o.AllowBroken:
+		guard = guardNone
 	}
 	return applySplices(w, dir, m, sps, req.Ops, o.DryRun, guard, o.Show, nil)
 }
@@ -237,10 +242,12 @@ func applySplices(w io.Writer, dir string, m *module.Module, sps []*splice, ops 
 		return fail(w, "load", err.Error(), "")
 	}
 	after := runCheck(nm)
-	if (guard == guardClean && len(after.diags) > 0) || (guard == guardNoWorse && len(after.diags) > len(before.diags)) {
+	worse := len(after.diags) > len(before.diags)
+	if (guard == guardClean && len(after.diags) > 0) || (guard == guardNoWorse && worse) {
 		after.writeDiags(w)
 		emit(w, map[string]any{"ok": false, "error": "check", "message": "the change leaves check errors; nothing was written",
-			"errors": len(after.diags), "errors_before": len(before.diags)})
+			"errors": len(after.diags), "errors_before": len(before.diags),
+			"hint": "fix the text, or pass --allow-broken to write it anyway"})
 		return ExitFail
 	}
 	if !dryRun {
@@ -275,6 +282,14 @@ func applySplices(w io.Writer, dir string, m *module.Module, sps []*splice, ops 
 	}
 	for k, v := range extra {
 		res[k] = v
+	}
+	// A dry run asks "would this be fine?": not if it adds errors.
+	if dryRun && worse {
+		res["ok"] = false
+		res["error"] = "check"
+		res["message"] = "the change would add check errors"
+		emit(w, res)
+		return ExitFail
 	}
 	emit(w, res)
 	return ExitOK

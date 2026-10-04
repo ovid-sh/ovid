@@ -772,6 +772,29 @@ func TestConcurrentEdits(t *testing.T) {
 	}
 }
 
+// TestEditFailsClosed: an edit that adds a check error is refused unless
+// --allow-broken, and a dry run of it reports failure.
+func TestEditFailsClosed(t *testing.T) {
+	src := "package demo\n\nimport ovid/io\n\nfunc main(io *ovid/io.Cap) i64 {\n  return 0\n}\n"
+	dir := mkmod(t, demo(src))
+	op := EditOp{Op: "replace", ID: "st:demo.main:1", Text: "return true"}
+	var b bytes.Buffer
+	if code := runEdit(dir, &EditReq{Ops: []EditOp{op}}, EditOpts{}, &b); code != ExitFail || last(t, b.String())["error"] != "check" {
+		t.Fatalf("default: %d %s", code, b.String())
+	}
+	b.Reset()
+	if code := runEdit(dir, &EditReq{Ops: []EditOp{op}}, EditOpts{AllowBroken: true, DryRun: true}, &b); code != ExitFail || last(t, b.String())["ok"] != false {
+		t.Fatalf("dry run: %d %s", code, b.String())
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "demo/main.ov")); string(got) != src {
+		t.Fatalf("written:\n%s", got)
+	}
+	b.Reset()
+	if code := runEdit(dir, &EditReq{Ops: []EditOp{op}}, EditOpts{AllowBroken: true}, &b); code != 0 || last(t, b.String())["check_ok"] != false {
+		t.Fatalf("allow-broken: %d %s", code, b.String())
+	}
+}
+
 func TestMoveManyRollsBack(t *testing.T) {
 	files := map[string]string{
 		"demo/main.ov":    "package demo\n\nimport ovid/io\n\nconst K i64 = 2\n\nfunc main(io *ovid/io.Cap) i64 {\n  return K\n}\n",

@@ -168,9 +168,9 @@ ovid refs <id|name>          {id,kind,in,file,line,col,source} per use; last:
   {"ok":true,target,count,files,by_pkg:{package: n},external}
 ovid grep <regexp> [--pkg P] [--std]
   {file,line,col,match,source,decl,stmt} per match (RE2 syntax).
-ovid edit <file|-> [--dry-run] [--require-clean] [--show]   see: ovid help edit
+ovid edit <file|-> [--dry-run] [--require-clean|--allow-broken] [--show]   see: ovid help edit
 ovid replace <id> | insert --after <id> | insert --before <id> | append <id>
-  | delete <id>   [--expect H] [--text-file F] [--dry-run] [--require-clean]
+  | delete <id>   [--expect H] [--text-file F] [--dry-run] [--require-clean|--allow-broken]
   [--show]
   One edit op; the text is read from stdin (or F), so a heredoc works:
     ovid replace st:app.main:3 <<'EOF'
@@ -226,8 +226,11 @@ Examples:
     {"op":"replace","id":"Sum","expect":"c67681b88f86","text":"func Sum(...) i64 {...}"}
   add a func in a new file: {"op":"append","into":"app/util",
     "file":"app/util/extra.ov","text":"func Half(x i64) i64 {\n  return x / 2\n}"}
---require-clean refuses to write if any check error remains.
---dry-run applies in memory and reports, without writing.
+An edit that adds check errors is refused and nothing is written;
+--require-clean also refuses one that leaves any, and --allow-broken
+writes it anyway (one step of a change that spans several edits).
+--dry-run applies in memory and reports, without writing; it fails
+(ok:false, exit 1) if the change would add errors.
 `
 
 const helpIDs = `Ids name every declaration and node. They are derived from source order,

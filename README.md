@@ -62,8 +62,9 @@ An edit names nodes by id (`fn:pkg.Name`, `st:pkg.Func:3`, ...; see
 `outline`/`show` printed. If that node's text has changed since it was read,
 the edit is refused with exit 2 and the current text, so concurrent agents
 only conflict when they touch the same code. After applying, the module is
-reparsed and checked in memory; `--require-clean` refuses to write if any
-error remains and `--dry-run` never writes.
+reparsed and checked in memory. An edit that adds check errors is refused
+unless it passes `--allow-broken`; `--require-clean` also refuses one that
+leaves any, and `--dry-run` never writes.
 
 ## Language, briefly
 
