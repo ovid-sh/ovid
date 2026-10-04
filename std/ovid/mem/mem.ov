@@ -64,7 +64,7 @@ func New(io *ovid/io.Cap, cap i64) *Buf {
   return b
 }
 
-// Grow makes room for need more bytes; 0, or -1 when the heap is spent.
+// Grow makes room for need more bytes and returns 0.
 func Grow(io *ovid/io.Cap, b *Buf, need i64) i64 {
   if (b.len + need) <= b.cap {
     return 0
@@ -77,9 +77,6 @@ func Grow(io *ovid/io.Cap, b *Buf, need i64) i64 {
     nc = nc * 2
   }
   var nd i64 = ovid/io.Alloc(io, nc)
-  if nd == 0 {
-    return -1
-  }
   Copy(nd, b.data, b.len)
   b.data = nd
   b.cap = nc
@@ -88,9 +85,7 @@ func Grow(io *ovid/io.Cap, b *Buf, need i64) i64 {
 
 // WByte appends the byte c.
 func WByte(io *ovid/io.Cap, b *Buf, c i64) i64 {
-  if Grow(io, b, 1) != 0 {
-    return -1
-  }
+  Grow(io, b, 1)
   store8(b.data + b.len, c)
   b.len = b.len + 1
   return 0
@@ -98,9 +93,7 @@ func WByte(io *ovid/io.Cap, b *Buf, c i64) i64 {
 
 // WBytes appends n bytes at p.
 func WBytes(io *ovid/io.Cap, b *Buf, p i64, n i64) i64 {
-  if Grow(io, b, n) != 0 {
-    return -1
-  }
+  Grow(io, b, n)
   Copy(b.data + b.len, p, n)
   b.len = b.len + n
   return 0

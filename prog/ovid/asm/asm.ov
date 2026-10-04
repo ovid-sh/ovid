@@ -1,47 +1,62 @@
 package ovid/asm
 
 import ovid/io
+import ovid/mem
 
+// Code is the machine code being built. data, labs, fixes, abss, and ro
+// double when full; stab is an open-addressing table over the interned
+// strings (ro offset + 1, length), sized to stay under half full.
 type Code struct {
   data i64
   len i64
   cap i64
   nlab i64
+  labcap i64
   labs i64
   nfix i64
+  fixcap i64
   fixes i64
   nabs i64
+  abscap i64
   abss i64
   ro i64
   ron i64
   rocap i64
-  strs i64
+  stab i64
+  smask i64
   nstr i64
+  io *ovid/io.Cap
 }
 
 func New(io *ovid/io.Cap) *Code {
-  var raw i64 = ovid/io.Alloc(io, sizeof(Code))
-  var c *Code = raw as *Code
-  c.cap = 8388608
+  var c *Code = ovid/io.Alloc(io, sizeof(Code)) as *Code
+  c.io = io
+  c.cap = 65536
   c.data = ovid/io.Alloc(io, c.cap)
-  c.len = 0
-  c.nlab = 0
-  c.labs = ovid/io.Alloc(io, 1600000)
-  c.nfix = 0
-  c.fixes = ovid/io.Alloc(io, 4800000)
-  c.nabs = 0
-  c.abss = ovid/io.Alloc(io, 640000)
-  c.rocap = 2097152
+  c.labcap = 4096
+  c.labs = ovid/io.Alloc(io, c.labcap * 8)
+  c.fixcap = 4096
+  c.fixes = ovid/io.Alloc(io, c.fixcap * 24)
+  c.abscap = 1024
+  c.abss = ovid/io.Alloc(io, c.abscap * 16)
+  c.rocap = 16384
   c.ro = ovid/io.Alloc(io, c.rocap)
-  c.ron = 0
-  c.strs = ovid/io.Alloc(io, 1048576)
-  c.nstr = 0
+  c.smask = 1023
+  c.stab = ovid/io.Alloc(io, (c.smask + 1) * 16)
   return c
+}
+
+// Double returns a zeroed copy of the n bytes at p with room for 2n.
+func Double(c *Code, p i64, n i64) i64 {
+  var d i64 = ovid/io.Alloc(c.io, n * 2)
+  ovid/mem.Copy(d, p, n)
+  return d
 }
 
 func E(c *Code, b i64) i64 {
   if c.len >= c.cap {
-    return -1
+    c.data = Double(c, c.data, c.cap)
+    c.cap = c.cap * 2
   }
   store8(c.data + c.len, b & 255)
   c.len = c.len + 1
@@ -78,6 +93,10 @@ func PutU64(p i64, v i64) i64 {
 
 func NewLabel(c *Code) i64 {
   var id i64 = c.nlab
+  if id >= c.labcap {
+    c.labs = Double(c, c.labs, c.labcap * 8)
+    c.labcap = c.labcap * 2
+  }
   store64(c.labs + (id * 8), 0 - 1)
   c.nlab = id + 1
   return id
@@ -89,6 +108,10 @@ func Mark(c *Code, id i64) i64 {
 }
 
 func AddFix(c *Code, at i64, end i64, lab i64) i64 {
+  if c.nfix >= c.fixcap {
+    c.fixes = Double(c, c.fixes, c.fixcap * 24)
+    c.fixcap = c.fixcap * 2
+  }
   var p i64 = c.fixes + (c.nfix * 24)
   store64(p, at)
   store64(p + 8, end)
@@ -146,6 +169,10 @@ func MovRegImm(c *Code, reg i64, imm i64) i64 {
 }
 
 func AbsHere(c *Code, roOff i64) i64 {
+  if c.nabs >= c.abscap {
+    c.abss = Double(c, c.abss, c.abscap * 16)
+    c.abscap = c.abscap * 2
+  }
   var p i64 = c.abss + (c.nabs * 16)
   store64(p, c.len - 8)
   store64(p + 8, roOff)
@@ -461,46 +488,70 @@ func MovR12MemRsp(c *Code) i64 {
   return 0
 }
 
+func StrHash(p i64, n i64) i64 {
+  var h i64 = 5381
+  var i i64 = 0
+  while i < n {
+    h = ((h << 5) + h) + load8(p + i)
+    i = i + 1
+  }
+  return h
+}
+
+// StrSlot returns the address of the stab slot that holds p[0:n], or of
+// the empty slot where it belongs.
+func StrSlot(c *Code, p i64, n i64) i64 {
+  var h i64 = StrHash(p, n) & c.smask
+  while true {
+    var r i64 = c.stab + (h * 16)
+    var off i64 = load64(r)
+    if off == 0 {
+      return r
+    }
+    if ovid/mem.Eq((c.ro + off) - 1, load64(r + 8), p, n) {
+      return r
+    }
+    h = (h + 1) & c.smask
+  }
+  return 0
+}
+
 // Intern returns the offset of p[0:n] in the read-only pool, adding it
 // (NUL-terminated) the first time. Only identical strings share storage,
 // like the Go compiler's map, so every literal stays NUL-terminated.
 func Intern(c *Code, p i64, n i64) i64 {
-  var i i64 = 0
-  while i < c.nstr {
-    var r i64 = c.strs + (i * 16)
-    if ovidMemEq(c.ro + load64(r), load64(r + 8), p, n) {
-      return load64(r)
-    }
-    i = i + 1
+  var r i64 = StrSlot(c, p, n)
+  if load64(r) != 0 {
+    return load64(r) - 1
+  }
+  while (c.ron + n + 1) > c.rocap {
+    c.ro = Double(c, c.ro, c.rocap)
+    c.rocap = c.rocap * 2
   }
   var off i64 = c.ron
-  var k i64 = 0
-  while k < n {
-    store8(c.ro + off + k, load8(p + k))
-    k = k + 1
-  }
+  ovid/mem.Copy(c.ro + off, p, n)
   store8(c.ro + off + n, 0)
   c.ron = off + n + 1
-  if c.nstr < 65536 {
-    store64(c.strs + (c.nstr * 16), off)
-    store64(c.strs + (c.nstr * 16) + 8, n)
-    c.nstr = c.nstr + 1
+  store64(r, off + 1)
+  store64(r + 8, n)
+  c.nstr = c.nstr + 1
+  if (c.nstr * 2) > c.smask {
+    var old i64 = c.stab
+    var oldn i64 = c.smask + 1
+    c.smask = (oldn * 2) - 1
+    c.stab = ovid/io.Alloc(c.io, oldn * 32)
+    var i i64 = 0
+    while i < oldn {
+      var o i64 = old + (i * 16)
+      if load64(o) != 0 {
+        var d i64 = StrSlot(c, (c.ro + load64(o)) - 1, load64(o + 8))
+        store64(d, load64(o))
+        store64(d + 8, load64(o + 8))
+      }
+      i = i + 1
+    }
   }
   return off
-}
-
-func ovidMemEq(a i64, an i64, b i64, bn i64) bool {
-  if an != bn {
-    return false
-  }
-  var i i64 = 0
-  while i < an {
-    if load8(a + i) != load8(b + i) {
-      return false
-    }
-    i = i + 1
-  }
-  return true
 }
 
 // The image layout shared with ovid/elf: the ELF header and two program

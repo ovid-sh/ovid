@@ -11,7 +11,8 @@ import (
 	"ovid/internal/ir"
 )
 
-// heapSize is the bump heap the runtime maps for every program.
+// heapSize is the first heap region, which the runtime maps for every
+// program; ovid/io.Alloc maps more of the same size when it is spent.
 // The self-hosted compiler emits the same size.
 const heapSize int64 = 128 << 20
 

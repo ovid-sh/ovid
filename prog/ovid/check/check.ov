@@ -34,7 +34,7 @@ type Ch struct {
   fnp i64
   fnn i64
   tab i64
-  tabsz i64
+  tabmask i64
   b *ovid/mem.Buf
   ib *ovid/mem.Buf
   pkg *ovid/parse.Pkg
@@ -216,7 +216,7 @@ func HashStr(p i64, n i64) i64 {
     h = ((h << 5) + h) + load8(p + i)
     i = i + 1
   }
-  return h & 262143
+  return h
 }
 
 // Claim records the id of the decl the checker is at and reports a second
@@ -227,10 +227,8 @@ func Claim(c *Ch) i64 {
   WId(c, c.ib)
   var n i64 = c.ib.len
   var p i64 = c.ib.data
-  var slot i64 = HashStr(p, n)
-  var i i64 = 0
-  while i < c.tabsz {
-    var idx i64 = (slot + i) & 262143
+  var idx i64 = HashStr(p, n) & c.tabmask
+  while true {
     var rec i64 = c.tab + (idx * 16)
     var sp i64 = load64(rec)
     var sn i64 = load64(rec + 8)
@@ -245,9 +243,8 @@ func Claim(c *Ch) i64 {
       Err(c, strptr("duplicate_id"), strlen("duplicate_id"), p, n)
       return 0
     }
-    i = i + 1
+    idx = (idx + 1) & c.tabmask
   }
-  Err(c, strptr("id_table"), strlen("id_table"), strptr("full"), strlen("full"))
   return 0
 }
 
@@ -337,14 +334,6 @@ func FindPkg(c *Ch, pp i64, pn i64) *ovid/parse.Pkg {
     k = k.next
   }
   return k
-}
-
-func FindFunc(c *Ch, pp i64, pn i64, np i64, nn i64) *ovid/parse.Decl {
-  var k *ovid/parse.Pkg = FindPkg(c, pp, pn)
-  if k == 0 as *ovid/parse.Pkg {
-    return 0 as *ovid/parse.Decl
-  }
-  return ovid/parse.FindDecl(k.fs, np, nn)
 }
 
 // CheckPkgConst types a reference pkg.NAME to another package's const.
@@ -555,7 +544,7 @@ func CheckExpr(c *Ch, n *ovid/parse.Node) i64 {
         Err(c, strptr("unknown_package"), strlen("unknown_package"), pp, pn)
       }
     }
-    var fn *ovid/parse.Decl = FindFunc(c, pp, pn, n.fnp, n.fnn)
+    var fn *ovid/parse.Decl = ovid/parse.FindFunc(c.mod, pp, pn, n.fnp, n.fnn)
     var a *ovid/parse.Node = n.args
     if fn == 0 as *ovid/parse.Decl {
       Err(c, strptr("unknown_name"), strlen("unknown_name"), n.fnp, n.fnn)
@@ -791,6 +780,28 @@ func CheckMain(c *Ch) i64 {
   return 0
 }
 
+// CountIds is the number of decl ids Run claims: packages, imports, types
+// and their fields, consts, funcs and their params.
+func CountIds(m *ovid/parse.Mod) i64 {
+  var n i64 = 0
+  var k *ovid/parse.Pkg = m.pkgs
+  while k != 0 as *ovid/parse.Pkg {
+    n = ((n + 1) + ovid/parse.CountDecls(k.ims)) + ovid/parse.CountDecls(k.cs)
+    var d *ovid/parse.Decl = k.ts
+    while d != 0 as *ovid/parse.Decl {
+      n = (n + 1) + ovid/parse.CountDecls(d.sub)
+      d = d.next
+    }
+    d = k.fs
+    while d != 0 as *ovid/parse.Decl {
+      n = (n + 1) + ovid/parse.CountDecls(d.sub)
+      d = d.next
+    }
+    k = k.next
+  }
+  return n
+}
+
 // ClaimDecls claims the id of every decl in the list d of package k; o is
 // the type or func that owns a list of fields or params.
 func ClaimDecls(c *Ch, kind i64, k *ovid/parse.Pkg, d *ovid/parse.Decl, o *ovid/parse.Decl) i64 {
@@ -816,12 +827,16 @@ func Run(io *ovid/io.Cap, m *ovid/parse.Mod, build bool) i64 {
   var c *Ch = ovid/io.Alloc(io, sizeof(Ch)) as *Ch
   c.io = io
   c.mod = m
-  c.tabsz = 262144
   c.b = ovid/mem.New(io, 4096)
   c.ib = ovid/mem.New(io, 256)
   c.env = ovid/io.Alloc(io, 4096 * 32)
   c.mark = ovid/io.Alloc(io, 256 * 8)
-  c.tab = ovid/io.Alloc(io, c.tabsz * 16)
+  var sz i64 = 1024
+  while sz < (CountIds(m) * 2) {
+    sz = sz * 2
+  }
+  c.tabmask = sz - 1
+  c.tab = ovid/io.Alloc(io, sz * 16)
   var npkg i64 = 0
   var k *ovid/parse.Pkg = m.pkgs
   while k != 0 as *ovid/parse.Pkg {

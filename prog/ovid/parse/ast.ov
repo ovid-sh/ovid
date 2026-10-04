@@ -85,7 +85,8 @@ type Node struct {
 
 // Decl is an import (name = path), const, type, field, func, or param.
 // typ is the const/field/param type or the func result; sub holds fields or
-// params.
+// params. A func also has its package (set by IndexFuncs) and, for the code
+// generator, its label and whether it is reachable from main.
 type Decl struct {
   namep i64
   namen i64
@@ -98,6 +99,9 @@ type Decl struct {
   next *Decl
   file *File
   off i64
+  pkg *Pkg
+  lab i64
+  live i64
 }
 
 // Pkg is one package: the merged result of its files.
@@ -143,6 +147,75 @@ func FindDecl(d *Decl, np i64, nn i64) *Decl {
     d = d.next
   }
   return d
+}
+
+func FuncHash(pp i64, pn i64, np i64, nn i64) i64 {
+  var h i64 = 5381
+  var i i64 = 0
+  while i < pn {
+    h = ((h << 5) + h) + load8(pp + i)
+    i = i + 1
+  }
+  h = ((h << 5) + h) + 46
+  i = 0
+  while i < nn {
+    h = ((h << 5) + h) + load8(np + i)
+    i = i + 1
+  }
+  return h
+}
+
+// IndexFuncs builds m.ftab, an open-addressing table from package path and
+// name to the func's Decl, and sets each func's pkg. Of two funcs with one
+// name the first is kept; check reports the second.
+func IndexFuncs(m *Mod) i64 {
+  var total i64 = 0
+  var k *Pkg = m.pkgs
+  while k != 0 as *Pkg {
+    total = total + CountDecls(k.fs)
+    k = k.next
+  }
+  var sz i64 = 64
+  while sz < (total * 2) {
+    sz = sz * 2
+  }
+  m.ftab = ovid/io.Alloc(m.io, sz * 8)
+  m.fmask = sz - 1
+  k = m.pkgs
+  while k != 0 as *Pkg {
+    var f *Decl = k.fs
+    while f != 0 as *Decl {
+      f.pkg = k
+      if FindFunc(m, k.pathp, k.pathn, f.namep, f.namen) == 0 as *Decl {
+        var h i64 = FuncHash(k.pathp, k.pathn, f.namep, f.namen) & m.fmask
+        while load64(m.ftab + (h * 8)) != 0 {
+          h = (h + 1) & m.fmask
+        }
+        store64(m.ftab + (h * 8), f as i64)
+      }
+      f = f.next
+    }
+    k = k.next
+  }
+  return 0
+}
+
+// FindFunc returns func np[0:nn] of package pp[0:pn], or nil.
+func FindFunc(m *Mod, pp i64, pn i64, np i64, nn i64) *Decl {
+  var h i64 = FuncHash(pp, pn, np, nn) & m.fmask
+  while true {
+    var f *Decl = load64(m.ftab + (h * 8)) as *Decl
+    if f == 0 as *Decl {
+      return f
+    }
+    if ovid/mem.Eq(f.namep, f.namen, np, nn) {
+      if ovid/mem.Eq(f.pkg.pathp, f.pkg.pathn, pp, pn) {
+        return f
+      }
+    }
+    h = (h + 1) & m.fmask
+  }
+  return 0 as *Decl
 }
 
 func CountDecls(d *Decl) i64 {
