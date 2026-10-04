@@ -1,0 +1,4 @@
+package util/demo
+func One() i64 {
+  return true // error: type_mismatch 10
+}

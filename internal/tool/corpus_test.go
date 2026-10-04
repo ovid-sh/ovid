@@ -222,8 +222,13 @@ func TestCorpusFail(t *testing.T) {
 					t.Fatalf("tests/%s: more than %d errors", c.name, maxErrors)
 				}
 				if d.Fact == "error" {
-					// Diagnostics name files with the host's separators.
-					d.File = filepath.ToSlash(d.File)
+					// Diagnostics name files relative to the working
+					// directory; make them module-relative like wants.
+					if abs, err := filepath.Abs(d.File); err == nil {
+						if rel, err := filepath.Rel(c.root, abs); err == nil && c.files[filepath.ToSlash(rel)] != "" {
+							d.File = filepath.ToSlash(rel)
+						}
+					}
 					got = append(got, d)
 				}
 			}
@@ -233,7 +238,7 @@ func TestCorpusFail(t *testing.T) {
 				found := false
 				for i, w := range wants {
 					// A diagnostic without a position matches by code alone.
-					here := d.Line == 0 || (d.Line == w.line && (d.File == w.file || strings.HasSuffix(d.File, "/"+w.file)))
+					here := d.Line == 0 || (d.Line == w.line && d.File == w.file)
 					if !met[i] && d.Code == w.code && here && (w.col == 0 || d.Line == 0 || d.Col == w.col) {
 						met[i], found = true, true
 						break
@@ -241,10 +246,8 @@ func TestCorpusFail(t *testing.T) {
 				}
 				if !found {
 					at := d.File
-					for rel, shown := range c.shown {
-						if d.File == rel || strings.HasSuffix(d.File, "/"+rel) {
-							at = shown
-						}
+					if shown, ok := c.shown[d.File]; ok {
+						at = shown
 					}
 					diff = append(diff, fmt.Sprintf("unexpected: %s:%d:%d %s: %s", at, d.Line, d.Col, d.Code, d.Message))
 				}
