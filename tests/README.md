@@ -11,6 +11,11 @@ A case is either
 - a directory with its own `ovid.mod`, for programs that need several files
   or packages. Its comments may sit in any of its `.ov` files.
 
+On Linux x86-64 every case also goes through the self-hosted compiler
+(`TestCorpusSelfHost`): a `run/` program must come out byte-identical from
+both compilers, and a `fail/` program must get the same errors (code, file,
+line, column) from both checkers.
+
 ## `run/`: programs that must build and run
 
 The program must check and build. On Linux x86-64 it is then run and
