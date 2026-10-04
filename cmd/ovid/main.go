@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"ovid/internal/module"
 	"ovid/internal/tool"
 )
 
@@ -89,6 +90,9 @@ func main() {
 		os.Exit(tool.ExitUsage)
 	}
 	cmd, argv := argv[0], argv[1:]
+	if v := os.Getenv(module.PathsEnv); v != "" && v != "cwd" && v != "module" {
+		usageErr("", module.PathsEnv+" is \"cwd\" (the default) or \"module\", got "+strconv.Quote(v))
+	}
 	w := os.Stdout
 	// dirArg picks the module dir: -C, else an optional positional.
 	dirArg := func(a args, maxPos int) string {
