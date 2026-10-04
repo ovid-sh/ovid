@@ -644,9 +644,8 @@ func Four() i64 {
 // TestRunCrash: a program that faults under ovid run gets its exit code
 // passed through, and stderr names the statement and the calls that led to it.
 func TestRunCrash(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("crash sites need ptrace")
-	}
+	// Crash sites need ptrace, and the program is a linux/amd64 binary.
+	needExec(t)
 	dir := mkmod(t, demo(`package demo
 
 import ovid/io

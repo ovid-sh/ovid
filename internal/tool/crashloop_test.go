@@ -4,7 +4,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 )
@@ -13,9 +12,8 @@ import (
 // and a fault in it is still reported at the while, not at the statement
 // the body ended with.
 func TestRunCrashInLoopCondition(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("crash sites need ptrace")
-	}
+	// Crash sites need ptrace, and the program is a linux/amd64 binary.
+	needExec(t)
 	dir := mkmod(t, demo(`package demo
 
 import ovid/io
