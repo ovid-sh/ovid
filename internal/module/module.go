@@ -155,6 +155,9 @@ func LoadOverlay(dir string, overlay map[string][]byte) (*Module, error) {
 			return nil, fmt.Errorf("ovid.mod: unknown directive %q", f[0])
 		}
 	}
+	if st, err := os.Stat(stdDir); stdDir != "" && (err != nil || !st.IsDir()) {
+		return nil, fmt.Errorf("ovid.mod: std directory %s does not exist; fix the path, or delete the std line to use the standard library built into ovid", stdDir)
+	}
 	m.Prog = &ir.Program{Module: m.Name, Entry: m.Entry}
 
 	byPkg := map[string][]*File{}
@@ -287,7 +290,11 @@ func (m *Module) addPackage(pkgPath string, files []*File) {
 		}
 		pkg, perr := syntax.ParseFile(idx, f.Src)
 		if perr != nil {
-			m.Errors = append(m.Errors, m.diagAt(idx, perr.Off, perr.Off, "syntax", perr.Msg, ""))
+			hint := ""
+			if strings.HasPrefix(perr.Msg, "expected package") {
+				hint = "every .ov file starts with `package " + pkgPath + "` (its directory path), then its imports"
+			}
+			m.Errors = append(m.Errors, m.diagAt(idx, perr.Off, perr.Off, "syntax", perr.Msg, hint))
 			continue
 		}
 		if pkg.Path != pkgPath {
