@@ -70,7 +70,7 @@ below. Codes:
 | `expect_required` | an edit names a `st:`/`ex:` id without `expect` (pass `--force` to skip) | `op` |
 | `not_found` | an id or name resolves to nothing | |
 | `ambiguous` | a name resolves to several decls | the hint lists the full ids |
-| `bad_edit` | a malformed op | `op` |
+| `bad_edit` | a malformed op, or a request or op with a key it does not have (misspelled, or in another case) or with the same key twice; nothing was written | `op`, when one op is at fault |
 | `overlap` | two ops of one edit touch the same source | |
 | `std` | the target is in a shipped package | |
 | `bad_name` | a rename target or package path is not an identifier | |

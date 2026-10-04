@@ -1,11 +1,13 @@
 package tool
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -67,29 +69,122 @@ type editErr struct {
 	exit            int
 }
 
-func parseEditReq(raw []byte) (*EditReq, error) {
-	var req EditReq
-	trim := strings.TrimSpace(string(raw))
-	switch {
-	case strings.HasPrefix(trim, "["):
-		if err := json.Unmarshal(raw, &req.Ops); err != nil {
-			return nil, err
+// The keys an edit request and an op may carry. Anything else is refused,
+// not ignored: a misspelled "expect" must not become an unguarded write.
+var (
+	reqKeys = []string{"ops", "revision"}
+	opKeys  = []string{"op", "id", "before", "after", "into", "file", "text", "expect"}
+)
+
+// parseEditReq decodes an edit request strictly: an unknown key, a repeated
+// key, or trailing data fails. op is the index of the op at fault, or -1.
+func parseEditReq(raw []byte) (req *EditReq, op int, err error) {
+	var probe any
+	if err := json.Unmarshal(raw, &probe); err != nil {
+		return nil, -1, err
+	}
+	req = &EditReq{}
+	var ops []json.RawMessage
+	single := false
+	switch probe.(type) {
+	case []any:
+		if err := json.Unmarshal(raw, &ops); err != nil {
+			return nil, -1, err
 		}
-	default:
-		if err := json.Unmarshal(raw, &req); err != nil {
-			return nil, err
+	case map[string]any:
+		keys, vals, err := members(raw)
+		if err != nil {
+			return nil, -1, fmt.Errorf("request: %v", err)
 		}
-		if len(req.Ops) == 0 {
-			var one EditOp
-			if json.Unmarshal(raw, &one) == nil && one.Op != "" {
-				req.Ops = []EditOp{one}
+		if _, isOp := vals["op"]; isOp && vals["ops"] == nil {
+			// One op on its own, which may carry the request's revision.
+			single = true
+			ops = []json.RawMessage{raw}
+		} else {
+			if k := unknownKey(keys, reqKeys); k != "" {
+				return nil, -1, fmt.Errorf("request: unknown key %q; a request has %s", k, strings.Join(reqKeys, ", "))
+			}
+			if v, ok := vals["ops"]; ok {
+				if err := json.Unmarshal(v, &ops); err != nil {
+					return nil, -1, fmt.Errorf("request: ops: %v", err)
+				}
 			}
 		}
+		if v, ok := vals["revision"]; ok {
+			if err := json.Unmarshal(v, &req.Revision); err != nil {
+				return nil, -1, fmt.Errorf("request: revision: %v", err)
+			}
+		}
+	default:
+		return nil, -1, fmt.Errorf("want an object or a list of ops")
 	}
-	if len(req.Ops) == 0 {
-		return nil, fmt.Errorf("no ops")
+	if len(ops) == 0 {
+		return nil, -1, fmt.Errorf("no ops")
 	}
-	return &req, nil
+	allowed := opKeys
+	if single {
+		allowed = append(slices.Clip(opKeys), "revision")
+	}
+	for i, o := range ops {
+		keys, _, err := members(o)
+		if err != nil {
+			return nil, i, fmt.Errorf("op %d: %v", i, err)
+		}
+		if k := unknownKey(keys, allowed); k != "" {
+			return nil, i, fmt.Errorf("op %d: unknown key %q; an op has %s", i, k, strings.Join(opKeys, ", "))
+		}
+		var one EditOp
+		if err := json.Unmarshal(o, &one); err != nil {
+			return nil, i, fmt.Errorf("op %d: %v", i, err)
+		}
+		req.Ops = append(req.Ops, one)
+	}
+	return req, -1, nil
+}
+
+// members reads a JSON object's keys in order and its values by key,
+// refusing a key that appears twice. Keys match exactly: encoding/json
+// alone would take "Expect" for "expect" and keep the last of two "text"s.
+func members(raw []byte) ([]string, map[string]json.RawMessage, error) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	t, err := dec.Token()
+	if err != nil {
+		return nil, nil, err
+	}
+	if d, ok := t.(json.Delim); !ok || d != '{' {
+		return nil, nil, fmt.Errorf("want an object, got %s", bytes.TrimSpace(raw))
+	}
+	var keys []string
+	vals := map[string]json.RawMessage{}
+	for dec.More() {
+		t, err := dec.Token()
+		if err != nil {
+			return nil, nil, err
+		}
+		k, _ := t.(string)
+		var v json.RawMessage
+		if err := dec.Decode(&v); err != nil {
+			return nil, nil, err
+		}
+		if _, dup := vals[k]; dup {
+			return nil, nil, fmt.Errorf("key %q appears twice", k)
+		}
+		keys = append(keys, k)
+		vals[k] = v
+	}
+	if _, err := dec.Token(); err != nil {
+		return nil, nil, err
+	}
+	return keys, vals, nil
+}
+
+func unknownKey(keys, allowed []string) string {
+	for _, k := range keys {
+		if !slices.Contains(allowed, k) {
+			return k
+		}
+	}
+	return ""
 }
 
 // EditOpts are edit's flags. By default an edit that adds check errors is
@@ -112,9 +207,15 @@ func Edit(dir, src string, o EditOpts, w io.Writer) int {
 	if err != nil {
 		return fail(w, "read", err.Error(), "pass a file path, or - to read the edit from stdin")
 	}
-	req, err := parseEditReq(raw)
+	req, op, err := parseEditReq(raw)
 	if err != nil {
-		return fail(w, "bad_edit", err.Error(), `want {"ops":[{"op":"replace","id":"...","text":"..."}]}; see ovid help edit`)
+		r := map[string]any{"ok": false, "error": "bad_edit", "message": err.Error() + "; nothing was written",
+			"hint": `want {"ops":[{"op":"replace","id":"...","expect":"...","text":"..."}]}; see ovid help edit`}
+		if op >= 0 {
+			r["op"] = op
+		}
+		emit(w, r)
+		return ExitFail
 	}
 	return runEdit(dir, req, o, w)
 }

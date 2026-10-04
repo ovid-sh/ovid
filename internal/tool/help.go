@@ -213,6 +213,8 @@ Input (a file, or - for stdin) is {"ops":[...]} or a bare list of ops:
   {"op":"insert","before":ID,"text":SRC}      or "after":ID
   {"op":"append","into":FUNC_OR_IF_OR_WHILE_ID,"text":STMTS}
   {"op":"append","into":"pkg/path","text":DECLS[,"file":"pkg/path/x.ov"]}
+Keys are exact: one that is not listed here, or one given twice, fails
+with bad_edit and names it; nothing is written.
 Any op may carry "expect":HASH (from outline/show); if that node's text has
 changed the edit is refused with exit 2 and the current hash and text.
 A top-level "revision" (from check/outline) guards the whole module instead.

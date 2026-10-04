@@ -512,6 +512,44 @@ func TestEditFixAndStale(t *testing.T) {
 	}
 }
 
+// TestEditStrictKeys: an unknown or repeated key in a request is refused
+// before anything is written, naming the key and the op (#31).
+func TestEditStrictKeys(t *testing.T) {
+	src := "package demo\n\nimport ovid/io\n\nfunc main(io *ovid/io.Cap) i64 {\n  return 0\n}\n"
+	dir := mkmod(t, demo(src))
+	h := hashOf(t, dir, "fn:demo.main")
+	body := `"func main(io *ovid/io.Cap) i64 {\n  return 1\n}"`
+	for _, c := range []struct {
+		name, req, key string
+		op             any
+	}{
+		{"misspelled expect", `{"ops":[{"op":"replace","id":"fn:demo.main","expcet":"` + h + `","text":` + body + `}]}`, `"expcet"`, 0.0},
+		{"expect in another case", `[{"op":"replace","id":"main","Expect":"` + h + `","text":` + body + `}]`, `"Expect"`, 0.0},
+		{"repeated text", `{"ops":[{"op":"replace","id":"main","expect":"` + h + `","text":` + body + `,"text":"func main(io *ovid/io.Cap) i64 {\n  return 2\n}"}]}`, `"text" appears twice`, 0.0},
+		{"second op", `{"ops":[{"op":"replace","id":"st:demo.main:1","expect":"` + h + `","text":"return 1"},{"op":"delete","idd":"st:demo.main:1"}]}`, `"idd"`, 1.0},
+		{"one op on its own", `{"op":"replace","id":"main","expect":"` + h + `","txet":` + body + `}`, `"txet"`, 0.0},
+		{"request key", `{"revison":"0123456789abcdef","ops":[{"op":"replace","id":"main","expect":"` + h + `","text":` + body + `}]}`, `"revison"`, nil},
+		{"repeated ops", `{"ops":[],"ops":[{"op":"delete","id":"main","expect":"` + h + `"}]}`, `"ops" appears twice`, nil},
+	} {
+		p := filepath.Join(t.TempDir(), "edit.json")
+		os.WriteFile(p, []byte(c.req), 0o644)
+		var b bytes.Buffer
+		code := Edit(dir, p, EditOpts{}, &b)
+		r := last(t, b.String())
+		if code != ExitFail || r["error"] != "bad_edit" || r["op"] != c.op || !strings.Contains(fmt.Sprint(r["message"]), c.key) {
+			t.Errorf("%s: %d %s", c.name, code, b.String())
+		}
+		if got, _ := os.ReadFile(filepath.Join(dir, "demo/main.ov")); string(got) != src {
+			t.Fatalf("%s: written:\n%s", c.name, got)
+		}
+	}
+	// The same request spelled right goes through.
+	r, code := editJSON(t, dir, map[string]any{"op": "replace", "id": "main", "expect": h, "text": "func main(io *ovid/io.Cap) i64 {\n  return 1\n}"})
+	if code != 0 || r["written"] != true {
+		t.Fatalf("well-formed: %d %v", code, r)
+	}
+}
+
 func buildRunDir(t *testing.T, dir string) (string, int) {
 	t.Helper()
 	bin := filepath.Join(dir, "bin", "demo")
