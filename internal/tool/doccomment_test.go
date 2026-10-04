@@ -110,6 +110,65 @@ func TestDocCommentInsert(t *testing.T) {
 		t.Fatalf("append: %d %s", code, b.String())
 	}
 	wantFile(t, dir, docSrc+"\n"+k2+"\n")
+	if got := showJSON(t, dir, "K2"); got["doc"] != "K2 is new." || got["text"] != k2 {
+		t.Fatalf("show K2: %v", got)
+	}
+}
+
+func showJSON(t *testing.T, dir, id string) map[string]any {
+	t.Helper()
+	var b bytes.Buffer
+	if code := Show(dir, []string{id}, true, true, false, &b); code != 0 {
+		t.Fatalf("show %s: %s", id, b.String())
+	}
+	return lines(t, b.String())[0]
+}
+
+// TestDocCommentShow: show prints the doc comment, and its header and
+// JSON say where it starts.
+func TestDocCommentShow(t *testing.T) {
+	t.Setenv("OVID_PATHS", "module")
+	dir := mkmod(t, demo(docSrc))
+	h := hashOf(t, dir, "fn:demo.H")
+	var b bytes.Buffer
+	Show(dir, []string{"H"}, true, false, false, &b)
+	want := "// func fn:demo.H demo/main.ov:10-14 hash=" + h + "\n" +
+		"// H returns zero.\n// It is never more.\nfunc H() i64 {  // @fn:demo.H\n  return 0  // @st:demo.H:1\n}\n"
+	if b.String() != want {
+		t.Fatalf("show H:\n%s\nwant:\n%s", b.String(), want)
+	}
+	r := showJSON(t, dir, "H")
+	if r["text"] != "// H returns zero.\n// It is never more.\nfunc H() i64 {\n  return 0\n}" || r["doc"] != "H returns zero. It is never more." ||
+		r["doc_line"] != 10.0 || r["line"] != 12.0 || r["end_line"] != 14.0 {
+		t.Fatalf("show --json H: %v", r)
+	}
+	// No doc comment: no doc keys, and the loose note is not printed.
+	r = showJSON(t, dir, "K")
+	if _, ok := r["doc"]; ok || r["doc_line"] != nil || r["text"] != "func K() i64 {\n  return 2\n}" {
+		t.Fatalf("show --json K: %v", r)
+	}
+	b.Reset()
+	Show(dir, []string{"K"}, false, false, false, &b)
+	if strings.Contains(b.String(), "loose") || !strings.Contains(b.String(), ":18-20 hash=") {
+		t.Fatalf("show K:\n%s", b.String())
+	}
+	// outline's doc is the same comment.
+	b.Reset()
+	Outline(dir, "demo", false, false, &b)
+	for _, d := range lines(t, b.String()) {
+		if d["id"] == "fn:demo.H" && (d["doc"] != "H returns zero. It is never more." || d["line"] != 12.0) {
+			t.Fatalf("outline H: %v", d)
+		}
+		if d["id"] == "fn:demo.K" && d["doc"] != nil {
+			t.Fatalf("outline K: %v", d)
+		}
+	}
+	// grep places a match in a doc comment in its decl.
+	b.Reset()
+	Grep(dir, "never more", "", false, 0, 0, &b)
+	if g := lines(t, b.String())[0]; g["decl"] != "fn:demo.H" {
+		t.Fatalf("grep: %s", b.String())
+	}
 }
 
 // TestDocCommentHash: a decl's hash covers its doc comment, so an edit
@@ -153,5 +212,8 @@ func TestDocCommentMove(t *testing.T) {
 	util, _ := os.ReadFile(filepath.Join(dir, "demo/util/util.ov"))
 	if want := "package demo/util\n\n// H returns zero.\n// It is never more.\nfunc H() i64 {\n  return 0\n}\n"; string(util) != want {
 		t.Fatalf("util.ov:\n%s", util)
+	}
+	if r := showJSON(t, dir, "fn:demo/util.H"); r["doc"] != "H returns zero. It is never more." {
+		t.Fatalf("show moved H: %v", r)
 	}
 }

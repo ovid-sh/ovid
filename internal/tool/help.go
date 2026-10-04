@@ -196,10 +196,14 @@ ovid outline [--pkg P] [--all] [--uses]
 ovid show <id|name>... [--plain] [--json] [--exprs]
   Text: "// kind id file:a-b hash=H in=decl type=T" then the source, with
   "  // @id" after each line where a statement starts (--plain omits them).
+  A decl's source starts at its doc comment, and a-b covers it.
   For a statement or expression (a decl with --exprs), one line per
   expression inside it follows: "//   ex:id line:col text  hash=H type=T",
-  in source order, outer before inner. --json: "exprs":[{id,line,col,text,
-  hash,type}]. Replace one by id to change part of a statement.
+  in source order, outer before inner. --json: {id,kind,file,line,end_line,
+  hash,decl,parent,text,sig,type}, plus doc and doc_line (where it starts;
+  line is the decl's own first line) for a decl with a doc comment, and
+  "exprs":[{id,line,col,text,hash,type}]. Replace one by id to change part
+  of a statement.
 ovid refs <id|name>          {id,kind,in,file,line,col,source} per use, in
   source order: the names the checker resolved to it, so a field or local
   spelled like a type, func, or const is not a use of it; last:
@@ -274,9 +278,9 @@ decls; to change part of a statement, replace one of its expressions (ovid
 show <stmt> lists them with ids and hashes).
 
 A func's, type's, or const's doc comment (the // lines directly above it,
-no blank line between) is part of it: replace puts the text's own doc
-comment in its place, so text without one removes it; delete removes it;
-insert before puts the new text above it.
+no blank line between) is part of it, as ovid show prints it: replace puts
+the text's own doc comment in its place, so text without one removes it;
+delete removes it; insert before puts the new text above it.
 
 After applying, the module is reparsed (a syntax error rejects everything
 and names the op) and checked. Result: {"ok":true,"written","files",
