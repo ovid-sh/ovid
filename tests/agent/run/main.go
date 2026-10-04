@@ -52,7 +52,7 @@ type Result struct {
 
 // Agent is what one Claude Code process reported.
 type Agent struct {
-	Prompt    string   `json:"prompt_sha256"`
+	Prompt    string   `json:"prompt_sha256"` // of preamble.md and the task's prompt, before {{dir}} is filled in
 	Model     string   `json:"model"`
 	Stop      string   `json:"stop"` // the result's subtype: success, error_max_turns, ...
 	Turns     int      `json:"turns"`
@@ -179,6 +179,7 @@ func runTask(t agent.Task, i int, repo, bin, ovid, pre, model string, budget flo
 			prompt := strings.ReplaceAll(pre, "{{dir}}", work) + p
 			tr := filepath.Join(out, "transcripts", fmt.Sprintf("%s-%c.jsonl", name, 'a'+k))
 			r.Agents[k] = runAgent(ctx, work, bin, prompt, model, budget, tr, repo)
+			r.Agents[k].Prompt = sha(pre + p)
 		}(k, p)
 	}
 	wg.Wait()
@@ -204,7 +205,7 @@ var ovidCmd = regexp.MustCompile(`(^|[\s;&|(])ovid\s`)
 
 // runAgent runs one Claude Code process in work and reads its stream.
 func runAgent(ctx context.Context, work, bin, prompt, model string, budget float64, transcript, repo string) Agent {
-	a := Agent{Prompt: sha(prompt)}
+	var a Agent
 	args := []string{"-p", "--bare", "--output-format", "stream-json", "--verbose",
 		"--tools", "Bash,Read,Write,Edit", "--permission-mode", "bypassPermissions",
 		"--no-session-persistence", "--max-budget-usd", fmt.Sprint(budget)}
