@@ -411,10 +411,14 @@ func (m *Module) Text(s ir.Span) string {
 
 // Hash is a short content hash of an id's source text. Edits that name it
 // are rejected when the text has changed. A declaration's text includes its
-// name, so its hash is the text's alone. A statement's or expression's also
-// covers the declaration it is in and which of the identical-text nodes
-// there it is, so a stale st:/ex: id that now lands on a text-identical
-// sibling does not match. It is a staleness check, not a cache key.
+// name, so its hash is the text's alone. A statement's or expression's id
+// is a position, so its hash is bound to the whole declaration it is in:
+// it covers the decl's id and full text, its own kind and text, and which
+// of the identical-text nodes there it is. Any change to that decl, even
+// one elsewhere in it, changes the hash of every statement in it, so a
+// stale st:/ex: id never matches, not even on a text-identical twin that
+// inherited its position; a change to another decl changes nothing. It is
+// a staleness check, not a cache key.
 func (m *Module) Hash(id string) string {
 	if m.hashes == nil {
 		m.hashes = map[string]string{}
@@ -425,7 +429,9 @@ func (m *Module) Hash(id string) string {
 			in := text
 			if l.Kind == "stmt" || l.Kind == "expr" {
 				k := l.Kind + "\x00" + l.Decl + "\x00" + text
-				in = fmt.Sprintf("%s\x00%d", k, seen[k])
+				// The decl's digest, which covers its text; it precedes its
+				// statements in Order, so it is already known.
+				in = fmt.Sprintf("%s\x00%d\x00%s", k, seen[k], m.hashes[l.Decl])
 				seen[k]++
 			}
 			sum := sha256.Sum256([]byte(in))

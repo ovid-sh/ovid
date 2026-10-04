@@ -220,8 +220,12 @@ changed the edit is refused with exit 2 and the current hash and text.
 A top-level "revision" (from check/outline) guards the whole module instead.
 An op on a st:/ex: id must carry one: those ids are positions, renumbered
 by any insert above them. The node's own hash or its decl's (the one in
-the header ovid show prints) both work; a hash that now belongs to another
-node of the decl is refused and names that node. --force skips expect.
+the header ovid show prints) both work, and both are bound to the decl as
+it was read: after any change to that decl the edit is stale, so a retried
+or late edit never lands on the statement that took its id, not even an
+identical twin. Edits to different decls do not disturb each other. Re-read
+with ovid show (or use the decl hash in the last receipt). A current hash
+passed with the wrong id is refused and names its node. --force skips expect.
 
 ID may be a full id or a decl name (Sum, util.Sum). Text is plain Ovid; its
 indentation is normalised to the target's. insert anchors on statements and
@@ -263,7 +267,9 @@ Commands that take an id also take a name: Sum, util.Sum (a trailing part of
 the package path), app/util.Sum, Pair.next (a field), Sum.n (a param).
 A hash is a short digest of a node's source text: edits use it to refuse
 writing over text that changed since it was read. A st:/ex: id is a
-position, so an edit to one must carry the hash (see ovid help edit).
+position, so its hash also covers the whole decl it is in: any change to
+that decl, anywhere in it, makes every statement hash read before it stale,
+while a change to another decl leaves them alone (see ovid help edit).
 `
 
 // Help prints a help topic as plain text.

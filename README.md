@@ -63,7 +63,9 @@ An edit names nodes by id (`fn:pkg.Name`, `st:pkg.Func:3`, ...; see
 the hash that `outline`/`show` printed. If that node's text has changed
 since it was read, the edit is refused with exit 2 and the current text.
 Statement and expression ids are positions that an insert renumbers, so an
-edit to one must carry a hash. After applying, the module is reparsed and
+edit to one must carry a hash, and that hash covers the whole decl around
+it: after any change to that decl the edit is refused, so it cannot land on
+a statement that took the id, while edits to other decls are unaffected. After applying, the module is reparsed and
 checked in memory. An edit that adds check errors is refused unless
 `--allow-broken` is given; `--require-clean` also refuses one that leaves
 any, and `--dry-run` never writes.

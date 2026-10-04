@@ -113,9 +113,17 @@ delete above them; an edit to one must carry `expect`. `show` of a
 statement lists the `ex:` ids inside it with their hashes (`--exprs` does it
 for a whole decl), so one expression can be replaced on its own.
 
-A hash is 12 hex digits. A decl's hash covers its text; a statement's or
-expression's also covers its kind, its decl, and which occurrence of that
-text it is, so two identical statements hash differently. `revision`
+A hash is 12 hex digits. A decl's hash covers its text. A statement's or
+expression's covers its kind, its text, which occurrence of that text in
+its decl it is (so two identical statements hash differently), and the
+decl's id and **whole text**. A positional hash is therefore bound to the
+decl as it was read: any change to that decl, even one far from the node,
+changes every statement and expression hash in it, so an edit guarded by
+one read before the change is stale (exit 2) instead of landing on whatever
+now has the id, such as the twin of a deleted statement. A change to
+another decl changes none of them, so agents editing different functions
+do not disturb each other. An edit to a `st:`/`ex:` id may `expect` its own
+hash or its decl's; the two are equally strict. `revision`
 (16 hex digits) covers everything a build reads: `ovid.mod`, every file of
 the module, and the files of the shipped packages the module imports, so a
 new toolchain with a changed standard library moves it too. Both are the

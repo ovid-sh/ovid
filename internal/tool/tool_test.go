@@ -462,12 +462,155 @@ func TestPositionalIDsNeedExpect(t *testing.T) {
 	b.Reset()
 	del.Expect = read
 	if code := runEdit(dir, &EditReq{Ops: []EditOp{del}}, EditOpts{}, &b); code != ExitStale ||
-		!strings.Contains(fmt.Sprint(last(t, b.String())["message"]), "belongs to st:demo.main:2") {
+		!strings.Contains(fmt.Sprint(last(t, b.String())["message"]), "changed since you read") ||
+		last(t, b.String())["hash"] != hashOf(t, dir, "st:demo.main:1") || last(t, b.String())["decl_hash"] != hashOf(t, dir, "fn:demo.main") {
 		t.Fatalf("stale id: %d %s", code, b.String())
+	}
+	// A current hash passed with the wrong id names the node it belongs to.
+	b.Reset()
+	wrong := EditOp{Op: "delete", ID: "st:demo.main:1", Expect: hashOf(t, dir, "st:demo.main:2")}
+	if code := runEdit(dir, &EditReq{Ops: []EditOp{wrong}}, EditOpts{}, &b); code != ExitStale ||
+		!strings.Contains(fmt.Sprint(last(t, b.String())["message"]), "belongs to st:demo.main:2") {
+		t.Fatalf("wrong id: %d %s", code, b.String())
 	}
 	b.Reset()
 	if code := runEdit(dir, &EditReq{Ops: []EditOp{del}}, EditOpts{Force: true, AllowBroken: true}, &b); code != 0 {
 		t.Fatalf("force: %d %s", code, b.String())
+	}
+}
+
+const twinSrc = "package demo\n\nimport ovid/io\n\nfunc G() i64 {\n  var x i64 = 0\n  x = x + 1\n  x = x + 1\n  return x\n}\n\nfunc H() i64 {\n  var y i64 = 0\n  y = y + 1\n  return y\n}\n\nfunc main(io *ovid/io.Cap) i64 {\n  return G() + H()\n}\n"
+
+// stmtsWith lists the statements of decl whose text is text, in order.
+func stmtsWith(t *testing.T, dir, decl, text string) []string {
+	t.Helper()
+	m, err := module.Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, id := range m.Order {
+		if l := m.Index[id]; l.Kind == "stmt" && l.Decl == decl && m.Text(l.Span) == text {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+func mainOv(t *testing.T, dir string) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(dir, "demo/main.ov"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+// edit1 runs one op with no flags.
+func edit1(t *testing.T, dir string, op EditOp) (int, map[string]any) {
+	t.Helper()
+	var b bytes.Buffer
+	code := runEdit(dir, &EditReq{Ops: []EditOp{op}}, EditOpts{}, &b)
+	return code, last(t, b.String())
+}
+
+// refused asserts that op is refused as stale and writes nothing.
+func refused(t *testing.T, dir string, op EditOp) {
+	t.Helper()
+	before := mainOv(t, dir)
+	code, r := edit1(t, dir, op)
+	if code != ExitStale || r["error"] != "stale" || r["id"] != op.ID || r["hash"] == op.Expect {
+		t.Fatalf("stale %v not refused: %d %v", op, code, r)
+	}
+	if after := mainOv(t, dir); after != before {
+		t.Fatalf("a refused edit wrote:\n%s", after)
+	}
+}
+
+// TestStaleTwin: a st: hash is bound to its decl, so a request read before
+// the decl changed is refused, and never lands on a text-identical twin
+// that now has its id (#22).
+func TestStaleTwin(t *testing.T) {
+	t.Run("delete replayed after it deleted one twin", func(t *testing.T) {
+		dir := mkmod(t, demo(twinSrc))
+		twins := stmtsWith(t, dir, "fn:demo.G", "x = x + 1")
+		del := EditOp{Op: "delete", ID: twins[0], Expect: hashOf(t, dir, twins[0])}
+		if code, r := edit1(t, dir, del); code != 0 {
+			t.Fatalf("delete: %d %v", code, r)
+		}
+		// The survivor now has the deleted twin's id; a retry of the same
+		// request (its answer lost, say) must not delete it too.
+		if got := stmtsWith(t, dir, "fn:demo.G", "x = x + 1"); len(got) != 1 || got[0] != twins[0] {
+			t.Fatalf("survivor %v", got)
+		}
+		refused(t, dir, del)
+		// With the decl's hash read before, too.
+		refused(t, dir, EditOp{Op: "delete", ID: twins[0], Expect: hashOf(t, mkmod(t, demo(twinSrc)), "fn:demo.G")})
+	})
+	t.Run("replace after another agent deleted a twin", func(t *testing.T) {
+		dir := mkmod(t, demo(twinSrc))
+		twins := stmtsWith(t, dir, "fn:demo.G", "x = x + 1")
+		rep := EditOp{Op: "replace", ID: twins[0], Expect: hashOf(t, dir, twins[0]), Text: "x = x + 2"}
+		if code, r := edit1(t, dir, EditOp{Op: "delete", ID: twins[0], Expect: hashOf(t, dir, twins[0])}); code != 0 {
+			t.Fatalf("delete: %d %v", code, r)
+		}
+		refused(t, dir, rep)
+	})
+	t.Run("after a twin was inserted above", func(t *testing.T) {
+		dir := mkmod(t, demo(twinSrc))
+		first := stmtsWith(t, dir, "fn:demo.G", "x = x + 1")[0]
+		del := EditOp{Op: "delete", ID: first, Expect: hashOf(t, dir, first)}
+		rep := EditOp{Op: "replace", ID: first, Expect: hashOf(t, dir, first), Text: "x = x + 2"}
+		ins := EditOp{Op: "insert", Before: first, Expect: hashOf(t, dir, "fn:demo.G"), Text: "x = x + 1"}
+		if code, r := edit1(t, dir, ins); code != 0 {
+			t.Fatalf("insert: %d %v", code, r)
+		}
+		refused(t, dir, del)
+		refused(t, dir, rep)
+	})
+	t.Run("after the statements were reordered", func(t *testing.T) {
+		src := strings.Replace(twinSrc, "  x = x + 1\n  x = x + 1\n", "  x = x + 1\n  x = x * 2\n  x = x + 1\n", 1)
+		dir := mkmod(t, demo(src))
+		second := stmtsWith(t, dir, "fn:demo.G", "x = x + 1")[1]
+		rep := EditOp{Op: "replace", ID: second, Expect: hashOf(t, dir, second), Text: "x = x + 2"}
+		reorder := EditOp{Op: "replace", ID: "fn:demo.G", Expect: hashOf(t, dir, "fn:demo.G"),
+			Text: "func G() i64 {\n  var x i64 = 0\n  x = x * 2\n  x = x + 1\n  x = x + 1\n  return x\n}"}
+		if code, r := edit1(t, dir, reorder); code != 0 {
+			t.Fatalf("reorder: %d %v", code, r)
+		}
+		refused(t, dir, rep)
+		refused(t, dir, EditOp{Op: "delete", ID: second, Expect: rep.Expect})
+	})
+}
+
+// TestGuardsPerDecl: edits to different funcs, each guarded by what was
+// read before either ran, both go through; of two edits to the same func
+// read at the same time, the second is refused.
+func TestGuardsPerDecl(t *testing.T) {
+	dir := mkmod(t, demo(twinSrc))
+	g := stmtsWith(t, dir, "fn:demo.G", "var x i64 = 0")[0]
+	h := stmtsWith(t, dir, "fn:demo.H", "y = y + 1")[0]
+	opG := EditOp{Op: "replace", ID: g, Expect: hashOf(t, dir, g), Text: "var x i64 = 5"}
+	opH := EditOp{Op: "replace", ID: h, Expect: hashOf(t, dir, h), Text: "y = y + 2"}
+	if code, r := edit1(t, dir, opG); code != 0 {
+		t.Fatalf("G: %d %v", code, r)
+	}
+	if code, r := edit1(t, dir, opH); code != 0 {
+		t.Fatalf("H after G: %d %v", code, r)
+	}
+	// Two agents read G; one changes its first statement, the other its
+	// last. The second is refused, whichever hash it holds.
+	ret := stmtsWith(t, dir, "fn:demo.G", "return x")[0]
+	viaStmt := EditOp{Op: "replace", ID: ret, Expect: hashOf(t, dir, ret), Text: "return x + 1"}
+	viaDecl := EditOp{Op: "replace", ID: ret, Expect: hashOf(t, dir, "fn:demo.G"), Text: "return x + 1"}
+	first := EditOp{Op: "replace", ID: g, Expect: hashOf(t, dir, g), Text: "var x i64 = 6"}
+	if code, r := edit1(t, dir, first); code != 0 {
+		t.Fatalf("first: %d %v", code, r)
+	}
+	refused(t, dir, viaStmt)
+	refused(t, dir, viaDecl)
+	if src := mainOv(t, dir); !strings.Contains(src, "var x i64 = 6\n") || !strings.Contains(src, "y = y + 2\n") || !strings.Contains(src, "  return x\n") {
+		t.Fatalf("source:\n%s", src)
 	}
 }
 

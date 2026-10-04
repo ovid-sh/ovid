@@ -461,14 +461,18 @@ func checkExpect(m *module.Module, l *module.Loc, expect string, force bool) *ed
 	extra := map[string]any{"id": l.ID, "hash": m.Hash(l.ID), "text": m.Text(l.Span)}
 	if positional {
 		extra["decl"], extra["decl_hash"] = l.Decl, m.Hash(l.Decl)
-		// A hash of a neighbour means the id moved, not that the code did.
+		// A statement's hash is bound to its decl as it is now, so this is
+		// an id and a hash read together but passed apart, not a move.
 		for _, id := range m.Order {
 			if o := m.Index[id]; o.Decl == l.Decl && o.ID != l.ID && m.Hash(id) == expect {
 				return &editErr{code: "stale", exit: ExitStale, extra: extra,
-					msg:  "that hash belongs to " + id + ", not " + l.ID + "; statement ids are renumbered when statements are added or removed",
+					msg:  "that hash belongs to " + id + ", not " + l.ID,
 					hint: "edit " + id + " if that is the node you read, or re-read with `ovid show " + l.Decl + "`"}
 			}
 		}
+		return &editErr{code: "stale", exit: ExitStale, extra: extra,
+			msg:  l.Decl + " changed since you read " + l.ID + "; a statement's hash covers its whole decl, and st:/ex: ids are renumbered by edits above them",
+			hint: "re-read with `ovid show " + l.Decl + "` and use the ids and hashes it prints now; text and hash here are " + l.ID + "'s current ones"}
 	}
 	return &editErr{code: "stale", msg: l.ID + " changed since you read it", exit: ExitStale, extra: extra,
 		hint: "re-read with `ovid show`; text has the current source"}
