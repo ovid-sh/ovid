@@ -44,7 +44,7 @@ Every command prints JSON lines and the last line has `"ok"`. Exit codes:
 | `ovid build [-o out]` / `ovid run [-- args]` | compile; run passes stdio and the exit code through and reports a death by signal on stderr, on Linux with the statement and call stack |
 | `ovid test [--run substr] [--list]` | each `TestX(io *ovid/io.Cap) i64` in its own process; 0 passes; a failure names the `return` that produced it, a crash its signal (on Linux, the statement and call stack) |
 | `ovid outline [--pkg P]` | packages, or a package's decls with signature, doc, struct size, lines, hash |
-| `ovid show <id\|name>... [--plain]` | source of a node, each statement line tagged with its id |
+| `ovid show <id\|name>... [--plain] [--exprs]` | source of a node, each statement line tagged with its id; a statement's expressions listed with ids and hashes |
 | `ovid refs <id\|name>` | every use of a func, type, field, const, param, or local |
 | `ovid grep <regexp>` | text matches, each tagged with its enclosing decl and statement id |
 | `ovid edit <file\|-> [--show]` | batch of replace/delete/insert/append ops, all or nothing; returns new ids and hashes |

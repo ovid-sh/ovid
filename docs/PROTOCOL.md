@@ -109,7 +109,9 @@ does not match its directory, or a file sits in the module root). From the check
 `ovid help ids` gives the id forms. Decl ids (`fn:`, `ty:`, `cn:`, `fld:`,
 `pa:`, `pkg:`, `im:`) are names and survive edits elsewhere. `st:` and `ex:`
 ids are positions, counted per function, and are renumbered by any insert or
-delete above them; an edit to one must carry `expect`.
+delete above them; an edit to one must carry `expect`. `show` of a
+statement lists the `ex:` ids inside it with their hashes (`--exprs` does it
+for a whole decl), so one expression can be replaced on its own.
 
 A hash is 12 hex digits. A decl's hash covers its text; a statement's or
 expression's also covers its kind, its decl, and which occurrence of that

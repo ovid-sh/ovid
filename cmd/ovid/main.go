@@ -136,11 +136,11 @@ func main() {
 		a := parse(cmd, argv, []string{"C", "pkg"}, []string{"all", "uses"})
 		os.Exit(tool.Outline(dirArg(a, 0), a.vals["pkg"], a.bools["all"], a.bools["uses"], w))
 	case "show":
-		a := parse(cmd, argv, []string{"C"}, []string{"ids", "plain", "json"})
+		a := parse(cmd, argv, []string{"C"}, []string{"ids", "plain", "json", "exprs"})
 		if len(a.pos) == 0 {
-			usageErr(cmd, "usage: ovid show <id|name>... [--plain] [--json]")
+			usageErr(cmd, "usage: ovid show <id|name>... [--plain] [--json] [--exprs]")
 		}
-		os.Exit(tool.Show(dirArg(a, 1<<30), a.pos, !a.bools["plain"], a.bools["json"], w))
+		os.Exit(tool.Show(dirArg(a, 1<<30), a.pos, !a.bools["plain"], a.bools["json"], a.bools["exprs"], w))
 	case "refs":
 		a := parse(cmd, argv, []string{"C"}, nil)
 		if len(a.pos) != 1 {
