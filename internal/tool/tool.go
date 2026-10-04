@@ -176,6 +176,37 @@ func Build(dir, out string, w io.Writer) int {
 // ovid writes one JSON line to stderr saying which, and for a fault the
 // statement and calls it died in, and exits 128 + the signal number.
 func Run(dir string, args []string, w io.Writer) int {
+	return RunWith(dir, args, RunOpts{}, w)
+}
+
+// RunOpts changes how run runs the program.
+type RunOpts struct {
+	// JSON captures the program's output and reports how it ended as one
+	// last line on w, in place of passing stdio and the exit code through.
+	JSON bool
+	// Timeout ends the program after this long; 0 is no limit.
+	Timeout time.Duration
+	// MaxOutput is how many bytes of stdout, and of stderr, the JSON record
+	// keeps; 0 is DefaultRunOutput.
+	MaxOutput int
+}
+
+// DefaultRunOutput is how much of each output stream run --json keeps.
+const DefaultRunOutput = 64 << 10
+
+// ExitTimeout is run's exit code when its --timeout ended the program
+// (the code timeout(1) uses).
+const ExitTimeout = 124
+
+// RunWith is Run with options. With JSON, the last line on w is
+//
+//	{"ok":true,"exit":N,"ms":N,"stdout":S,"stderr":S}
+//
+// and ok says the program was built and started, whatever its exit code;
+// ovid then exits 0. A death by signal or timeout reads "signal" in place
+// of "exit", with the crash fields. Output past MaxOutput is cut and
+// "truncated" is true, with "stdout_bytes" and "stderr_bytes" the full sizes.
+func RunWith(dir string, args []string, o RunOpts, w io.Writer) int {
 	m, err := loadBuild(dir)
 	if err != nil {
 		fail(w, "load", err.Error(), "")
@@ -212,12 +243,58 @@ func Run(dir string, args []string, w io.Writer) int {
 	if st.extra != nil {
 		pio.extra = []*os.File{st.extra}
 	}
+	var outc, errc *pipeCapture
+	if o.JSON {
+		if o.MaxOutput <= 0 {
+			o.MaxOutput = DefaultRunOutput
+		}
+		if outc, err = newPipeCapture(o.MaxOutput); err == nil {
+			if errc, err = newPipeCapture(o.MaxOutput); err != nil {
+				outc.finish()
+			}
+		}
+		if err != nil {
+			fail(w, "run", err.Error(), "")
+			return ExitBuild
+		}
+		pio.stdout, pio.stderr = outc.w, errc.w
+	}
 	// ^C goes to the program; ovid stays to report how it ended. Caught,
 	// not ignored, so the program gets the default action.
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, os.Interrupt, syscall.SIGQUIT)
 	defer signal.Stop(sigs)
-	pr := runProc(st.path, args, pio, 0)
+	t0 := time.Now()
+	pr := runProc(st.path, args, pio, o.Timeout)
+	ms := time.Since(t0).Milliseconds()
+	if o.JSON {
+		stdout, outN := outc.finish()
+		stderr, errN := errc.finish()
+		if pr.err != nil {
+			fail(w, "run", pr.err.Error(), tmpHint)
+			return ExitBuild
+		}
+		r := map[string]any{"ok": true, "ms": ms}
+		switch {
+		case pr.exited:
+			r["exit"] = pr.code
+		case pr.timedOut:
+			r["signal"] = "timeout"
+			r["hint"] = fmt.Sprintf("killed after %s", o.Timeout)
+		default:
+			describeCrash(m, exe, marks, pr, r)
+		}
+		cut := func(key string, b []byte, n int64) {
+			if n > int64(len(b)) { // more was written than was kept
+				r["truncated"], r[key+"_bytes"] = true, n
+			}
+			r[key] = string(b)
+		}
+		cut("stdout", stdout, outN)
+		cut("stderr", stderr, errN)
+		emit(w, r)
+		return ExitOK
+	}
 	switch {
 	case pr.err != nil:
 		fail(w, "run", pr.err.Error(), tmpHint)
@@ -227,6 +304,12 @@ func Run(dir string, args []string, w io.Writer) int {
 	}
 	r := map[string]any{"ok": false, "error": "killed", "exit": 128 + int(pr.signal)}
 	describeCrash(m, exe, marks, pr, r)
+	if pr.timedOut {
+		r["signal"], r["exit"] = "timeout", ExitTimeout
+		r["hint"] = fmt.Sprintf("killed after %s", o.Timeout)
+		emit(os.Stderr, r)
+		return ExitTimeout
+	}
 	emit(os.Stderr, r)
 	return 128 + int(pr.signal)
 }
