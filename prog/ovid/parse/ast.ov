@@ -308,6 +308,17 @@ func EvalConst(p *P, n *Node) i64 {
     return n.ival
   }
   if op == OP_NAME {
+    if n.pkgn > 0 && !ovid/mem.Eq(n.pkgp, n.pkgn, p.pkg.pathp, p.pkg.pathn) {
+      if ErrBegin(p) {
+        EW(p, strptr("a const's value cannot name another package's const ("), strlen("a const's value cannot name another package's const ("))
+        EW(p, n.pkgp, n.pkgn)
+        EW(p, strptr("."), 1)
+        EW(p, n.namep, n.namen)
+        EW(p, strptr("); write the number"), strlen("); write the number"))
+        ErrEnd(p)
+      }
+      return 0
+    }
     var c *Decl = p.pkg.cs
     while c != 0 as *Decl {
       if ovid/mem.Eq(c.namep, c.namen, n.namep, n.namen) {
@@ -316,6 +327,10 @@ func EvalConst(p *P, n *Node) i64 {
       c = c.next
     }
     p.cok = false
+    return 0
+  }
+  if op == OP_SIZEOF {
+    Errorf(p, strptr("a const's value cannot use sizeof; write sizeof(T) where the size is used"), strlen("a const's value cannot use sizeof; write sizeof(T) where the size is used"))
     return 0
   }
   if op == OP_NEG {
