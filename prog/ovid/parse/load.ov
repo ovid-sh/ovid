@@ -155,7 +155,7 @@ func ReadMod(m *Mod, src i64, n i64, stdp i64, stdn i64) i64 {
       } else if ovid/mem.Eq(f0, f0n, strptr("std"), 3) {
         // A module once could name its own standard library here, and with
         // it take the right to call syscall.
-        var sb *ovid/mem.Buf = Msg(m.io, strptr("ovid.mod: the std line is no longer supported: a module always uses the standard library built into ovid; delete the line"), strlen("ovid.mod: the std line is no longer supported: a module always uses the standard library built into ovid; delete the line"))
+        var sb *ovid/mem.Buf = Msg(m.io, strptr("ovid.mod: the std line is no longer supported: the standard library is the directory --std names on the command line; delete the line"), strlen("ovid.mod: the std line is no longer supported: the standard library is the directory --std names on the command line; delete the line"))
         LoadErr(m, strptr("mod"), 3, 0 as *File, 0, sb)
       } else {
         var u *ovid/mem.Buf = Msg(m.io, strptr("ovid.mod: unknown directive "), 28)

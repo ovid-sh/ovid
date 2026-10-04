@@ -1464,7 +1464,8 @@ func TestModuleCannotChooseStd(t *testing.T) {
 	needExec(t)
 	self := mustBuild(t, filepath.Join(repo(t), "prog"))
 	out, code := run(t, self, "check", dir, "--std", filepath.Join(repo(t), "std"))
-	if rs := lines(t, out); code != 1 || rs[0]["code"] != "mod" || !strings.Contains(rs[0]["message"].(string), "std line is no longer supported") {
+	if rs := lines(t, out); code != 1 || rs[0]["code"] != "mod" || !strings.Contains(rs[0]["message"].(string), "std line is no longer supported") ||
+		!strings.Contains(rs[0]["message"].(string), "--std") || strings.Contains(rs[0]["message"].(string), "built into") {
 		t.Fatalf("self-hosted check %d: %s", code, out)
 	}
 	// An operator who points --std at a library whose Cap is not the
