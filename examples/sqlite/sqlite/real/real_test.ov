@@ -1,0 +1,67 @@
+package sqlite/real
+
+import ovid/io
+import ovid/mem
+import ovid/test
+
+// is formats the double with the given bits and compares it with want.
+func is(io *ovid/io.Cap, hi i64, lo i64, want i64) bool {
+  var f *Fmt = New(io)
+  var dst i64 = ovid/io.Alloc(io, 40)
+  var n i64 = Format(f, dst, u64(hi, lo))
+  if ovid/mem.Eq(dst, n, want, ovid/io.CLen(want)) {
+    return true
+  }
+  ovid/io.Stdout(dst, n)
+  ovid/io.Print(strptr(" want "))
+  ovid/io.Print(want)
+  return false
+}
+
+func TestFormat(io *ovid/io.Cap) i64 {
+  if !is(io, 0x3ff00000, 0, strptr("1.0")) {
+    return 1
+  }
+  if !is(io, 0x3fb99999, 0x9999999a, strptr("0.1")) {
+    return 2
+  }
+  if !is(io, 0x3fd33333, 0x33333334, strptr("0.30000000000000004")) {
+    return 3
+  }
+  if !is(io, 0xbff80000, 0, strptr("-1.5")) {
+    return 4
+  }
+  if !is(io, 0x7fefffff, 0xffffffff, strptr("1.7976931348623157e+308")) {
+    return 5
+  }
+  if !is(io, 0, 1, strptr("4.9406564584124654e-324")) {
+    return 6
+  }
+  if !is(io, 0x44b52d02, 0xc7e14af6, strptr("1.0e+23")) {
+    return 7
+  }
+  if !is(io, 0x80000000, 0, strptr("0.0")) {
+    return 8
+  }
+  if !is(io, 0xfff00000, 0, strptr("-Inf")) {
+    return 9
+  }
+  return 0
+}
+
+func TestFormatInt(io *ovid/io.Cap) i64 {
+  var f *Fmt = New(io)
+  var dst i64 = ovid/io.Alloc(io, 40)
+  var n i64 = FormatInt(f, dst, -1000000000000000)
+  if !ovid/mem.Eq(dst, n, strptr("-1000000000000000.0"), 19) {
+    return 1
+  }
+  n = FormatInt(f, dst, 100000000000000000)
+  if !ovid/mem.Eq(dst, n, strptr("1.0e+17"), 7) {
+    return 2
+  }
+  if !ovid/test.Eq(io, FormatInt(f, dst, 0), 3) {
+    return 3
+  }
+  return 0
+}
