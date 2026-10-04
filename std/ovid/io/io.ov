@@ -25,6 +25,11 @@ const O_CREAT i64 = 64
 const O_TRUNC i64 = 512
 const O_DIRECTORY i64 = 65536
 const SYS_GETDENTS64 i64 = 217
+const SYS_GETPID i64 = 39
+const SYS_FSYNC i64 = 74
+const SYS_RENAME i64 = 82
+const SYS_UNLINK i64 = 87
+const SYS_FCHMOD i64 = 91
 
 // Argc is the number of command-line arguments, the program name included.
 func Argc(io *Cap) i64 {
@@ -199,6 +204,134 @@ func WriteFile(io *Cap, path i64, pathn i64, data i64, datan i64, mode i64) i64 
   var w i64 = Write(fd, data, datan)
   Close(fd)
   return w
+}
+
+// Fsync waits until everything written to fd is on the disk. On a
+// directory's fd it makes the names in it (a create, rename, or unlink)
+// durable. It returns 0, or < 0 on error.
+func Fsync(fd i64) i64 {
+  return syscall(SYS_FSYNC, fd, 0, 0, 0, 0, 0)
+}
+
+// Rename moves the file at the NUL-terminated path from to the path to,
+// replacing what is there in one step: a reader sees the old file or the
+// new one, never a part of either.
+func Rename(from i64, to i64) i64 {
+  return syscall(SYS_RENAME, from, to, 0, 0, 0, 0)
+}
+
+// Unlink removes the name at the NUL-terminated path.
+func Unlink(path i64) i64 {
+  return syscall(SYS_UNLINK, path, 0, 0, 0, 0, 0)
+}
+
+// tempName is a NUL-terminated name for a temp file beside path:
+// <dir>/.<base>.<pid>.ovid-tmp. The pid keeps two writers of one path apart.
+func tempName(io *Cap, path i64, pathn i64) i64 {
+  var slash i64 = dirLen(path, pathn)
+  var tmp i64 = Alloc(io, pathn + 40)
+  var n i64 = 0
+  while n < slash {
+    store8(tmp + n, load8(path + n))
+    n = n + 1
+  }
+  store8(tmp + n, 46)
+  n = n + 1
+  var i i64 = slash
+  while i < pathn {
+    store8(tmp + n, load8(path + i))
+    n = n + 1
+    i = i + 1
+  }
+  store8(tmp + n, 46)
+  n = n + 1
+  var pid i64 = syscall(SYS_GETPID, 0, 0, 0, 0, 0, 0)
+  var div i64 = 1
+  while (pid / div) >= 10 {
+    div = div * 10
+  }
+  while div > 0 {
+    store8(tmp + n, 48 + ((pid / div) % 10))
+    n = n + 1
+    div = div / 10
+  }
+  var suffix i64 = strptr(".ovid-tmp")
+  i = 0
+  while i < strlen(".ovid-tmp") {
+    store8(tmp + n, load8(suffix + i))
+    n = n + 1
+    i = i + 1
+  }
+  return tmp
+}
+
+// dirLen is the length of path's directory part, its last "/" included;
+// 0 when path has none.
+func dirLen(path i64, pathn i64) i64 {
+  while pathn > 0 && load8((path + pathn) - 1) != 47 {
+    pathn = pathn - 1
+  }
+  return pathn
+}
+
+// replaceWith writes datan bytes to the file tmp with permission mode (not
+// masked by the umask), syncs it if sync, and renames it over dest; both
+// names are NUL-terminated. On an error tmp is removed and dest untouched.
+func replaceWith(tmp i64, dest i64, data i64, datan i64, mode i64, sync bool) i64 {
+  var fd i64 = Open(tmp, (O_WRONLY + O_CREAT) + O_TRUNC, mode)
+  if fd < 0 {
+    return fd
+  }
+  var r i64 = Write(fd, data, datan)
+  if r == 0 {
+    r = syscall(SYS_FCHMOD, fd, mode, 0, 0, 0, 0)
+  }
+  if r == 0 && sync {
+    r = Fsync(fd)
+  }
+  Close(fd)
+  if r == 0 {
+    r = Rename(tmp, dest)
+  }
+  if r != 0 {
+    Unlink(tmp)
+  }
+  return r
+}
+
+// WriteFileAtomic replaces or creates path (pathn bytes) with datan bytes
+// and permission mode in one step: the data goes to a temp file in the
+// same directory, which is renamed over path. Another process sees the old
+// file or the new one, never a part, and a program that is running from
+// path can be replaced. Nothing is synced, so after a power loss the file
+// may be empty: use it for a file that can be made again, WriteFileDurable
+// for one that cannot. It returns 0, or < 0 on error, and then path is
+// untouched.
+func WriteFileAtomic(io *Cap, path i64, pathn i64, data i64, datan i64, mode i64) i64 {
+  return replaceWith(tempName(io, path, pathn), CStr(io, path, pathn), data, datan, mode, false)
+}
+
+// WriteFileDurable is WriteFileAtomic that also survives a crash: the
+// temp file is synced before the rename and the directory after it, so
+// once it returns 0 the new content is on the disk, and before that the
+// old content is. The two syncs cost milliseconds on a disk.
+func WriteFileDurable(io *Cap, path i64, pathn i64, data i64, datan i64, mode i64) i64 {
+  var r i64 = replaceWith(tempName(io, path, pathn), CStr(io, path, pathn), data, datan, mode, true)
+  if r != 0 {
+    return r
+  }
+  var dir i64 = strptr(".")
+  var n i64 = dirLen(path, pathn)
+  if n > 0 {
+    dir = CStr(io, path, n)
+  }
+  var fd i64 = Open(dir, O_RDONLY + O_DIRECTORY, 0)
+  if fd < 0 {
+    return fd
+  }
+  r = Fsync(fd)
+  Close(fd)
+  return r
 }
 
 // Getdents reads directory entries from fd (opened with O_DIRECTORY) into
