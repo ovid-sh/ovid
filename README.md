@@ -55,7 +55,8 @@ Every command prints JSON lines and the last line has `"ok"`. Exit codes:
 
 All commands take `-C <dir>`; by default they use the module that contains
 the working directory. `ovid help commands`, `ovid help edit`, and
-`ovid help ids` document the output formats.
+`ovid help ids` document the output formats; [docs/PROTOCOL.md](docs/PROTOCOL.md)
+is the contract they share: exit codes, error codes, and receipts.
 
 An edit names nodes by id (`fn:pkg.Name`, `st:pkg.Func:3`, ...; see
 `ovid help ids`) or by name (`Sum`, `util.Sum`, `Pair.next`), and may carry the hash that
@@ -81,11 +82,13 @@ written `util.F()`.
 
 ## Self-hosting
 
-`prog/` is the compiler again, written in Ovid (about 7,200 lines across ten
+`prog/` is the compiler again, written in Ovid (about 7,200 lines across eight
 packages, including a JSON parser, SHA-256, an x86-64 assembler, and an ELF
-writer). It reads `ovid.mod` and `.ov` files itself and offers
+writer). It reads `ovid.mod` and `.ov` files itself and offers only
 `check`, `build`, and `dump`; give it the standard library with
-`--std <dir>`, since only the Go binary embeds it.
+`--std <dir>`, since only the Go binary embeds it. The agent commands
+(`show`, `refs`, `grep`, `edit`, `rename`, `move`, `test`) exist only in the
+Go toolchain.
 
 ```sh
 bin/ovid build -C prog -o /tmp/s1          # Go compiles the Ovid compiler
