@@ -1177,12 +1177,29 @@ func TestSelfHostLarge(t *testing.T) {
 // TestRevisionCoversBuild: the revision moves when ovid.mod or a loaded std
 // file changes, not only when a module file does.
 func TestRevisionCoversBuild(t *testing.T) {
+	// A std dir named in ovid.mod grants no syscall, so its ovid/io keeps
+	// only the Cap type main takes.
 	stdDir := t.TempDir()
-	for _, rel := range []string{"ovid/io/io.ov", "ovid/mem/mem.ov"} {
-		src, err := os.ReadFile(filepath.Join(repo(t), "std", rel))
-		if err != nil {
-			t.Fatal(err)
-		}
+	ioSrc, err := os.ReadFile(filepath.Join(repo(t), "std", "ovid/io/io.ov"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	i := bytes.Index(ioSrc, []byte("type Cap struct {"))
+	if i < 0 {
+		t.Fatal("no Cap in std's io.ov")
+	}
+	j := bytes.Index(ioSrc[i:], []byte("\n}\n"))
+	if j < 0 {
+		t.Fatal("no end to Cap in std's io.ov")
+	}
+	memSrc, err := os.ReadFile(filepath.Join(repo(t), "std", "ovid/mem/mem.ov"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rel, src := range map[string][]byte{
+		"ovid/io/io.ov":   append([]byte("package ovid/io\n\n"), ioSrc[i:i+j+3]...),
+		"ovid/mem/mem.ov": memSrc,
+	} {
 		os.MkdirAll(filepath.Dir(filepath.Join(stdDir, rel)), 0o755)
 		if err := os.WriteFile(filepath.Join(stdDir, rel), src, 0o644); err != nil {
 			t.Fatal(err)
