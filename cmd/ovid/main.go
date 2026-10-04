@@ -11,6 +11,7 @@ import (
 	"runtime/debug"
 	"strconv"
 	"strings"
+	"time"
 
 	"ovid/internal/tool"
 )
@@ -124,8 +125,23 @@ func main() {
 		a := parse(cmd, argv, []string{"C", "o"}, nil)
 		os.Exit(tool.Build(dirArg(a, 0), a.vals["o"], w))
 	case "run":
-		a := parse(cmd, argv, []string{"C"}, nil)
-		os.Exit(tool.Run(dirArg(a, 0), a.rest, w))
+		a := parse(cmd, argv, []string{"C", "timeout", "max-output"}, []string{"json"})
+		o := tool.RunOpts{JSON: a.bools["json"]}
+		if v, ok := a.vals["timeout"]; ok {
+			d, err := time.ParseDuration(v)
+			if err != nil || d <= 0 {
+				usageErr(cmd, "--timeout takes a duration such as 5s or 500ms, got "+strconv.Quote(v))
+			}
+			o.Timeout = d
+		}
+		if v, ok := a.vals["max-output"]; ok {
+			n, err := strconv.Atoi(v)
+			if err != nil || n <= 0 || !o.JSON {
+				usageErr(cmd, "--max-output takes a byte count and goes with --json, got "+strconv.Quote(v))
+			}
+			o.MaxOutput = n
+		}
+		os.Exit(tool.RunWith(dirArg(a, 0), a.rest, o, w))
 	case "test":
 		a := parse(cmd, argv, []string{"C", "run"}, []string{"list"})
 		os.Exit(tool.Test(dirArg(a, 0), a.vals["run"], a.bools["list"], w))

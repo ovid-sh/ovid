@@ -19,12 +19,15 @@ const helpOverview = `ovid: a small compiled language and its toolchain, built f
 Source is plain .ov text. A module is a directory with ovid.mod; each
 subdirectory holding .ov files is one package, and its path is the package
 name. Every command prints JSON lines; the last line always has "ok".
-Exit codes: 0 ok, 1 errors, 2 stale edit, 64 usage, 125 run: build failed.
+Exit codes: 0 ok, 1 errors, 2 stale edit, 64 usage, 124 run: timeout,
+125 run: could not build or start the program.
 
 Start here:
   ovid init <dir>              new module with a hello-world entry and a test
   ovid check                   errors with file:line:col, expected/got, hint
   ovid run [-- args]           build to a temp file and run it
+  ovid run --json [--timeout 5s]
+                               the same, with exit, signal, and output as JSON
   ovid test [--run Name]       run Test* funcs, one process each
 
 Read without opening whole files:
@@ -96,7 +99,10 @@ values: var sp bool = c == 32 || c == 9 || c == 10.
 Strings: there is no string type. strptr("hi\n") is the address of an
 interned NUL-terminated literal and strlen("hi\n") is its length (3),
 computed by the compiler, so never count bytes by hand. Literals are
-NUL-terminated, so printing one needs only its address:
+read-only: a store into one kills the program (SIGSEGV), so to change the
+bytes, copy them first: var b i64 = ovid/io.Alloc(io, n) then
+ovid/mem.Copy(b, strptr("..."), n). Literals are NUL-terminated, so
+printing one needs only its address:
   ovid/io.Print(strptr("total: "))     // Eprint writes to stderr
   ovid/io.PrintInt(io, n)              // a number in decimal
   ovid/io.Stdout(p, n)                 // n bytes at p, for non-literals
@@ -152,14 +158,26 @@ ovid build [-o out]          default out: <module>/bin/<module name>;
                              _test.ov files are left out (so for run)
 ovid run [--] [args...]      program stdio and exit code pass through;
                              if the build fails: errors as JSON, exit 125.
+  run and test execute the program from TMPDIR (else /tmp), or from memory
+  where that is missing or noexec and /proc is mounted; if neither works:
+  {"ok":false,"error":"run",message,hint}, exit 125 (run) or 1 (test).
   Killed by a signal: exit 128+N and one line on stderr,
   {"ok":false,"error":"killed",signal,exit,at,stack,fault_addr,hint}, with
   at/stack (the statement and its callers) for a fault on Linux.
+  --timeout D (5s, 500ms) ends the program: "signal":"timeout", exit 124.
+ovid run --json [--timeout D] [--max-output N] [--] [args...]
+  captures the output; one last line, and ovid exits 0 if the program ran:
+  {"ok":true,"exit":N,"ms",stdout,stderr}; a signal or timeout gives
+  "signal" (with at/stack) in place of "exit". Each stream keeps N bytes
+  (65536); past that "truncated":true and stdout_bytes/stderr_bytes.
+  A build that fails ends {"ok":false,"errors":N}, exit 125.
 ovid test [--run substr] [--list]
   {"fact":"test",id,ok,exit,ms,output} per test; a failure that returned a
   value adds "returned_by": the return statements that can produce it;
   if !ovid/test.Eq(io, got, want) { return 1 } also puts "got X, want Y"
   in its output.
+  Output past 4000 bytes is cut ("...(truncated)") and "output_bytes" gives
+  its full size.
   A crash adds "signal", "at" (the statement that faulted), "stack" (it and
   each call leading to it, innermost first), and for a bad load or store
   "fault_addr"; a hung test reads "signal":"timeout".
@@ -201,7 +219,8 @@ ovid move <id|name>... <pkg> [--file pkg/x.ov] [--dry-run]
   Refuses changes that add check errors. Several names move in order, all or
   none: on a failure every file is put back.
 ovid init <dir> [--name N]   writes ovid.mod, <N>/main.ov, <N>/main_test.ov
-ovid dump                    the whole program as JSON
+ovid dump                    the whole program as JSON; a string literal
+                             that is not UTF-8 is "value_hex", not "value"
 ovid version                 {commit, dirty, binary (hash of the executable), path}
 ovid help [topic]
 `

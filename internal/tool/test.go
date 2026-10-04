@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -15,7 +14,12 @@ import (
 	"ovid/internal/module"
 )
 
-const testTimeout = 10 * time.Second
+// testTimeout is how long one test may run. A variable so that a test of
+// this package can shorten it.
+var testTimeout = 10 * time.Second
+
+// maxTestOutput is how much of a test's output its record keeps.
+const maxTestOutput = 4000
 
 const testPkg = "ovid/testmain"
 
@@ -89,60 +93,72 @@ func Test(dir, filter string, list bool, w io.Writer) int {
 		return ExitOK
 	}
 	prog := testProgram(m.Prog, tests)
-	tmpd, err := os.MkdirTemp("", "ovid-test-")
-	if err != nil {
-		return fail(w, "write", err.Error(), "")
-	}
-	defer os.RemoveAll(tmpd)
-	bin := filepath.Join(tmpd, "test")
 	exe, marks, err := compile.CompileMap(prog)
-	if err == nil {
-		err = os.WriteFile(bin, exe, 0o755)
-	}
 	if err != nil {
 		return fail(w, "compile", err.Error(), "")
 	}
-	outPath := filepath.Join(tmpd, "out")
-	retPath := filepath.Join(tmpd, "returned")
+	// A missing temporary directory is not fatal yet: stage may still hold
+	// the program in memory.
+	tmpd, terr := os.MkdirTemp("", "ovid-test-")
+	if terr == nil {
+		defer os.RemoveAll(tmpd)
+	}
+	// fd 3 is the returned mark; the program, if held in memory, is fd 4.
+	st, err := stage(exe, tmpd, "test", returnedFD+1)
+	if terr != nil && err != nil {
+		err = terr
+	}
+	if err != nil {
+		return fail(w, "run", err.Error(), tmpHint)
+	}
+	defer st.done()
 	passed, failed := 0, 0
 	for k, t := range tests {
 		args := make([]string, k+1)
 		for i := range args {
 			args[i] = "t"
 		}
-		of, err := os.Create(outPath)
+		// Output and the returned mark come back through pipes, cut at what
+		// the record needs: a test may write to either without end.
+		oc, err := newPipeCapture(maxTestOutput + 1)
 		if err != nil {
-			return fail(w, "write", err.Error(), "")
+			return fail(w, "run", err.Error(), "")
 		}
-		rf, err := os.Create(retPath)
+		rc, err := newPipeCapture(1)
 		if err != nil {
-			of.Close()
-			return fail(w, "write", err.Error(), "")
+			oc.finish()
+			return fail(w, "run", err.Error(), "")
 		}
 		t0 := time.Now()
-		pr := runProc(bin, args, procIO{stdout: of, stderr: of, extra: []*os.File{rf}}, testTimeout)
+		pio := procIO{stdout: oc.w, stderr: oc.w, extra: []*os.File{rc.w}, argv0: "test"}
+		if st.extra != nil {
+			pio.extra = append(pio.extra, st.extra)
+		}
+		pr := runProc(st.path, args, pio, testTimeout)
 		ms := time.Since(t0).Milliseconds()
-		of.Close()
-		rf.Close()
-		out, _ := os.ReadFile(outPath)
-		ret, _ := os.ReadFile(retPath)
-		returned := len(ret) > 0
+		out, outBytes := oc.finish()
+		_, retBytes := rc.finish()
+		if pr.err != nil {
+			// The program could not be started: that is the environment's
+			// doing and the same for every test, so it is one failure of
+			// the request, not a failed test.
+			return fail(w, "run", pr.err.Error(), tmpHint)
+		}
+		returned := retBytes > 0
 		r := map[string]any{"fact": "test", "id": t.id, "ms": ms}
 		if l := m.Index[t.id]; l != nil {
 			file, a, _, _ := m.Where(l.Span)
 			r["file"], r["line"] = file, a.Line
 		}
 		code := pr.code
-		ok := pr.err == nil && pr.exited && code == 0
+		ok := pr.exited && code == 0
 		switch {
-		case pr.err != nil:
-			r["error"] = pr.err.Error()
 		case pr.timedOut:
 			r["signal"] = "timeout"
 			r["hint"] = fmt.Sprintf("killed after %s", testTimeout)
 		case !pr.exited:
 			code = -1
-			describeCrash(m, marks, pr, r)
+			describeCrash(m, exe, marks, pr, r)
 		}
 		// The runtime ends a program it could not get memory for with this
 		// code. The test did not return it: the wrapper marks every return.
@@ -165,8 +181,9 @@ func Test(dir, filter string, list bool, w io.Writer) int {
 		}
 		if len(out) > 0 {
 			s := string(out)
-			if len(s) > 4000 {
-				s = s[:4000] + "...(truncated)"
+			if len(s) > maxTestOutput {
+				s = s[:maxTestOutput] + "...(truncated)"
+				r["output_bytes"] = outBytes
 			}
 			r["output"] = s
 		}
