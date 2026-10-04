@@ -219,7 +219,7 @@ func main() {
 			}
 		case "append":
 			if len(a.pos) != 1 {
-				usageErr(cmd, "usage: ovid append <fn-or-pkg id> [--file pkg/x.ov] --expect H|--rev REV|--force <<'EOF' ... EOF")
+				usageErr(cmd, "usage: ovid append <fn-or-pkg id> [--file pkg/x.ov] [--expect H|--rev REV|--force] <<'EOF' ... EOF")
 			}
 			op.Into = a.pos[0]
 		default:

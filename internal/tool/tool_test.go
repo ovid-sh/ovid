@@ -667,6 +667,11 @@ func TestEveryEditNeedsAGuard(t *testing.T) {
 	if code := runEdit(dir, &EditReq{Ops: []EditOp{{Op: "replace", ID: "fn:demo.H", Text: "func H() i64 {\n  return 10\n}"}}}, EditOpts{Force: true}, &out); code != 0 {
 		t.Fatalf("force: %d %s", code, out.String())
 	}
+	// It skips every guard, the request's stale revision included.
+	out.Reset()
+	if code := runEdit(dir, &EditReq{Ops: []EditOp{{Op: "replace", ID: "fn:demo.H", Text: "func H() i64 {\n  return 11\n}"}}}, EditOpts{Revision: rev, Force: true}, &out); code != 0 {
+		t.Fatalf("force with a stale revision: %d %s", code, out.String())
+	}
 
 	// A package append needs no guard, and replaying it is refused.
 	k := EditOp{Op: "append", Into: "demo", Text: "func K() i64 {\n  return 1\n}"}

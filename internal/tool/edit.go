@@ -257,7 +257,7 @@ func runEdit(dir string, req *EditReq, o EditOpts, w io.Writer) int {
 		}
 		req.Revision = o.Revision
 	}
-	if req.Revision != "" && req.Revision != m.Revision() {
+	if req.Revision != "" && req.Revision != m.Revision() && !o.Force {
 		emit(w, map[string]any{"ok": false, "error": "stale", "message": "module revision changed", "revision": m.Revision(),
 			"hint": "drop revision and use per-op expect hashes so unrelated edits do not conflict"})
 		return ExitStale
