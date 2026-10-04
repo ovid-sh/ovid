@@ -273,6 +273,11 @@ indentation is normalised to the target's. insert anchors on statements and
 decls; to change part of a statement, replace one of its expressions (ovid
 show <stmt> lists them with ids and hashes).
 
+A func's, type's, or const's doc comment (the // lines directly above it,
+no blank line between) is part of it: replace puts the text's own doc
+comment in its place, so text without one removes it; delete removes it;
+insert before puts the new text above it.
+
 After applying, the module is reparsed (a syntax error rejects everything
 and names the op) and checked. Result: {"ok":true,"written","files",
 "check_ok","errors","errors_before","revision","ops":[{"ids":[...],

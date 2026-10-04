@@ -193,7 +193,10 @@ for a whole decl), so one expression can be replaced on its own.
 A hash is 12 hex digits. A decl's hash covers its text, and the text of a
 func, type, or const begins at its **doc comment**: the unbroken run of
 `//` lines directly above it (a blank line ends the run, so a comment
-separated from the decl by one belongs to nothing). A statement's or
+separated from the decl by one belongs to nothing). It is what `replace`
+swaps (the new text's doc comment takes the old one's place, so text
+without one removes it) and what `delete` removes; `insert --before` lands
+above it. A statement's or
 expression's covers its kind, its text, which occurrence of that text in
 its decl it is (so two identical statements hash differently), and the
 decl's id and **whole text**. A positional hash is therefore bound to the

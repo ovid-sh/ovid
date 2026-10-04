@@ -474,7 +474,7 @@ func checkExpect(m *module.Module, l *module.Loc, expect string, force, rev bool
 	if expect == m.Hash(l.ID) || (positional && expect == m.Hash(l.Decl)) {
 		return nil
 	}
-	extra := map[string]any{"id": l.ID, "hash": m.Hash(l.ID), "text": m.Text(l.Span)}
+	extra := map[string]any{"id": l.ID, "hash": m.Hash(l.ID), "text": m.Text(l.Full)}
 	if positional {
 		extra["decl"], extra["decl_hash"] = l.Decl, m.Hash(l.Decl)
 		// A statement's hash is bound to its decl as it is now, so this is
@@ -523,7 +523,7 @@ func newIDs(m *module.Module, sps []*splice, nops int, show bool) []map[string]a
 			if l.Kind != "func" && l.Kind != "type" && l.Kind != "const" {
 				continue
 			}
-			if l.Span.File != fi || at < l.Span.Off || at > l.Span.End || seen[s.op][id] {
+			if l.Span.File != fi || at < l.Full.Off || at > l.Full.End || seen[s.op][id] {
 				continue
 			}
 			if seen[s.op] == nil {
@@ -532,7 +532,7 @@ func newIDs(m *module.Module, sps []*splice, nops int, show bool) []map[string]a
 			seen[s.op][id] = true
 			d := map[string]any{"id": id, "hash": m.Hash(id)}
 			if show {
-				d["text"] = m.Text(l.Span)
+				d["text"] = m.Text(l.Full)
 			}
 			prev, _ := out[s.op]["decls"].([]map[string]any)
 			out[s.op]["decls"] = append(prev, d)
@@ -610,15 +610,17 @@ func planOp(m *module.Module, i int, op EditOp, force, rev bool) ([]*splice, *ed
 	sp := &splice{op: i, abs: f.Abs}
 	block := l.Kind == "stmt" || l.Kind == "func" || l.Kind == "type" || l.Kind == "const" || l.Kind == "import"
 	decl := l.Kind == "func" || l.Kind == "type" || l.Kind == "const"
+	// A decl's doc comment is part of it (Full): replace swaps it for the
+	// new text's, or drops it if the text has none, and delete removes it.
 	switch op.Op {
 	case "replace":
-		sp.off, sp.end = l.Span.Off, l.Span.End
+		sp.off, sp.end = l.Full.Off, l.Full.End
 		sp.text = reindent(op.Text, ind, false)
 	case "delete":
-		sp.off, sp.end = l.Span.Off, l.Span.End
-		if block && ownsLines(src, l.Span) {
-			sp.off = lineBegin(src, l.Span.Off)
-			sp.end = lineAfter(src, l.Span.End)
+		sp.off, sp.end = l.Full.Off, l.Full.End
+		if block && ownsLines(src, l.Full) {
+			sp.off = lineBegin(src, l.Full.Off)
+			sp.end = lineAfter(src, l.Full.End)
 			if decl && sp.end < len(src) && src[sp.end] == '\n' {
 				sp.end++
 			}
@@ -633,7 +635,8 @@ func planOp(m *module.Module, i int, op EditOp, force, rev bool) ([]*splice, *ed
 			gap = "\n\n"
 		}
 		if op.Before != "" {
-			sp.off = lineBegin(src, l.Span.Off)
+			// Above the anchor's doc comment, which stays with it.
+			sp.off = lineBegin(src, l.Full.Off)
 			sp.text = reindent(op.Text, ind, true) + gap
 		} else {
 			sp.off = l.Span.End
