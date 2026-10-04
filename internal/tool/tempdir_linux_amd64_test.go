@@ -57,20 +57,19 @@ func TestRunWithoutTempDir(t *testing.T) {
 	}
 }
 
-// TestTestWithoutTempDir: test keeps the tests' output in the temporary
-// directory, so without one it fails, once, as the request and not as a
-// failed test, and says what to set.
+// TestTestWithoutTempDir: test needs no temporary directory either. The
+// program runs from memory and its output comes back through a pipe.
 func TestTestWithoutTempDir(t *testing.T) {
+	if _, err := os.Stat("/proc/self/fd"); err != nil {
+		t.Skip("no /proc to execute a program in memory through")
+	}
 	dir := mkmod(t, demo(tempDirProg))
 	t.Setenv("TMPDIR", filepath.Join(dir, "missing"))
 	var b bytes.Buffer
 	code := Test(dir, "", false, &b)
 	rs := lines(t, b.String())
-	if code != ExitFail || len(rs) != 1 {
-		t.Fatalf("exit %d, want one line:\n%s", code, b.String())
-	}
-	if r := rs[0]; r["ok"] != false || r["error"] != "run" || r["fact"] != nil || !strings.Contains(r["hint"].(string), "TMPDIR") {
-		t.Fatalf("%v", r)
+	if code != ExitOK || len(rs) != 2 || rs[0]["id"] != "fn:demo.TestPasses" || rs[0]["ok"] != true || rs[1]["passed"] != float64(1) {
+		t.Fatalf("exit %d:\n%s", code, b.String())
 	}
 }
 

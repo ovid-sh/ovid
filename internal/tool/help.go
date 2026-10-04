@@ -166,6 +166,8 @@ ovid test [--run substr] [--list]
   value adds "returned_by": the return statements that can produce it;
   if !ovid/test.Eq(io, got, want) { return 1 } also puts "got X, want Y"
   in its output.
+  Output past 4000 bytes is cut ("...(truncated)") and "output_bytes" gives
+  its full size.
   A crash adds "signal", "at" (the statement that faulted), "stack" (it and
   each call leading to it, innermost first), and for a bad load or store
   "fault_addr"; a hung test reads "signal":"timeout".

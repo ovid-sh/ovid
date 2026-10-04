@@ -64,8 +64,13 @@ Both compile the program and execute it. They write it to a temporary
 directory (`TMPDIR`, else `/tmp`) and run it from there. On Linux x86-64,
 where that directory is missing or mounted `noexec`, they hold the program
 in memory instead and execute it through `/proc/self/fd`, so `/proc` must be
-mounted for that. `test` also keeps each test's output in the temporary
-directory, so it needs a writable one even then.
+mounted for that. Neither needs the directory for anything else: a test's
+output comes back through a pipe.
+
+`test` keeps the first 4,000 bytes of a test's output in its record. Longer
+output ends in `...(truncated)` and the record adds `"output_bytes"`, the
+size of all of it. The rest is discarded as it is written, so a test that
+prints without end costs no memory or disk before its timeout ends it.
 
 When neither works, the request fails once with `"error":"run"` and a
 `hint` naming `TMPDIR`: `run` exits 125, and `test` exits 1 without
