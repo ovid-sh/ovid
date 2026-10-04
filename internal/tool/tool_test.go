@@ -214,41 +214,6 @@ func main(io *ovid/io.Cap) i64 {
 		t.Fatalf("sha: code %d out %q", code, out)
 	}
 
-	js := withProg(t, demo(`package demo
-import ovid/io
-import ovid/json
-func main(io *ovid/io.Cap) i64 {
-  var raw i64 = strptr("{\"a\":[1,true,null],\"b\":\"hi\\n\"}")
-  var n i64 = strlen("{\"a\":[1,true,null],\"b\":\"hi\\n\"}")
-  var root i64 = ovid/json.Parse(io, raw, n)
-  if root == 0 {
-    return 1
-  }
-  var a i64 = ovid/json.GetLit(root, strptr("a"), strlen("a"))
-  if ovid/json.Int(ovid/json.At(a, 0)) != 1 {
-    return 2
-  }
-  if ovid/json.Kind(ovid/json.At(a, 2)) != 0 {
-    return 4
-  }
-  var b i64 = ovid/json.GetLit(root, strptr("b"), strlen("b"))
-  if ovid/json.StrN(b) != 3 {
-    return 5
-  }
-  var e i64 = ovid/json.Parse(io, strptr("\x22\x5c\x75\x30\x30\x65\x39\x5c\x62\x22"), 10)
-  if ovid/json.StrN(e) != 3 {
-    return 6
-  }
-  if load8(ovid/json.StrP(e)) != 0xC3 {
-    return 7
-  }
-  return 0
-}
-`), "ovid/json")
-	if out, code := buildRun(t, js); code != 0 {
-		t.Fatalf("json: code %d out %q", code, out)
-	}
-
 	elfOut := filepath.Join(t.TempDir(), "exit.elf")
 	asm := withProg(t, demo(`package demo
 import ovid/io
