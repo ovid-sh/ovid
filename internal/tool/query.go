@@ -193,7 +193,7 @@ func Show(dir string, ids []string, withIDs, asJSON, exprs bool, w io.Writer) in
 				r["sig"] = s
 			}
 			if exprs || l.Kind == "stmt" || l.Kind == "expr" {
-				var es []map[string]any
+				es := []map[string]any{}
 				for _, e := range exprsIn(m, l) {
 					_, ea, _, _ := m.Where(e.Span)
 					x := map[string]any{"id": e.ID, "line": ea.Line, "col": ea.Col, "text": m.Text(e.Span), "hash": m.Hash(e.ID)}

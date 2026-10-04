@@ -365,7 +365,7 @@ func TestGrepPages(t *testing.T) {
 // TestShowExprs: showing a statement lists its expressions with ids and
 // hashes, and one of them can then be replaced on its own.
 func TestShowExprs(t *testing.T) {
-	dir := mkmod(t, demo("package demo\n\nimport ovid/io\n\nfunc main(io *ovid/io.Cap) i64 {\n  var x i64 = 1 + 2 * 3\n  return x\n}\n"))
+	dir := mkmod(t, demo("package demo\n\nimport ovid/io\n\ntype P struct {\n  v i64\n}\n\nfunc main(io *ovid/io.Cap) i64 {\n  var x i64 = 1 + 2 * 3\n  return x\n}\n"))
 	var b bytes.Buffer
 	Show(dir, []string{"st:demo.main:1"}, true, true, false, &b)
 	var exprs []any
@@ -390,7 +390,7 @@ func TestShowExprs(t *testing.T) {
 	}
 	b.Reset()
 	Show(dir, []string{"st:demo.main:1"}, true, false, false, &b)
-	if !strings.Contains(b.String(), "//   "+mul["id"].(string)+" 6:19 2 * 3  hash="+mul["hash"].(string)) {
+	if !strings.Contains(b.String(), "//   "+mul["id"].(string)+" 10:19 2 * 3  hash="+mul["hash"].(string)) {
 		t.Fatalf("text: %s", b.String())
 	}
 	b.Reset()
@@ -400,6 +400,10 @@ func TestShowExprs(t *testing.T) {
 	b.Reset()
 	if Show(dir, []string{"main"}, true, false, true, &b); !strings.Contains(b.String(), "//   ex:") {
 		t.Fatalf("--exprs: %s", b.String())
+	}
+	b.Reset()
+	if Show(dir, []string{"ty:demo.P"}, true, true, true, &b); !strings.Contains(b.String(), `"exprs":[]`) {
+		t.Fatalf("a node without expressions lists []: %s", b.String())
 	}
 	b.Reset()
 	op := EditOp{Op: "replace", ID: mul["id"].(string), Expect: mul["hash"].(string), Text: "(2 - 3)"}
