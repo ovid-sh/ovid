@@ -470,3 +470,126 @@ func WriteInt(io *Cap, fd i64, v i64) i64 {
   }
   return r
 }
+
+// Sockets, readiness, and the clock: what a TCP server needs. Each wrapper
+// returns the kernel's result, a value or a negative errno.
+
+const SYS_SOCKET i64 = 41
+const SYS_SENDTO i64 = 44
+const SYS_BIND i64 = 49
+const SYS_LISTEN i64 = 50
+const SYS_SETSOCKOPT i64 = 54
+const SYS_CLOCK_GETTIME i64 = 228
+const SYS_EPOLL_WAIT i64 = 232
+const SYS_EPOLL_CTL i64 = 233
+const SYS_ACCEPT4 i64 = 288
+const SYS_EPOLL_CREATE1 i64 = 291
+
+const EINTR i64 = -4
+const EAGAIN i64 = -11
+
+const EPOLLIN i64 = 1
+const EPOLLOUT i64 = 4
+const EPOLLERR i64 = 8
+const EPOLLHUP i64 = 16
+const EPOLL_CTL_ADD i64 = 1
+const EPOLL_CTL_DEL i64 = 2
+const EPOLL_CTL_MOD i64 = 3
+
+// EPOLLEVENT is the size of one epoll event: 4 bytes of flags, then 8 of
+// the caller's data, packed.
+const EPOLLEVENT i64 = 12
+
+// TCPListen returns a non-blocking socket listening on the IPv4 address ip
+// (four bytes, the first in the high byte: 127.0.0.1 is 0x7f000001) and
+// port, with SO_REUSEADDR set; or < 0.
+func TCPListen(io *Cap, ip i64, port i64, backlog i64) i64 {
+  // AF_INET, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC.
+  var fd i64 = syscall(SYS_SOCKET, 2, 526337, 0, 0, 0, 0)
+  if fd < 0 {
+    return fd
+  }
+  var one i64 = Alloc(io, 8)
+  store8(one, 1)
+  // SOL_SOCKET, SO_REUSEADDR.
+  syscall(SYS_SETSOCKOPT, fd, 1, 2, one, 4, 0)
+  // struct sockaddr_in: family, then port and address in network order.
+  var sa i64 = Alloc(io, 16)
+  store8(sa, 2)
+  store8(sa + 2, port >> 8)
+  store8(sa + 3, port)
+  store8(sa + 4, ip >> 24)
+  store8(sa + 5, ip >> 16)
+  store8(sa + 6, ip >> 8)
+  store8(sa + 7, ip)
+  var r i64 = syscall(SYS_BIND, fd, sa, 16, 0, 0, 0)
+  if r == 0 {
+    r = syscall(SYS_LISTEN, fd, backlog, 0, 0, 0, 0)
+  }
+  if r < 0 {
+    Close(fd)
+    return r
+  }
+  return fd
+}
+
+// Accept takes one connection from the listening socket fd and returns
+// its non-blocking socket, or < 0 (EAGAIN when none is waiting).
+func Accept(fd i64) i64 {
+  // SOCK_NONBLOCK | SOCK_CLOEXEC.
+  return syscall(SYS_ACCEPT4, fd, 0, 0, 526336, 0, 0)
+}
+
+// SetNoDelay turns off Nagle's algorithm on the TCP socket fd, so a small
+// write is sent at once. cell is 8 bytes of scratch.
+func SetNoDelay(fd i64, cell i64) i64 {
+  store64(cell, 1)
+  // IPPROTO_TCP, TCP_NODELAY.
+  return syscall(SYS_SETSOCKOPT, fd, 6, 1, cell, 4, 0)
+}
+
+// Send writes up to n bytes at p to the socket fd and returns how many
+// were taken, or < 0 (EAGAIN when the socket's buffer is full). Unlike
+// Write on a socket, it does not kill the program when the peer has gone
+// (MSG_NOSIGNAL).
+func Send(fd i64, p i64, n i64) i64 {
+  return syscall(SYS_SENDTO, fd, p, n, 16384, 0, 0)
+}
+
+// EpollCreate returns a new epoll instance, or < 0.
+func EpollCreate() i64 {
+  // EPOLL_CLOEXEC.
+  return syscall(SYS_EPOLL_CREATE1, 524288, 0, 0, 0, 0, 0)
+}
+
+// EpollCtl adds fd to the epoll instance ep, changes it, or removes it
+// (op is EPOLL_CTL_ADD, _MOD, or _DEL), to be reported for events with
+// data. ev is EPOLLEVENT bytes of scratch.
+func EpollCtl(ep i64, op i64, fd i64, events i64, data i64, ev i64) i64 {
+  store64(ev, events)
+  store64(ev + 4, data)
+  return syscall(SYS_EPOLL_CTL, ep, op, fd, ev, 0, 0)
+}
+
+// EpollWait waits up to ms milliseconds (-1: forever) for events on ep and
+// writes at most max of them at evs (max * EPOLLEVENT bytes). It returns
+// how many, or < 0. Event i's flags are EpollEvents(evs, i) and its data
+// EpollData(evs, i).
+func EpollWait(ep i64, evs i64, max i64, ms i64) i64 {
+  return syscall(SYS_EPOLL_WAIT, ep, evs, max, ms, 0, 0)
+}
+
+func EpollEvents(evs i64, i i64) i64 {
+  return load32(evs + (i * EPOLLEVENT))
+}
+
+func EpollData(evs i64, i i64) i64 {
+  return load64((evs + (i * EPOLLEVENT)) + 4)
+}
+
+// NowMs is the monotonic clock in milliseconds. ts is 16 bytes of scratch.
+func NowMs(ts i64) i64 {
+  // CLOCK_MONOTONIC.
+  syscall(SYS_CLOCK_GETTIME, 1, ts, 0, 0, 0, 0)
+  return (load64(ts) * 1000) + (load64(ts + 8) / 1000000)
+}
