@@ -4,20 +4,27 @@ package check
 
 import (
 	"fmt"
+	"io/fs"
+	"path"
+	"slices"
 	"sort"
 	"strings"
 
 	"ovid/internal/ir"
+	"ovid/std"
 )
 
-// Issue is one error. ID names the node; the caller maps it to a location.
+// Issue is one error. ID names the node; the caller maps it to a location,
+// unless At gives one: a repeated decl shares its id with the first, so the
+// id would point there.
 type Issue struct {
-	Code     string `json:"code"`
-	ID       string `json:"id,omitempty"`
-	Message  string `json:"message"`
-	Expected string `json:"expected,omitempty"`
-	Got      string `json:"got,omitempty"`
-	Hint     string `json:"hint,omitempty"`
+	Code     string   `json:"code"`
+	ID       string   `json:"id,omitempty"`
+	At       *ir.Span `json:"-"`
+	Message  string   `json:"message"`
+	Expected string   `json:"expected,omitempty"`
+	Got      string   `json:"got,omitempty"`
+	Hint     string   `json:"hint,omitempty"`
 }
 
 // Fact is a declaration-level fact (types, layouts, signatures).
@@ -46,6 +53,8 @@ type checker struct {
 	fn       *ir.Func
 	imported map[string]bool
 	res      string
+	dup      map[*ir.Func]bool // funcs whose name was already declared
+	dupName  map[string]bool   // those funcs, as pkg.Name
 }
 
 func (c *checker) issue(is Issue) { c.r.Issues = append(c.r.Issues, is) }
@@ -61,7 +70,7 @@ func (c *checker) mismatch(id, what, got, want string) {
 // Run checks p.
 func Run(p *ir.Program) *Result {
 	r := &Result{Types: map[string]string{}}
-	c := &checker{r: r, pkgs: map[string]*ir.Package{}, sigs: map[string]sig{}}
+	c := &checker{r: r, pkgs: map[string]*ir.Package{}, sigs: map[string]sig{}, dup: map[*ir.Func]bool{}, dupName: map[string]bool{}}
 	if strings.TrimSpace(p.Module) == "" {
 		c.err("", "bad_module", "ovid.mod has no module line")
 	}
@@ -87,15 +96,49 @@ func Run(p *ir.Program) *Result {
 	for i := range p.Packages {
 		pkg := &p.Packages[i]
 		c.pkg = pkg
-		seen := map[string]string{}
-		decl := func(id, name string) {
-			claim(id)
-			if prev, ok := seen[name]; ok {
-				c.err(id, "duplicate_name", fmt.Sprintf("%s is already declared in package %s (%s)", name, pkg.Path, prev))
-			}
-			seen[name] = id
+		// first is the decl of each name that comes first in the source,
+		// whatever its kind: consts, types, and funcs share the names.
+		type firstDecl struct {
+			id string
+			at ir.Span
 		}
+		first := map[string]firstDecl{}
+		note := func(id, name string, at ir.Span) {
+			f, ok := first[name]
+			if !ok || at.File < f.at.File || (at.File == f.at.File && at.Off < f.at.Off) {
+				first[name] = firstDecl{id, at}
+			}
+		}
+		for _, cn := range pkg.Consts {
+			note(cn.ID, cn.Name, cn.Span)
+		}
+		for _, t := range pkg.Types {
+			note(t.ID, t.Name, t.Span)
+		}
+		for fi := range pkg.Funcs {
+			note(pkg.Funcs[fi].ID, pkg.Funcs[fi].Name, pkg.Funcs[fi].Span)
+		}
+		// decl reports whether this is the first decl of name in the
+		// package. A later one gets one error, at that decl, and nothing
+		// else about it is checked: its id may be the first decl's, so its
+		// fields, params, and statements could be reported at the wrong
+		// place.
+		decl := func(id, name string, at ir.Span) bool {
+			if f := first[name]; f.at != at {
+				c.issue(Issue{Code: "duplicate_name", ID: id, At: &at,
+					Message: fmt.Sprintf("%s is already declared in package %s (%s)", name, pkg.Path, f.id)})
+				return false
+			}
+			claim(id)
+			return true
+		}
+		iseen := map[string]bool{}
 		for _, im := range pkg.Imports {
+			if iseen[im.Path] {
+				c.issue(Issue{Code: "duplicate_name", ID: im.ID, At: &im.Span, Message: im.Path + " is imported twice"})
+				continue
+			}
+			iseen[im.Path] = true
 			claim(im.ID)
 			if im.Path == pkg.Path {
 				c.err(im.ID, "import_self", "package "+pkg.Path+" imports itself")
@@ -105,21 +148,26 @@ func Run(p *ir.Program) *Result {
 			}
 		}
 		for _, cn := range pkg.Consts {
-			decl(cn.ID, cn.Name)
+			if !decl(cn.ID, cn.Name, cn.Span) {
+				continue
+			}
 			c.r.Facts = append(c.r.Facts, Fact{"fact": "const", "id": cn.ID, "value": cn.Value})
 			if cn.Type != "i64" {
 				c.err(cn.ID, "bad_type", "const must be i64")
 			}
 		}
 		for _, t := range pkg.Types {
-			decl(t.ID, t.Name)
+			if !decl(t.ID, t.Name, t.Span) {
+				continue
+			}
 			c.r.Facts = append(c.r.Facts, Fact{"fact": "type", "id": t.ID, "fields": len(t.Fields), "size": len(t.Fields) * 8})
 			fseen := map[string]bool{}
 			for i, f := range t.Fields {
-				claim(f.ID)
 				if fseen[f.Name] {
-					c.err(f.ID, "duplicate_name", "field "+f.Name+" is declared twice")
+					c.issue(Issue{Code: "duplicate_name", ID: f.ID, At: &f.Span, Message: "field " + f.Name + " is declared twice"})
+					continue
 				}
+				claim(f.ID)
 				fseen[f.Name] = true
 				ft, err := c.resolve(f.Type)
 				c.r.Facts = append(c.r.Facts, Fact{"fact": "field", "id": f.ID, "type": ft, "offset": i * 8})
@@ -132,14 +180,23 @@ func Run(p *ir.Program) *Result {
 		}
 		for fi := range pkg.Funcs {
 			fn := &pkg.Funcs[fi]
-			decl(fn.ID, fn.Name)
+			if !decl(fn.ID, fn.Name, fn.Span) {
+				c.dup[fn] = true
+				c.dupName[pkg.Path+"."+fn.Name] = true
+				continue
+			}
 			c.r.Funcs++
 			if len(fn.Params) > 6 {
 				c.err(fn.ID, "arity", fmt.Sprintf("%s has %d parameters; at most 6", fn.Name, len(fn.Params)))
 			}
 			var ps, names []string
+			pseen := map[string]bool{}
 			for _, pa := range fn.Params {
-				claim(pa.ID)
+				// A repeated param is reported by checkBody.
+				if !pseen[pa.Name] {
+					claim(pa.ID)
+				}
+				pseen[pa.Name] = true
 				pt, err := c.resolve(pa.Type)
 				if err != nil {
 					c.err(pa.ID, "bad_type", err.Error())
@@ -175,14 +232,31 @@ func Run(p *ir.Program) *Result {
 			c.imported[im.Path] = true
 		}
 		for fi := range pkg.Funcs {
-			c.checkBody(&pkg.Funcs[fi])
+			if !c.dup[&pkg.Funcs[fi]] {
+				c.checkBody(&pkg.Funcs[fi])
+			}
 		}
 	}
 	return r
 }
 
-// StdHint lists the packages the toolchain ships.
-var StdHint = []string{"ovid/io", "ovid/mem"}
+// StdHint lists the packages the toolchain ships: every directory of the
+// embedded std that holds a .ov file.
+var StdHint = stdPackages()
+
+func stdPackages() []string {
+	var pkgs []string
+	fs.WalkDir(std.FS, ".", func(p string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() && strings.HasSuffix(p, ".ov") {
+			if dir := path.Dir(p); !slices.Contains(pkgs, dir) {
+				pkgs = append(pkgs, dir)
+			}
+		}
+		return nil
+	})
+	sort.Strings(pkgs)
+	return pkgs
+}
 
 func (c *checker) checkEntry(p *ir.Program) {
 	ep, ok := c.pkgs[p.Entry]
@@ -192,7 +266,8 @@ func (c *checker) checkEntry(p *ir.Program) {
 	}
 	var main *ir.Func
 	for i := range ep.Funcs {
-		if ep.Funcs[i].Name == "main" {
+		// A repeated main is already reported and not checked further.
+		if ep.Funcs[i].Name == "main" && !c.dup[&ep.Funcs[i]] {
 			main = &ep.Funcs[i]
 		}
 	}
@@ -337,7 +412,7 @@ func (c *checker) checkBody(fn *ir.Func) {
 	e := &env{vars: map[string]string{}}
 	for _, pa := range fn.Params {
 		if _, ok := e.vars[pa.Name]; ok {
-			c.err(pa.ID, "duplicate_name", "parameter "+pa.Name+" is declared twice")
+			c.issue(Issue{Code: "duplicate_name", ID: pa.ID, At: &pa.Span, Message: "parameter " + pa.Name + " is declared twice"})
 		}
 		t, err := c.resolve(pa.Type)
 		if err != nil {
@@ -627,13 +702,31 @@ func (c *checker) pkgConst(n *ir.Node) string {
 
 func (c *checker) call(e *env, n *ir.Node) string {
 	path := n.Pkg
+	missing := false
 	if path == "" {
 		path = c.pkg.Path
 	} else if path != c.pkg.Path && !c.imported[path] {
+		missing = true
 		c.issue(Issue{Code: "missing_import", ID: n.ID, Message: "call to " + path + "." + n.Func + " but " + path + " is not imported",
 			Hint: "add `import " + path + "` after the package line"})
 	}
 	sg, ok := c.sigs[path+"."+n.Func]
+	if !ok && c.dupName[path+"."+n.Func] {
+		// The only func of this name repeats a const or type. That is
+		// reported there, and a call to it is not checked.
+		for _, a := range n.Args {
+			c.expr(e, a)
+		}
+		return "invalid"
+	}
+	if !ok && missing && c.pkgs[path] == nil {
+		// A package nothing imports is not loaded, so whether it has the
+		// func is unknown; the missing import is the whole report.
+		for _, a := range n.Args {
+			c.expr(e, a)
+		}
+		return "invalid"
+	}
 	if !ok {
 		var cands []string
 		if pk := c.pkgs[path]; pk != nil {
