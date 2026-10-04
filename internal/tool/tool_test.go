@@ -207,6 +207,67 @@ func TestSplitPackage(t *testing.T) {
 	}
 }
 
+// TestMemWords: Eq and Copy work a word at a time; check every length around
+// the word size, a difference in each byte, and an overlapping copy.
+func TestMemWords(t *testing.T) {
+	src := demo(`package demo
+import ovid/io
+import ovid/mem
+func main(io *ovid/io.Cap) i64 {
+  var a i64 = ovid/io.Alloc(io, 64)
+  var b i64 = ovid/io.Alloc(io, 64)
+  var n i64 = 0
+  while n <= 20 {
+    var i i64 = 0
+    while i < n {
+      store8(a + i, 65 + i)
+      store8(b + i, 0)
+      i = i + 1
+    }
+    store8(b + n, 7)
+    if ovid/mem.Copy(b, a, n) != n {
+      return 1
+    }
+    if load8(b + n) != 7 {
+      return 2
+    }
+    if !ovid/mem.Eq(a, n, b, n) {
+      return 3
+    }
+    i = 0
+    while i < n {
+      store8(b + i, 0)
+      if ovid/mem.Eq(a, n, b, n) {
+        return 4
+      }
+      store8(b + i, 65 + i)
+      i = i + 1
+    }
+    n = n + 1
+  }
+  if ovid/mem.Eq(a, 9, b, 10) {
+    return 5
+  }
+  // dst three bytes past src: the first three bytes repeat.
+  ovid/mem.Copy(a, strptr("abcdefghijklmnop"), 16)
+  ovid/mem.Copy(a + 3, a, 13)
+  if !ovid/mem.Eq(a, 16, strptr("abcabcabcabcabca"), 16) {
+    return 6
+  }
+  // dst before src: a plain move down.
+  ovid/mem.Copy(a, strptr("abcdefghijklmnop"), 16)
+  ovid/mem.Copy(a, a + 3, 13)
+  if !ovid/mem.Eq(a, 16, strptr("defghijklmnopnop"), 16) {
+    return 7
+  }
+  return 0
+}
+`)
+	if out, code := buildRun(t, src); code != 0 {
+		t.Fatalf("mem: code %d out %q", code, out)
+	}
+}
+
 func TestLibs(t *testing.T) {
 	sha := withProg(t, demo(`package demo
 import ovid/io
