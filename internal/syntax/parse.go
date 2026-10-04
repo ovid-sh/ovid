@@ -204,6 +204,11 @@ func (p *parser) ident() string {
 	return id
 }
 
+// tok is the span of the identifier name that was just consumed.
+func (p *parser) tok(name string) ir.Span {
+	return ir.Span{File: p.file, Off: p.last - len(name), End: p.last}
+}
+
 func (p *parser) peekKw(k string) bool {
 	m := p.save()
 	if !p.peekIdent() {
@@ -286,7 +291,8 @@ func (p *parser) expectEnd() {
 
 func (p *parser) parseConst(s int) {
 	name := p.ident()
-	typ := p.parseType()
+	ns := p.tok(name)
+	typ, _ := p.parseType()
 	p.expect('=')
 	ex := p.parseExpr()
 	v, ok := p.evalConst(ex)
@@ -297,7 +303,7 @@ func (p *parser) parseConst(s int) {
 		p.errorf("const %s must be i64", name)
 	}
 	p.pkg.Consts = append(p.pkg.Consts, ir.Const{
-		ID: "cn:" + p.pkg.Path + "." + name, Name: name, Type: "i64", Value: v, Span: p.span(s),
+		ID: "cn:" + p.pkg.Path + "." + name, Name: name, Type: "i64", Value: v, Span: p.span(s), NameSpan: ns,
 	})
 	p.expectEnd()
 }
@@ -367,6 +373,7 @@ func (p *parser) evalConst(n *ir.Node) (int64, bool) {
 
 func (p *parser) parseTypeDecl(s int) {
 	name := p.ident()
+	ns := p.tok(name)
 	p.expectKw("struct")
 	p.expect('{')
 	var fields []ir.Field
@@ -376,20 +383,24 @@ func (p *parser) parseTypeDecl(s int) {
 		}
 		fs := p.start()
 		fn := p.ident()
-		ft := p.parseType()
+		fns := p.tok(fn)
+		ft, fts := p.parseType()
 		fields = append(fields, ir.Field{
 			ID: "fld:" + p.pkg.Path + "." + name + "." + fn, Name: fn, Type: ft, Span: p.span(fs),
+			NameSpan: fns, TypeSpan: fts,
 		})
 		p.expectEnd()
 	}
 	p.expect('}')
 	p.pkg.Types = append(p.pkg.Types, ir.TypeDecl{
-		ID: "ty:" + p.pkg.Path + "." + name, Name: name, Fields: fields, Span: p.span(s),
+		ID: "ty:" + p.pkg.Path + "." + name, Name: name, Fields: fields, Span: p.span(s), NameSpan: ns,
 	})
 	p.expectEnd()
 }
 
-func (p *parser) parseType() string {
+// parseType reads a type and returns its full form and the span of its
+// name, the last identifier.
+func (p *parser) parseType() (string, ir.Span) {
 	star := false
 	if p.peekByte('*') {
 		p.expect('*')
@@ -408,26 +419,27 @@ func (p *parser) parseType() string {
 		name = p.ident()
 		pkg = path
 	}
+	ns := p.tok(name)
 	if pkg == "" {
 		if name == "i64" || name == "bool" {
 			if star {
 				p.errorf("cannot use a pointer to %s", name)
 			}
-			return name
+			return name, ns
 		}
 		pkg = p.pkg.Path
 	}
 	full := pkg + "." + name
 	if star {
-		return "*" + full
+		return "*" + full, ns
 	}
-	return full
+	return full, ns
 }
 
 func (p *parser) parseFunc(s int) {
 	name := p.ident()
 	p.fn = &ir.Func{
-		ID: "fn:" + p.pkg.Path + "." + name, Name: name,
+		ID: "fn:" + p.pkg.Path + "." + name, Name: name, NameSpan: p.tok(name),
 	}
 	p.ec = 0
 	p.sc = 0
@@ -436,9 +448,11 @@ func (p *parser) parseFunc(s int) {
 		for {
 			ps := p.start()
 			pn := p.ident()
-			pt := p.parseType()
+			pns := p.tok(pn)
+			pt, pts := p.parseType()
 			p.fn.Params = append(p.fn.Params, ir.Param{
 				ID: "pa:" + p.pkg.Path + "." + name + "." + pn, Name: pn, Type: pt, Span: p.span(ps),
+				NameSpan: pns, TypeSpan: pts,
 			})
 			if p.peekByte(')') {
 				break
@@ -447,7 +461,7 @@ func (p *parser) parseFunc(s int) {
 		}
 	}
 	p.expect(')')
-	p.fn.Result = p.parseType()
+	p.fn.Result, p.fn.ResultSpan = p.parseType()
 	p.fn.Body = p.parseBlock()
 	p.fn.Span = p.span(s)
 	p.pkg.Funcs = append(p.pkg.Funcs, *p.fn)
@@ -521,10 +535,10 @@ func (p *parser) stmt(s int, id string) *ir.Node {
 			p.expect('=')
 			v := p.parseExpr()
 			if e.Op == "name" && e.ValK == 0 && e.Left == nil && e.Base == nil {
-				return &ir.Node{Op: "assign", Name: e.Name, Val: v}
+				return &ir.Node{Op: "assign", Name: e.Name, Val: v, NameSpan: e.NameSpan}
 			}
 			if e.Op == "field" {
-				return &ir.Node{Op: "setfield", Base: e.Base, Name: e.Name, Val: v}
+				return &ir.Node{Op: "setfield", Base: e.Base, Name: e.Name, Val: v, NameSpan: e.NameSpan}
 			}
 			p.errorf("cannot assign to this expression")
 		}
@@ -545,8 +559,9 @@ func (p *parser) peekAssign() bool {
 
 func (p *parser) parseVar() *ir.Node {
 	name := p.ident()
-	typ := p.parseType()
-	n := &ir.Node{Op: "var", Name: name, Type: typ}
+	ns := p.tok(name)
+	typ, ts := p.parseType()
+	n := &ir.Node{Op: "var", Name: name, Type: typ, NameSpan: ns, TypeSpan: ts}
 	if p.peekAssign() {
 		p.expect('=')
 		n.Val = p.parseExpr()
@@ -719,13 +734,13 @@ func (p *parser) postfix() *ir.Node {
 			if p.peekByte('(') {
 				p.errorf("methods are not in v0")
 			}
-			e = &ir.Node{ID: p.eid(), Op: "field", Base: e, Name: name, Span: ir.Span{File: p.file, Off: e.Span.Off, End: p.last}}
+			e = &ir.Node{ID: p.eid(), Op: "field", Base: e, Name: name, Span: ir.Span{File: p.file, Off: e.Span.Off, End: p.last}, NameSpan: p.tok(name)}
 			continue
 		}
 		if p.peekKw("as") {
 			p.ident()
-			t := p.parseType()
-			e = &ir.Node{ID: p.eid(), Op: "cast", Type: t, Arg: e, Span: ir.Span{File: p.file, Off: e.Span.Off, End: p.last}}
+			t, ts := p.parseType()
+			e = &ir.Node{ID: p.eid(), Op: "cast", Type: t, Arg: e, Span: ir.Span{File: p.file, Off: e.Span.Off, End: p.last}, TypeSpan: ts}
 			continue
 		}
 		return e
@@ -763,7 +778,7 @@ func (p *parser) primary0() *ir.Node {
 		return &ir.Node{ID: p.eid(), Op: "bool", ValK: 2, Bool: false}
 	case p.peekKw("syscall"):
 		p.ident()
-		return p.callArgs("syscall", "", "")
+		return p.callArgs("syscall", "", "", ir.Span{})
 	case p.peekKw("load8"), p.peekKw("load32"), p.peekKw("load64"):
 		op := p.ident()
 		p.expect('(')
@@ -776,9 +791,9 @@ func (p *parser) primary0() *ir.Node {
 		if p.peekByte('*') {
 			p.errorf("sizeof takes a struct type, not a pointer: sizeof(T) is 8 * T's fields")
 		}
-		t := p.parseType()
+		t, ts := p.parseType()
 		p.expect(')')
-		return &ir.Node{ID: p.eid(), Op: "sizeof", Type: t}
+		return &ir.Node{ID: p.eid(), Op: "sizeof", Type: t, TypeSpan: ts}
 	case p.peekKw("strptr"), p.peekKw("strlen"):
 		op := p.ident()
 		p.expect('(')
@@ -793,11 +808,12 @@ func (p *parser) primary0() *ir.Node {
 	id := p.ident()
 	if p.peekByte('/') {
 		if path, name, ok := p.tryPkgRef(id); ok {
+			ns := p.tok(name)
 			if p.peekByte('(') {
-				return p.callArgs("call", path, name)
+				return p.callArgs("call", path, name, ns)
 			}
 			if p.imported(path) {
-				return &ir.Node{ID: p.eid(), Op: "name", Pkg: path, Name: name}
+				return &ir.Node{ID: p.eid(), Op: "name", Pkg: path, Name: name, NameSpan: ns}
 			}
 		}
 		p.restore(m)
@@ -808,18 +824,20 @@ func (p *parser) primary0() *ir.Node {
 		p.expect('.')
 		if p.peekIdent() {
 			name := p.ident()
+			ns := p.tok(name)
 			if p.peekByte('(') {
-				return p.callArgs("call", id, name)
+				return p.callArgs("call", id, name, ns)
 			}
 			// pkg.Name without a call is an imported const.
-			return &ir.Node{ID: p.eid(), Op: "name", Pkg: id, Name: name}
+			return &ir.Node{ID: p.eid(), Op: "name", Pkg: id, Name: name, NameSpan: ns}
 		}
 		p.restore(m)
 	}
+	ns := p.tok(id)
 	if p.peekByte('(') {
-		return p.callArgs("call", "", id)
+		return p.callArgs("call", "", id, ns)
 	}
-	return &ir.Node{ID: p.eid(), Op: "name", Name: id}
+	return &ir.Node{ID: p.eid(), Op: "name", Name: id, NameSpan: ns}
 }
 
 // imported reports whether path is imported by the file being parsed.
@@ -855,7 +873,8 @@ func (p *parser) tryPkgRef(first string) (string, string, bool) {
 	return path, p.ident(), true
 }
 
-func (p *parser) callArgs(op, pkg, name string) *ir.Node {
+// callArgs reads a call's arguments; ns is the span of the func name.
+func (p *parser) callArgs(op, pkg, name string, ns ir.Span) *ir.Node {
 	p.expect('(')
 	var args []*ir.Node
 	if !p.peekByte(')') {
@@ -868,7 +887,7 @@ func (p *parser) callArgs(op, pkg, name string) *ir.Node {
 		}
 	}
 	p.expect(')')
-	n := &ir.Node{ID: p.eid(), Op: op, Pkg: pkg, Func: name, Args: args}
+	n := &ir.Node{ID: p.eid(), Op: op, Pkg: pkg, Func: name, Args: args, NameSpan: ns}
 	if op == "syscall" {
 		n.Func = ""
 		n.Pkg = ""

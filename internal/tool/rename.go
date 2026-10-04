@@ -34,62 +34,10 @@ func identByte(c byte) bool {
 	return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
 }
 
-// tokens returns offsets of whole-word occurrences of name in src[lo:hi],
-// skipping string literals and comments.
-func tokens(src []byte, lo, hi int, name string) []int {
-	var out []int
-	for i := lo; i < hi; i++ {
-		c := src[i]
-		if c == '"' {
-			for i++; i < hi && src[i] != '"'; i++ {
-				if src[i] == '\\' {
-					i++
-				}
-			}
-			continue
-		}
-		if c == '/' && i+1 < hi && src[i+1] == '/' {
-			for i < hi && src[i] != '\n' {
-				i++
-			}
-			continue
-		}
-		if !identByte(c) || (i > 0 && identByte(src[i-1])) {
-			continue
-		}
-		j := i
-		for j < len(src) && identByte(src[j]) {
-			j++
-		}
-		if string(src[i:j]) == name && j <= hi {
-			out = append(out, i)
-		}
-		i = j - 1
-	}
-	return out
-}
-
-func prevByte(src []byte, off int) byte {
-	for off > 0 {
-		off--
-		if src[off] != ' ' && src[off] != '\t' {
-			return src[off]
-		}
-	}
-	return 0
-}
-
-func nextByte(src []byte, off int) byte {
-	for ; off < len(src); off++ {
-		if src[off] != ' ' && src[off] != '\t' {
-			return src[off]
-		}
-	}
-	return 0
-}
-
-// Rename renames a declaration and every use of it, token by token. It
-// refuses names that collide and changes that add check errors.
+// Rename renames a declaration and every use the checker resolved to it,
+// rewriting only those name tokens: a field, local, or other declaration
+// spelled the same is left alone. It refuses names that collide and changes
+// that add check errors.
 func Rename(dir, q, to string, dryRun bool, w io.Writer) int {
 	unlock, err := lockModule(dir)
 	if err != nil {
@@ -148,20 +96,18 @@ func Rename(dir, q, to string, dryRun bool, w io.Writer) int {
 	type at struct{ file, off int }
 	seen := map[at]bool{}
 	var sps []*splice
-	add := func(file int, offs []int) {
-		for _, off := range offs {
-			k := at{file, off}
-			if seen[k] {
-				continue
-			}
-			seen[k] = true
-			sps = append(sps, &splice{abs: m.Files[file].Abs, off: off, end: off + len(old), text: to})
+	add := func(sp ir.Span) {
+		k := at{sp.File, sp.Off}
+		if seen[k] || sp.End > len(m.Files[sp.File].Src) || string(m.Files[sp.File].Src[sp.Off:sp.End]) != old {
+			return
 		}
+		seen[k] = true
+		sps = append(sps, &splice{abs: m.Files[sp.File].Abs, off: sp.Off, end: sp.End, text: to})
 	}
 	// The declaration's own name token.
-	add(t.Span.File, declToken(m, t, old))
+	add(declSpan(t))
 	for _, r := range rs {
-		add(r.span.File, refToken(m, r, old))
+		add(r.tok)
 	}
 	for _, s := range sps {
 		if s.abs == "" {
@@ -190,6 +136,25 @@ func nameOf(l *module.Loc) string {
 		}
 	}
 	return ""
+}
+
+// declSpan is the name token of a declaration.
+func declSpan(l *module.Loc) ir.Span {
+	switch n := l.Node.(type) {
+	case *ir.Func:
+		return n.NameSpan
+	case *ir.TypeDecl:
+		return n.NameSpan
+	case *ir.Const:
+		return n.NameSpan
+	case *ir.Field:
+		return n.NameSpan
+	case *ir.Param:
+		return n.NameSpan
+	case *ir.Node:
+		return n.NameSpan
+	}
+	return ir.Span{}
 }
 
 func renamedID(l *module.Loc, old, to string) string {
@@ -249,71 +214,4 @@ func collision(m *module.Module, t *module.Loc, to string) string {
 		}
 	}
 	return ""
-}
-
-// declToken finds the name token in a declaration's own source.
-func declToken(m *module.Module, t *module.Loc, old string) []int {
-	src := m.Files[t.Span.File].Src
-	offs := tokens(src, t.Span.Off, t.Span.End, old)
-	if len(offs) == 0 {
-		return nil
-	}
-	switch t.Kind {
-	case "func", "type", "const", "stmt":
-		// The first token after the keyword.
-		return offs[:1]
-	}
-	// Fields and params start with their name.
-	if offs[0] == t.Span.Off {
-		return offs[:1]
-	}
-	return nil
-}
-
-// refToken finds the token a reference spells the name with.
-func refToken(m *module.Module, r ref, old string) []int {
-	src := m.Files[r.span.File].Src
-	offs := tokens(src, r.span.Off, r.span.End, old)
-	if len(offs) == 0 {
-		return nil
-	}
-	n, _ := m.Index[r.id].Node.(*ir.Node)
-	switch r.kind {
-	case "call":
-		for _, o := range offs {
-			if nextByte(src, o+len(old)) == '(' {
-				return []int{o}
-			}
-		}
-	case "field", "setfield":
-		lo := n.Base.Span.End
-		for _, o := range offs {
-			if o >= lo && prevByte(src, o) == '.' {
-				return []int{o}
-			}
-		}
-	case "name", "assign":
-		if n.Pkg != "" {
-			// path.Name: the name is the last token.
-			return offs[len(offs)-1:]
-		}
-		return offs[:1]
-	case "type", "result":
-		var out []int
-		for _, o := range offs {
-			if p := prevByte(src, o); p == '*' || p == '.' {
-				out = append(out, o)
-				continue
-			}
-			// An unstarred local type: `x T`. The first token of a param or
-			// field is its own name, so skip it.
-			if o != r.span.Off && !(n != nil && n.Op == "var" && o == offs[0] && n.Name == old) {
-				if nb := nextByte(src, o+len(old)); nb != '.' && nb != '(' {
-					out = append(out, o)
-				}
-			}
-		}
-		return out
-	}
-	return nil
 }
