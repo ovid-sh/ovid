@@ -579,21 +579,38 @@ func newIDs(m *module.Module, sps []*splice, nops int, show bool) []map[string]a
 		if !ok {
 			continue
 		}
-		// The top-level decl around the splice, so the caller can chain
-		// another edit on it without re-reading.
-		at := s.newOff + len(s.text)/2
+		// The top-level decls the splice wrote into: the one around it, or
+		// every one inside it (an append or insert of several decls, or a
+		// decl replaced by several), so the caller can chain another edit
+		// on each without re-reading. The written range leaves out the
+		// blank lines around the text, so a neighbour is not counted.
+		text := strings.TrimSpace(s.text)
+		lo := s.newOff + strings.Index(s.text, text)
+		hi := lo + len(text)
+		touched := func(l *module.Loc) bool { return l.Full.Off < hi && l.Full.End > lo }
+		if text == "" {
+			// A delete: the decl it was in, or the one now at its place.
+			at := s.newOff + len(s.text)/2
+			touched = func(l *module.Loc) bool { return at >= l.Full.Off && at <= l.Full.End }
+		}
+		var decls []*module.Loc
 		for _, l := range m.Locs() {
-			id := l.ID
 			if l.Kind != "func" && l.Kind != "type" && l.Kind != "const" {
 				continue
 			}
-			if l.Span.File != fi || at < l.Full.Off || at > l.Full.End || seen[s.op][l] {
+			if l.Span.File != fi || !touched(l) || seen[s.op][l] {
 				continue
 			}
 			if seen[s.op] == nil {
 				seen[s.op] = map[*module.Loc]bool{}
 			}
 			seen[s.op][l] = true
+			decls = append(decls, l)
+		}
+		// In source order; Locs has a file's consts, then types, then funcs.
+		sort.SliceStable(decls, func(i, j int) bool { return decls[i].Full.Off < decls[j].Full.Off })
+		for _, l := range decls {
+			id := l.ID
 			d := map[string]any{"id": id, "hash": m.LocHash(l)}
 			if show {
 				d["text"] = m.Text(l.Full)
@@ -601,15 +618,11 @@ func newIDs(m *module.Module, sps []*splice, nops int, show bool) []map[string]a
 			prev, _ := out[s.op]["decls"].([]map[string]any)
 			out[s.op]["decls"] = append(prev, d)
 		}
-		text := strings.TrimSpace(s.text)
 		if text == "" {
 			continue
 		}
-		lo := s.newOff + strings.Index(s.text, text)
-		hi := lo + len(text)
-		var ids []string
+		var written []*module.Loc
 		for _, l := range m.Locs() {
-			id := l.ID
 			if l.Span.File != fi || l.Span.Off < lo || l.Span.End > hi {
 				continue
 			}
@@ -618,7 +631,12 @@ func newIDs(m *module.Module, sps []*splice, nops int, show bool) []map[string]a
 			}) {
 				continue
 			}
-			ids = append(ids, id)
+			written = append(written, l)
+		}
+		sort.SliceStable(written, func(i, j int) bool { return written[i].Span.Off < written[j].Span.Off })
+		var ids []string
+		for _, l := range written {
+			ids = append(ids, l.ID)
 		}
 		prev := out[s.op]["ids"].([]string)
 		out[s.op]["ids"] = append(prev, ids...)

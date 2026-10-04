@@ -310,7 +310,9 @@ and names the op) and checked. Result: {"ok":true,"written","files",
 "check_ok","errors","errors_before","revision","ops":[{"ids":[...],
 "decls":[{"id","hash"}]}]}: ids are the nodes the op wrote, decls the
 top-level decls it touched with their new hashes (--show adds "text"), so a
-follow-up edit can "expect" them without reading again.
+follow-up edit can "expect" them without reading again: the decl it wrote
+into, or each decl its text holds (append or insert of several, or a decl
+replaced by several), in source order.
 
 Examples:
   fix one argument:   {"op":"replace","id":"ex:app.main:2","expect":H,"text":"2"}
