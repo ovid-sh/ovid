@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Ovid is a small compiled language whose toolchain is built for agents: every command answers in JSON lines, and source can be edited through id-addressed, hash-guarded edits. The compiler emits static Linux x86-64 ELF binaries with no libc. It exists twice:
+Ovid is a small compiled language whose toolchain is built for agents: commands answer in JSON lines (except `help`, plain `show`, and a running program's own output under `run`), and source can be edited through id-addressed, hash-guarded edits. The compiler emits static Linux x86-64 ELF binaries with no libc. It exists twice:
 
 - **Go toolchain** (`cmd/ovid`, `internal/`): the full toolchain, including the agent commands (`outline`, `show`, `refs`, `grep`, `edit`, `rename`, `move`, `test`).
 - **Self-hosted compiler** (`prog/`, written in Ovid): only `check`, `build`, and `dump`. It needs `--std <dir>` because only the Go binary embeds the standard library.
@@ -33,7 +33,7 @@ bin/ovid build -C prog -o /tmp/s1          # Go compiles the Ovid compiler
 cmp /tmp/s1 /tmp/s2                        # must be byte-identical
 ```
 
-No third-party Go dependencies (`go.mod` has none). Built binaries only execute on Linux x86-64; elsewhere the tests that run them only build.
+No third-party Go dependencies (`go.mod` has none). Built binaries only execute on Linux x86-64. Only the corpus adapts to other hosts (it builds each `run/` case and skips running it); the other tests that execute compiled programs (`internal/asm`, `internal/compile`, most of `internal/tool`) assume a Linux x86-64 host.
 
 ## Architecture
 
@@ -45,7 +45,7 @@ The Go pipeline, one package per stage under `internal/`:
 
 - `module` sits in front: finds `ovid.mod`, loads one directory per package, resolves shipped packages from the embedded `std/` (`std/std.go`), indexes every node by id to file:line:col, computes hashes and the module `revision`, and owns durable writes (`write.go`: temp file, fsync, rename) and the `ovid.mod` flock (`lock_unix.go`).
 - `ir` is the program tree. `.ov` text is the source of truth; the JSON form (`ovid dump`) is a derived view.
-- `tool` implements every command; `cmd/ovid/main.go` is only flag parsing and dispatch. Each command function takes a dir and an `io.Writer` and returns the exit code, which is how `tool_test.go` drives them in-process.
+- `tool` implements the commands; `cmd/ovid/main.go` is flag parsing and dispatch, plus `version`, which it implements itself. Each command function takes a dir and an `io.Writer` and returns the exit code, which is how `tool_test.go` drives them in-process.
 - `tool/help.go` holds the `ovid help` texts, including the language reference.
 
 ### Two compilers that must stay identical
@@ -54,7 +54,7 @@ The Go pipeline, one package per stage under `internal/`:
 
 ### The output contract
 
-`docs/PROTOCOL.md` is the contract consumers rely on: JSON lines with a final `"ok"` line, exit codes (0 ok, 1 errors, 2 stale edit, 64 usage, 125 `run` could not build), the failure `error` codes, diagnostic `code`s, id forms, hashes, and edit receipts. Adding or changing an error code, diagnostic code, or receipt field means updating that file (and `ovid help commands`/`ids`/`edit` in `help.go`). New keys may be added; existing ones keep their meaning.
+`docs/PROTOCOL.md` is the contract consumers rely on: JSON lines with a final `"ok"` line (`help` and `show` without `--json` print text; `run` passes the program's stdio and exit code through and writes JSON only when the build fails), exit codes (0 ok, 1 errors, 2 stale edit, 64 usage, 125 `run` could not build), the failure `error` codes, diagnostic `code`s, id forms, hashes, and edit receipts. Adding or changing an error code, diagnostic code, or receipt field means updating that file (and `ovid help commands`/`ids`/`edit` in `help.go`). New keys may be added; existing ones keep their meaning.
 
 ### Ids, hashes, and edits
 
