@@ -1,0 +1,7 @@
+// stdout: "hi\n"
+package demo
+import ovid/io
+func main(io *ovid/io.Cap) i64 {
+  ovid/io.Write(1, strptr("hi\n"), strlen("hi\n"))
+  return 0
+}

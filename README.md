@@ -114,6 +114,10 @@ compiler is 188,001 bytes (2026-10-03). On an idle starship (Ryzen 7
 go test ./...
 ```
 
+`tests/` is a corpus of Ovid programs with their expected exit code, output,
+or diagnostics written as comments; add a test by adding a file. See
+[tests/README.md](tests/README.md).
+
 ## Not yet
 
 No HTTP client, no URL imports, no package

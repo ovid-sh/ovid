@@ -1,0 +1,8 @@
+// One package in two files; a second package called by a one-segment path.
+// exit: 5
+package demo
+import ovid/io
+import util
+func main(io *ovid/io.Cap) i64 {
+  return Two() + util.Three()
+}
