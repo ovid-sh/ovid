@@ -32,6 +32,7 @@ const SYS_FSYNC i64 = 74
 const SYS_RENAME i64 = 82
 const SYS_UNLINK i64 = 87
 const SYS_FCHMOD i64 = 91
+const SYS_MKDIRAT i64 = 258
 
 // Argc is the number of command-line arguments, the program name included.
 func Argc(io *Cap) i64 {
@@ -404,7 +405,7 @@ func Getdents(fd i64, buf i64, n i64) i64 {
 
 // Mkdir creates the directory at the NUL-terminated path, mode 0755.
 func Mkdir(path i64) i64 {
-  return syscall(258, AT_FDCWD, path, 493, 0, 0, 0)
+  return syscall(SYS_MKDIRAT, AT_FDCWD, path, 493, 0, 0, 0)
 }
 
 // IsDir is 1 if path (pathn bytes) is a directory, else 0.
