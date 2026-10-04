@@ -1,6 +1,7 @@
 // A second decl of a name gets one error, at that decl. Nothing inside a
 // repeated type or func is checked: the second F's bad return is not
-// reported.
+// reported. A call goes to the first func of the name (F takes two i64),
+// and a call to a func that repeats a type (Pair) is not checked.
 package demo
 import ovid/io
 import ovid/io // error: duplicate_name 1
@@ -22,7 +23,7 @@ func Pair() i64 { // error: duplicate_name 1
   return 0
 }
 func main(io *ovid/io.Cap) i64 {
-  var n i64 = 1
+  var n i64 = Pair() + F(true, 2) // error: type_mismatch 26
   var n i64 = 2 // error: duplicate_name 3
   return n
 }

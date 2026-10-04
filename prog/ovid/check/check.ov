@@ -617,6 +617,21 @@ func CheckExpr(c *Ch, n *ovid/parse.Node) i64 {
     }
     var fn *ovid/parse.Decl = ovid/parse.FindFunc(c.mod, pp, pn, n.fnp, n.fnn)
     var a *ovid/parse.Node = n.args
+    if fn != 0 as *ovid/parse.Decl {
+      if fn.dup != 0 {
+        // The index holds a repeat. Call the first func of the name; if
+        // that one repeats a const or type, the call is not checked.
+        var fk *ovid/parse.Pkg = FindPkg(c, pp, pn)
+        fn = ovid/parse.FindDecl(fk.fs, n.fnp, n.fnn)
+        if fn.dup != 0 {
+          while a != 0 as *ovid/parse.Node {
+            CheckExpr(c, a)
+            a = a.next
+          }
+          return SetBad(c)
+        }
+      }
+    }
     if fn == 0 as *ovid/parse.Decl {
       if !unloaded {
         Err(c, strptr("unknown_name"), strlen("unknown_name"), n.fnp, n.fnn)

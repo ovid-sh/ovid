@@ -54,6 +54,7 @@ type checker struct {
 	imported map[string]bool
 	res      string
 	dup      map[*ir.Func]bool // funcs whose name was already declared
+	dupName  map[string]bool   // those funcs, as pkg.Name
 }
 
 func (c *checker) issue(is Issue) { c.r.Issues = append(c.r.Issues, is) }
@@ -69,7 +70,7 @@ func (c *checker) mismatch(id, what, got, want string) {
 // Run checks p.
 func Run(p *ir.Program) *Result {
 	r := &Result{Types: map[string]string{}}
-	c := &checker{r: r, pkgs: map[string]*ir.Package{}, sigs: map[string]sig{}, dup: map[*ir.Func]bool{}}
+	c := &checker{r: r, pkgs: map[string]*ir.Package{}, sigs: map[string]sig{}, dup: map[*ir.Func]bool{}, dupName: map[string]bool{}}
 	if strings.TrimSpace(p.Module) == "" {
 		c.err("", "bad_module", "ovid.mod has no module line")
 	}
@@ -181,6 +182,7 @@ func Run(p *ir.Program) *Result {
 			fn := &pkg.Funcs[fi]
 			if !decl(fn.ID, fn.Name, fn.Span) {
 				c.dup[fn] = true
+				c.dupName[pkg.Path+"."+fn.Name] = true
 				continue
 			}
 			c.r.Funcs++
@@ -709,6 +711,14 @@ func (c *checker) call(e *env, n *ir.Node) string {
 			Hint: "add `import " + path + "` after the package line"})
 	}
 	sg, ok := c.sigs[path+"."+n.Func]
+	if !ok && c.dupName[path+"."+n.Func] {
+		// The only func of this name repeats a const or type. That is
+		// reported there, and a call to it is not checked.
+		for _, a := range n.Args {
+			c.expr(e, a)
+		}
+		return "invalid"
+	}
 	if !ok && missing && c.pkgs[path] == nil {
 		// A package nothing imports is not loaded, so whether it has the
 		// func is unknown; the missing import is the whole report.
