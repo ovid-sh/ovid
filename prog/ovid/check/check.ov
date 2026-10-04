@@ -397,9 +397,60 @@ func FieldTy(c *Ch, tp i64, tn i64, fp i64, fn i64) i64 {
   return 0
 }
 
+// TyKind classifies the type tp[0:tn] as the parser wrote it (i64, bool,
+// pkg.T, or *pkg.T): 0 for i64, bool, or a pointer to a struct that exists,
+// 1 for such a struct by value, -1 when the package or struct is unknown.
+func TyKind(c *Ch, tp i64, tn i64) i64 {
+  if TyEq(tp, tn, strptr("i64"), strlen("i64")) || TyEq(tp, tn, strptr("bool"), strlen("bool")) {
+    return 0
+  }
+  var star i64 = 0
+  if tn > 0 && load8(tp) == 42 {
+    star = 1
+  }
+  var p i64 = tp + star
+  var n i64 = tn - star
+  var dot i64 = -1
+  var i i64 = 0
+  while i < n {
+    if load8(p + i) == 46 {
+      dot = i
+    }
+    i = i + 1
+  }
+  if dot < 1 {
+    return -1
+  }
+  var k *ovid/parse.Pkg = FindPkg(c, p, dot)
+  if k == 0 as *ovid/parse.Pkg {
+    return -1
+  }
+  if ovid/parse.FindDecl(k.ts, (p + dot) + 1, (n - dot) - 1) == 0 as *ovid/parse.Decl {
+    return -1
+  }
+  return 1 - star
+}
+
+// DeclTy checks the type of the field, param, or func result d, which the
+// checker is at. An unknown type becomes invalid, so its uses stay quiet.
+func DeclTy(c *Ch, d *ovid/parse.Decl) i64 {
+  var kind i64 = TyKind(c, d.typp, d.typn)
+  if kind < 0 {
+    Err(c, strptr("bad_type"), strlen("bad_type"), d.typp, d.typn)
+    d.typp = strptr("invalid")
+    d.typn = strlen("invalid")
+  } else if kind == 1 {
+    Err(c, strptr("struct_value"), strlen("struct_value"), d.typp, d.typn)
+  }
+  return 0
+}
+
 // NeedTy reports a type_mismatch saying msg unless the current type is
-// tp[0:tn] or already invalid.
+// tp[0:tn], or either of them is invalid.
 func NeedTy(c *Ch, tp i64, tn i64, msg i64, msgn i64) i64 {
+  if TyEq(tp, tn, strptr("invalid"), strlen("invalid")) {
+    return 0
+  }
   if !Bad(c) {
     if !IsTy(c, tp, tn) {
       Err(c, strptr("type_mismatch"), strlen("type_mismatch"), msg, msgn)
@@ -423,7 +474,13 @@ func CheckExpr(c *Ch, n *ovid/parse.Node) i64 {
   }
   Here(c, n)
   var op i64 = n.op
-  if op == ovid/parse.OP_INT || op == ovid/parse.OP_STRPTR || op == ovid/parse.OP_STRLEN || op == ovid/parse.OP_SIZEOF {
+  if op == ovid/parse.OP_INT || op == ovid/parse.OP_STRPTR || op == ovid/parse.OP_STRLEN {
+    return SetI64(c)
+  }
+  if op == ovid/parse.OP_SIZEOF {
+    if TyKind(c, n.typp, n.typn) != 1 {
+      Err(c, strptr("bad_type"), strlen("bad_type"), n.typp, n.typn)
+    }
     return SetI64(c)
   }
   if op == ovid/parse.OP_BOOL {
@@ -520,7 +577,18 @@ func CheckExpr(c *Ch, n *ovid/parse.Node) i64 {
     return SetI64(c)
   }
   if op == ovid/parse.OP_CAST {
+    var ck i64 = TyKind(c, n.typp, n.typn)
+    if ck < 0 {
+      Err(c, strptr("bad_type"), strlen("bad_type"), n.typp, n.typn)
+      return SetBad(c)
+    }
     CheckExpr(c, n.arg)
+    if ck == 1 {
+      if !Bad(c) {
+        Here(c, n)
+        Err(c, strptr("type_mismatch"), strlen("type_mismatch"), strptr("cast needs i64, bool, or a pointer type"), strlen("cast needs i64, bool, or a pointer type"))
+      }
+    }
     return SetTy(c, n.typp, n.typn)
   }
   if op == ovid/parse.OP_FIELD {
@@ -541,7 +609,7 @@ func CheckExpr(c *Ch, n *ovid/parse.Node) i64 {
       pp = n.pkgp
       pn = n.pkgn
       if !Imported(c, pp, pn) {
-        Err(c, strptr("unknown_package"), strlen("unknown_package"), pp, pn)
+        Err(c, strptr("missing_import"), strlen("missing_import"), pp, pn)
       }
     }
     var fn *ovid/parse.Decl = ovid/parse.FindFunc(c.mod, pp, pn, n.fnp, n.fnn)
@@ -620,19 +688,12 @@ func CheckStmt(c *Ch, s *ovid/parse.Node) i64 {
   if op == ovid/parse.OP_VAR {
     var tp i64 = s.typp
     var tn i64 = s.typn
-    var ok bool = false
-    if TyEq(tp, tn, strptr("i64"), strlen("i64")) {
-      ok = true
-    }
-    if TyEq(tp, tn, strptr("bool"), strlen("bool")) {
-      ok = true
-    }
-    if tn > 0 {
-      if load8(tp) == 42 {
-        ok = true
-      }
-    }
-    if !ok {
+    var kind i64 = TyKind(c, tp, tn)
+    if kind < 0 {
+      Err(c, strptr("bad_type"), strlen("bad_type"), tp, tn)
+      tp = strptr("invalid")
+      tn = strlen("invalid")
+    } else if kind == 1 {
       Err(c, strptr("struct_value"), strlen("struct_value"), s.namep, s.namen)
     }
     Define(c, s.namep, s.namen, tp, tn)
@@ -738,6 +799,7 @@ func CheckFunc(c *Ch, fn *ovid/parse.Decl) i64 {
   HereDecl(c, H_FUNC, c.pkg, fn, fn)
   CheckStmts(c, fn.body)
   if !Paths(fn.body) {
+    HereDecl(c, H_FUNC, c.pkg, fn, fn)
     Err(c, strptr("missing_return"), strlen("missing_return"), c.fnp, c.fnn)
   }
   Pop(c)
@@ -754,11 +816,12 @@ func CheckMain(c *Ch) i64 {
   c.fnn = 0
   c.hk = H_NONE
   if k == 0 as *ovid/parse.Pkg {
-    Err(c, strptr("bad_main"), strlen("bad_main"), strptr("missing entry package"), strlen("missing entry package"))
+    Err(c, strptr("no_entry"), strlen("no_entry"), strptr("entry package does not exist"), strlen("entry package does not exist"))
     return 0
   }
   var fn *ovid/parse.Decl = ovid/parse.FindDecl(k.fs, strptr("main"), strlen("main"))
   if fn == 0 as *ovid/parse.Decl {
+    HereDecl(c, H_PKG, k, 0 as *ovid/parse.Decl, 0 as *ovid/parse.Decl)
     Err(c, strptr("bad_main"), strlen("bad_main"), strptr("entry package has no main"), strlen("entry package has no main"))
     return 0
   }
@@ -776,6 +839,49 @@ func CheckMain(c *Ch) i64 {
     c.fnn = strlen("main")
     HereDecl(c, H_FUNC, k, fn, fn)
     Err(c, strptr("bad_main"), strlen("bad_main"), strptr("main must be (io *ovid/io.Cap) i64"), strlen("main must be (io *ovid/io.Cap) i64"))
+  }
+  return CheckAbi(c)
+}
+
+// CheckAbi checks that ovid/io.Cap starts with the five fields the runtime
+// fills before main: argc, argv, heap, used, size, all i64.
+func CheckAbi(c *Ch) i64 {
+  c.fnp = 0
+  c.fnn = 0
+  c.hk = H_NONE
+  var k *ovid/parse.Pkg = FindPkg(c, strptr("ovid/io"), strlen("ovid/io"))
+  if k == 0 as *ovid/parse.Pkg {
+    Err(c, strptr("bad_abi"), strlen("bad_abi"), strptr("missing package ovid/io"), strlen("missing package ovid/io"))
+    return 0
+  }
+  var t *ovid/parse.Decl = ovid/parse.FindDecl(k.ts, strptr("Cap"), strlen("Cap"))
+  if t == 0 as *ovid/parse.Decl {
+    HereDecl(c, H_PKG, k, 0 as *ovid/parse.Decl, 0 as *ovid/parse.Decl)
+    Err(c, strptr("bad_abi"), strlen("bad_abi"), strptr("ovid/io has no type Cap"), strlen("ovid/io has no type Cap"))
+    return 0
+  }
+  // The names are four bytes each, five bytes apart.
+  var names i64 = strptr("argc argv heap used size")
+  var f *ovid/parse.Decl = t.sub
+  var ok bool = true
+  var i i64 = 0
+  while i < 5 {
+    if f == 0 as *ovid/parse.Decl {
+      ok = false
+    } else {
+      if !ovid/mem.Eq(f.namep, f.namen, names + (i * 5), 4) {
+        ok = false
+      }
+      if !ovid/mem.Eq(f.typp, f.typn, strptr("i64"), strlen("i64")) {
+        ok = false
+      }
+      f = f.next
+    }
+    i = i + 1
+  }
+  if !ok {
+    HereDecl(c, H_TYPE, k, t, 0 as *ovid/parse.Decl)
+    Err(c, strptr("bad_abi"), strlen("bad_abi"), strptr("the runtime fills Cap's first five fields: argc, argv, heap, used, size (all i64, in order)"), strlen("the runtime fills Cap's first five fields: argc, argv, heap, used, size (all i64, in order)"))
   }
   return 0
 }
@@ -802,19 +908,63 @@ func CountIds(m *ovid/parse.Mod) i64 {
   return n
 }
 
-// ClaimDecls claims the id of every decl in the list d of package k; o is
-// the type or func that owns a list of fields or params.
+// ClaimDecls claims the id of every decl in the list d of package k.
 func ClaimDecls(c *Ch, kind i64, k *ovid/parse.Pkg, d *ovid/parse.Decl, o *ovid/parse.Decl) i64 {
   while d != 0 as *ovid/parse.Decl {
     HereDecl(c, kind, k, d, o)
     Claim(c)
-    if kind == H_TYPE {
-      ClaimDecls(c, H_FIELD, k, d.sub, d)
-    }
-    if kind == H_FUNC {
-      ClaimDecls(c, H_PARAM, k, d.sub, d)
-    }
     d = d.next
+  }
+  return 0
+}
+
+// Types claims the ids of package k's types and their fields, and checks
+// each type's name against the consts and each field's type.
+func Types(c *Ch, k *ovid/parse.Pkg) i64 {
+  var t *ovid/parse.Decl = k.ts
+  while t != 0 as *ovid/parse.Decl {
+    HereDecl(c, H_TYPE, k, t, 0 as *ovid/parse.Decl)
+    Claim(c)
+    if ovid/parse.FindDecl(k.cs, t.namep, t.namen) != 0 as *ovid/parse.Decl {
+      Err(c, strptr("duplicate_name"), strlen("duplicate_name"), t.namep, t.namen)
+    }
+    var f *ovid/parse.Decl = t.sub
+    while f != 0 as *ovid/parse.Decl {
+      HereDecl(c, H_FIELD, k, f, t)
+      Claim(c)
+      DeclTy(c, f)
+      f = f.next
+    }
+    t = t.next
+  }
+  return 0
+}
+
+// Funcs claims the ids of package k's funcs and their params, and checks
+// each func's name against the consts and types and its param and result
+// types.
+func Funcs(c *Ch, k *ovid/parse.Pkg) i64 {
+  var fn *ovid/parse.Decl = k.fs
+  while fn != 0 as *ovid/parse.Decl {
+    HereDecl(c, H_FUNC, k, fn, fn)
+    Claim(c)
+    var taken bool = ovid/parse.FindDecl(k.cs, fn.namep, fn.namen) != 0 as *ovid/parse.Decl
+    if !taken {
+      taken = ovid/parse.FindDecl(k.ts, fn.namep, fn.namen) != 0 as *ovid/parse.Decl
+    }
+    if taken {
+      Err(c, strptr("duplicate_name"), strlen("duplicate_name"), fn.namep, fn.namen)
+    }
+    var pa *ovid/parse.Decl = fn.sub
+    while pa != 0 as *ovid/parse.Decl {
+      HereDecl(c, H_PARAM, k, pa, fn)
+      Claim(c)
+      DeclTy(c, pa)
+      pa = pa.next
+    }
+    HereDecl(c, H_FUNC, k, fn, fn)
+    DeclTy(c, fn)
+    fn = fn.next
   }
   return 0
 }
@@ -837,6 +987,9 @@ func Run(io *ovid/io.Cap, m *ovid/parse.Mod, build bool) i64 {
   }
   c.tabmask = sz - 1
   c.tab = ovid/io.Alloc(io, sz * 16)
+  if m.namen == 0 {
+    Err(c, strptr("bad_module"), strlen("bad_module"), strptr("ovid.mod has no module line"), strlen("ovid.mod has no module line"))
+  }
   var npkg i64 = 0
   var k *ovid/parse.Pkg = m.pkgs
   while k != 0 as *ovid/parse.Pkg {
@@ -859,9 +1012,12 @@ func Run(io *ovid/io.Cap, m *ovid/parse.Mod, build bool) i64 {
       }
       im = im.next
     }
-    ClaimDecls(c, H_TYPE, k, k.ts, 0 as *ovid/parse.Decl)
+    c.pathp = k.pathp
+    c.pathn = k.pathn
     ClaimDecls(c, H_CONST, k, k.cs, 0 as *ovid/parse.Decl)
-    ClaimDecls(c, H_FUNC, k, k.fs, 0 as *ovid/parse.Decl)
+    Types(c, k)
+    Funcs(c, k)
+    c.pathn = 0
     k = k.next
   }
   CheckMain(c)
