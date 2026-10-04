@@ -2,11 +2,8 @@
 
 package tool
 
-import (
-	"os"
-	"time"
-)
+import "time"
 
-func runTraced(bin string, args []string, out *os.File, timeout time.Duration) (procResult, bool) {
+func runTraced(bin string, args []string, pio procIO, timeout time.Duration) (procResult, bool) {
 	return procResult{}, false
 }

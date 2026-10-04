@@ -4,11 +4,9 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
-	"syscall"
 	"time"
 
 	"ovid/internal/check"
@@ -116,7 +114,7 @@ func Test(dir, filter string, list bool, w io.Writer) int {
 			return fail(w, "write", err.Error(), "")
 		}
 		t0 := time.Now()
-		pr := runProc(bin, args, of, testTimeout)
+		pr := runProc(bin, args, procIO{stdout: of, stderr: of}, testTimeout)
 		ms := time.Since(t0).Milliseconds()
 		of.Close()
 		out, _ := os.ReadFile(outPath)
@@ -135,20 +133,7 @@ func Test(dir, filter string, list bool, w io.Writer) int {
 			r["hint"] = fmt.Sprintf("killed after %s", testTimeout)
 		case !pr.exited:
 			code = -1
-			r["signal"] = pr.signal.String()
-			if st := crashStack(m, marks, pr); len(st) > 0 {
-				r["at"] = st[0]
-				r["stack"] = st
-			}
-			if pr.signal == syscall.SIGFPE {
-				r["hint"] = "an integer / or % by zero (or the most negative i64 / -1)"
-			}
-			if pr.hasAddr {
-				r["fault_addr"] = fmt.Sprintf("%#x", pr.addr)
-				if pr.addr < 4096 {
-					r["hint"] = "a load or store through a null pointer (or a field of one): check for 0 as *T before use"
-				}
-			}
+			describeCrash(m, marks, pr, r)
 		}
 		r["ok"] = ok
 		if !ok {
@@ -218,20 +203,6 @@ func returnsOf(m *module.Module, id string, code int) []map[string]any {
 		out = append(out, map[string]any{"id": n.ID, "line": a.Line, "source": src})
 	}
 	return out
-}
-
-func signalOf(ee *exec.ExitError) string {
-	if ws, ok := ee.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
-		return ws.Signal().String()
-	}
-	return ""
-}
-
-func sigNum(ee *exec.ExitError) int {
-	if ws, ok := ee.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
-		return int(ws.Signal())
-	}
-	return 0
 }
 
 // testProgram adds a package whose main runs test k when it gets k+1 args.

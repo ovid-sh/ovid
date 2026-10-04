@@ -1,7 +1,8 @@
 package tool
 
 import (
-	"os"
+	"fmt"
+	"io"
 	"os/exec"
 	"sort"
 	"syscall"
@@ -12,7 +13,7 @@ import (
 	"ovid/internal/module"
 )
 
-// procResult is how a test process ended. pc, frames, and addr are set
+// procResult is how a program ended. pc, frames, and addr are set
 // when it was traced and died of a fault.
 type procResult struct {
 	exited   bool
@@ -26,24 +27,40 @@ type procResult struct {
 	err      error
 }
 
-// runProc runs bin with its output in out, traced where the platform allows
-// so a fault can be traced back to a statement.
-func runProc(bin string, args []string, out *os.File, timeout time.Duration) procResult {
-	if r, ok := runTraced(bin, args, out, timeout); ok {
-		return r
-	}
-	return runPlain(bin, args, out, timeout)
+// procIO is a program's stdio; a nil field is /dev/null.
+type procIO struct {
+	stdin          io.Reader
+	stdout, stderr io.Writer
 }
 
-func runPlain(bin string, args []string, out *os.File, timeout time.Duration) procResult {
+func (pio procIO) command(bin string, args []string) *exec.Cmd {
 	cmd := exec.Command(bin, args...)
-	cmd.Stdout, cmd.Stderr = out, out
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = pio.stdin, pio.stdout, pio.stderr
+	return cmd
+}
+
+// runProc runs bin, traced where the platform allows so a fault can be
+// traced back to a statement. A timeout of 0 means none.
+func runProc(bin string, args []string, pio procIO, timeout time.Duration) procResult {
+	if r, ok := runTraced(bin, args, pio, timeout); ok {
+		return r
+	}
+	return runPlain(bin, args, pio, timeout)
+}
+
+func runPlain(bin string, args []string, pio procIO, timeout time.Duration) procResult {
+	cmd := pio.command(bin, args)
 	if err := cmd.Start(); err != nil {
 		return procResult{err: err}
 	}
-	t := time.AfterFunc(timeout, func() { cmd.Process.Kill() })
-	cmd.Wait()
-	timedOut := !t.Stop()
+	timedOut := false
+	if timeout > 0 {
+		t := time.AfterFunc(timeout, func() { cmd.Process.Kill() })
+		cmd.Wait()
+		timedOut = !t.Stop()
+	} else {
+		cmd.Wait()
+	}
 	ws, _ := cmd.ProcessState.Sys().(syscall.WaitStatus)
 	if ws.Signaled() {
 		return procResult{signal: ws.Signal(), timedOut: timedOut}
@@ -92,4 +109,24 @@ func crashStack(m *module.Module, marks []compile.Mark, r procResult) []map[stri
 		out = append(out, f)
 	}
 	return out
+}
+
+// describeCrash adds to r what is known about a program killed by a
+// signal: the signal, the statement it died in and the calls that led
+// there, the faulting address, and a hint for the common causes.
+func describeCrash(m *module.Module, marks []compile.Mark, pr procResult, r map[string]any) {
+	r["signal"] = pr.signal.String()
+	if st := crashStack(m, marks, pr); len(st) > 0 {
+		r["at"] = st[0]
+		r["stack"] = st
+	}
+	if pr.signal == syscall.SIGFPE {
+		r["hint"] = "an integer / or % by zero (or the most negative i64 / -1)"
+	}
+	if pr.hasAddr {
+		r["fault_addr"] = fmt.Sprintf("%#x", pr.addr)
+		if pr.addr < 4096 {
+			r["hint"] = "a load or store through a null pointer (or a field of one): check for 0 as *T before use"
+		}
+	}
 }

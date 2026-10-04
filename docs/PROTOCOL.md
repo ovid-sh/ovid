@@ -17,9 +17,22 @@ should read every line, take the last as the result, and ignore keys it does
 not know: new keys are added without notice, existing ones keep their
 meaning.
 
-`run` passes the program's stdin, stdout, stderr, and exit code through; it
-writes JSON only when the build fails (the diagnostics, then
-`{"ok":false,"errors":N}`).
+`run` passes the program's stdin, stdout, stderr, and exit code through. It
+writes JSON to stdout only when the build fails (the diagnostics, then
+`{"ok":false,"errors":N}`). If the program is killed by a signal, it writes
+one line to **stderr**, after whatever the program wrote there:
+
+```json
+{"ok":false,"error":"killed","signal":"segmentation fault","exit":139,
+ "at":{"id":"st:app.Get:1","file":"app/main.ov","line":11,"source":"  return n.v"},
+ "stack":[AT, CALLER...],"fault_addr":"0x0","hint":TEXT}
+```
+
+`at` and `stack` (innermost first, frames outside the module left out) are
+there for a fault (SIGSEGV, SIGBUS, SIGFPE, SIGILL) on Linux, where the
+program runs under ptrace; `fault_addr` for SIGSEGV and SIGBUS. `ovid test`
+reports crashes with the same fields. A ^C reaches the program, and ovid
+stays to report it (`"signal":"interrupt"`).
 
 ## Exit codes
 
@@ -31,8 +44,8 @@ writes JSON only when the build fails (the diagnostics, then
 | 64 | bad command line (`"error":"usage"`) |
 | 125 | `run` could not build the program |
 
-`run` otherwise exits with the program's own code, so any value is possible
-there.
+`run` otherwise exits with the program's own code, or 128 + the signal
+number if a signal killed it, so any value is possible there.
 
 ## Failures
 
