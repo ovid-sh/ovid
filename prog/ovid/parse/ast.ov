@@ -134,6 +134,35 @@ type File struct {
   mnext *File
 }
 
+// FindDecl returns the decl named np[0:nn] in the list d, or nil.
+func FindDecl(d *Decl, np i64, nn i64) *Decl {
+  while d != 0 as *Decl {
+    if ovid/mem.Eq(d.namep, d.namen, np, nn) {
+      return d
+    }
+    d = d.next
+  }
+  return d
+}
+
+func CountDecls(d *Decl) i64 {
+  var n i64 = 0
+  while d != 0 as *Decl {
+    n = n + 1
+    d = d.next
+  }
+  return n
+}
+
+func CountNodes(n *Node) i64 {
+  var k i64 = 0
+  while n != 0 as *Node {
+    k = k + 1
+    n = n.next
+  }
+  return k
+}
+
 func NewNode(p *P, op i64) *Node {
   var n *Node = ovid/io.Alloc(p.io, sizeof(Node)) as *Node
   n.op = op

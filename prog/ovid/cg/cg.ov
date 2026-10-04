@@ -1,34 +1,36 @@
 package ovid/cg
 
 import ovid/io
-import ovid/json
 import ovid/mem
 import ovid/asm
 import ovid/elf
+import ovid/parse
 
 const HEAP i64 = 128 << 20
 const MAXLOC i64 = 1024
 
-// FNREC is the size of a func record: pkg, fn, name p/n, path p/n, label,
+// FNREC is the size of a func record: pkg, decl, name p/n, path p/n, label,
 // nparam, live.
 const FNREC i64 = 72
 
+// C is the code generator's state. fns holds one FNREC per func in program
+// order; ftab is an open-addressing table over them (record index + 1),
+// keyed by package path and name.
 type C struct {
   io *ovid/io.Cap
   code *ovid/asm.Code
-  root i64
-  pkgs i64
-  npkg i64
+  mod *ovid/parse.Mod
   fns i64
   nfn i64
+  ftab i64
+  fmask i64
+  pkg *ovid/parse.Pkg
   pathp i64
   pathn i64
-  fn i64
+  fn *ovid/parse.Decl
   locs i64
   nloc i64
   localBytes i64
-  cons i64
-  ncon i64
   epi i64
   err i64
   peak i64
@@ -50,248 +52,132 @@ func Max(a i64, b i64) i64 {
   return b
 }
 
-func SGet(obj i64, lit i64, n i64) i64 {
-  if obj == 0 {
-    return 0
-  }
-  return ovid/json.GetLit(obj, lit, n)
-}
-
-func JStrP(v i64) i64 {
-  if v == 0 {
-    return 0
-  }
-  return ovid/json.StrP(v)
-}
-
-func JStrN(v i64) i64 {
-  if v == 0 {
-    return 0
-  }
-  return ovid/json.StrN(v)
-}
-
-func Lit(op i64, s i64, n i64) bool {
-  return ovid/json.IsLit(op, s, n)
-}
-
 func LeafOp(op i64) bool {
-  if Lit(op, strptr("int"), strlen("int")) {
-    return true
-  }
-  if Lit(op, strptr("sizeof"), strlen("sizeof")) {
-    return true
-  }
-  if Lit(op, strptr("strptr"), strlen("strptr")) {
-    return true
-  }
-  if Lit(op, strptr("strlen"), strlen("strlen")) {
-    return true
-  }
-  return false
+  return op == ovid/parse.OP_INT || op == ovid/parse.OP_SIZEOF || op == ovid/parse.OP_STRPTR || op == ovid/parse.OP_STRLEN
 }
 
 func ArithOp(op i64) bool {
-  if Lit(op, strptr("add"), strlen("add")) {
-    return true
-  }
-  if Lit(op, strptr("sub"), strlen("sub")) {
-    return true
-  }
-  if Lit(op, strptr("mul"), strlen("mul")) {
-    return true
-  }
-  if Lit(op, strptr("div"), strlen("div")) {
-    return true
-  }
-  if Lit(op, strptr("mod"), strlen("mod")) {
-    return true
-  }
-  if Lit(op, strptr("and"), strlen("and")) {
-    return true
-  }
-  if Lit(op, strptr("or"), strlen("or")) {
-    return true
-  }
-  if Lit(op, strptr("xor"), strlen("xor")) {
-    return true
-  }
-  if Lit(op, strptr("shl"), strlen("shl")) {
-    return true
-  }
-  if Lit(op, strptr("shr"), strlen("shr")) {
-    return true
-  }
-  return false
+  return op >= ovid/parse.OP_ADD && op <= ovid/parse.OP_SHR
 }
 
 func CmpOp(op i64) bool {
-  if Lit(op, strptr("eq"), strlen("eq")) {
-    return true
-  }
-  if Lit(op, strptr("ne"), strlen("ne")) {
-    return true
-  }
-  if Lit(op, strptr("lt"), strlen("lt")) {
-    return true
-  }
-  if Lit(op, strptr("le"), strlen("le")) {
-    return true
-  }
-  if Lit(op, strptr("gt"), strlen("gt")) {
-    return true
-  }
-  if Lit(op, strptr("ge"), strlen("ge")) {
-    return true
-  }
-  return false
+  return op >= ovid/parse.OP_EQ && op <= ovid/parse.OP_GE
 }
 
 func UnaryOp(op i64) bool {
-  if Lit(op, strptr("not"), strlen("not")) {
+  if op == ovid/parse.OP_NOT || op == ovid/parse.OP_NEG || op == ovid/parse.OP_BNOT || op == ovid/parse.OP_CAST {
     return true
   }
-  if Lit(op, strptr("neg"), strlen("neg")) {
-    return true
-  }
-  if Lit(op, strptr("bnot"), strlen("bnot")) {
-    return true
-  }
-  if Lit(op, strptr("cast"), strlen("cast")) {
-    return true
-  }
-  if Lit(op, strptr("load8"), strlen("load8")) {
-    return true
-  }
-  if Lit(op, strptr("load32"), strlen("load32")) {
-    return true
-  }
-  if Lit(op, strptr("load64"), strlen("load64")) {
-    return true
-  }
-  return false
+  return op == ovid/parse.OP_LOAD8 || op == ovid/parse.OP_LOAD32 || op == ovid/parse.OP_LOAD64
 }
 
-func FindPkg(c *C, pp i64, pn i64) i64 {
-  var i i64 = 0
-  while i < c.npkg {
-    var pkg i64 = load64(c.pkgs + (i * 8))
-    var path i64 = SGet(pkg, strptr("path"), strlen("path"))
-    if Lit(path, pp, pn) {
-      return pkg
+func FindPkg(c *C, pp i64, pn i64) *ovid/parse.Pkg {
+  var k *ovid/parse.Pkg = c.mod.pkgs
+  while k != 0 as *ovid/parse.Pkg {
+    if ovid/mem.Eq(k.pathp, k.pathn, pp, pn) {
+      return k
     }
-    i = i + 1
+    k = k.next
   }
-  return 0
+  return k
 }
 
 // PkgConst returns the const that name node n refers to in another
-// package (n has "pkg" set), or 0.
-func PkgConst(c *C, n i64) i64 {
-  var pk i64 = SGet(n, strptr("pkg"), strlen("pkg"))
-  if pk == 0 {
-    return 0
+// package (n.pkg is set), or nil.
+func PkgConst(c *C, n *ovid/parse.Node) *ovid/parse.Decl {
+  var k *ovid/parse.Pkg = FindPkg(c, n.pkgp, n.pkgn)
+  if k == 0 as *ovid/parse.Pkg {
+    return 0 as *ovid/parse.Decl
   }
-  var pkg i64 = FindPkg(c, JStrP(pk), JStrN(pk))
-  if pkg == 0 {
-    return 0
+  return ovid/parse.FindDecl(k.cs, n.namep, n.namen)
+}
+
+func FnHash(pp i64, pn i64, np i64, nn i64) i64 {
+  var h i64 = 5381
+  var i i64 = 0
+  while i < pn {
+    h = ((h << 5) + h) + load8(pp + i)
+    i = i + 1
   }
-  var arr i64 = SGet(pkg, strptr("consts"), strlen("consts"))
-  if arr == 0 {
-    return 0
+  h = ((h << 5) + h) + 46
+  i = 0
+  while i < nn {
+    h = ((h << 5) + h) + load8(np + i)
+    i = i + 1
   }
-  var nm i64 = SGet(n, strptr("name"), strlen("name"))
-  var k i64 = ovid/json.Child(arr)
-  while k != 0 {
-    if Lit(SGet(k, strptr("name"), strlen("name")), JStrP(nm), JStrN(nm)) {
-      return k
-    }
-    k = ovid/json.Next(k)
-  }
-  return 0
+  return h
 }
 
 func FindFnRec(c *C, pp i64, pn i64, np i64, nn i64) i64 {
-  var i i64 = 0
-  while i < c.nfn {
-    var rec i64 = c.fns + (i * FNREC)
-    if ovid/mem.Eq(load64(rec + 32), load64(rec + 40), pp, pn) {
-      if ovid/mem.Eq(load64(rec + 16), load64(rec + 24), np, nn) {
+  var h i64 = FnHash(pp, pn, np, nn) & c.fmask
+  while true {
+    var slot i64 = load64(c.ftab + (h * 8))
+    if slot == 0 {
+      return 0
+    }
+    var rec i64 = c.fns + ((slot - 1) * FNREC)
+    if ovid/mem.Eq(load64(rec + 16), load64(rec + 24), np, nn) {
+      if ovid/mem.Eq(load64(rec + 32), load64(rec + 40), pp, pn) {
         return rec
       }
     }
-    i = i + 1
+    h = (h + 1) & c.fmask
   }
   return 0
 }
 
-func AddFn(c *C, pkg i64, f i64, pp i64, pn i64) i64 {
-  var nm i64 = SGet(f, strptr("name"), strlen("name"))
-  var np i64 = JStrP(nm)
-  var nn i64 = JStrN(nm)
-  if FindFnRec(c, pp, pn, np, nn) != 0 {
+func AddFn(c *C, k *ovid/parse.Pkg, f *ovid/parse.Decl) i64 {
+  if FindFnRec(c, k.pathp, k.pathn, f.namep, f.namen) != 0 {
     return Fail(c, 3)
   }
   var rec i64 = c.fns + (c.nfn * FNREC)
-  store64(rec + 0, pkg)
-  store64(rec + 8, f)
-  store64(rec + 16, np)
-  store64(rec + 24, nn)
-  store64(rec + 32, pp)
-  store64(rec + 40, pn)
+  store64(rec + 0, k as i64)
+  store64(rec + 8, f as i64)
+  store64(rec + 16, f.namep)
+  store64(rec + 24, f.namen)
+  store64(rec + 32, k.pathp)
+  store64(rec + 40, k.pathn)
   store64(rec + 48, ovid/asm.NewLabel(c.code))
-  var params i64 = SGet(f, strptr("params"), strlen("params"))
-  var nparam i64 = 0
-  if params != 0 {
-    nparam = ovid/json.Count(params)
-  }
-  store64(rec + 56, nparam)
+  store64(rec + 56, ovid/parse.CountDecls(f.sub))
   store64(rec + 64, 0)
   c.nfn = c.nfn + 1
+  var h i64 = FnHash(k.pathp, k.pathn, f.namep, f.namen) & c.fmask
+  while load64(c.ftab + (h * 8)) != 0 {
+    h = (h + 1) & c.fmask
+  }
+  store64(c.ftab + (h * 8), c.nfn)
   return 0
 }
 
 func IndexProg(c *C) i64 {
-  var pkgs i64 = SGet(c.root, strptr("packages"), strlen("packages"))
-  if pkgs == 0 {
+  var k *ovid/parse.Pkg = c.mod.pkgs
+  if k == 0 as *ovid/parse.Pkg {
     return Fail(c, 1)
   }
-  c.npkg = ovid/json.Count(pkgs)
-  if c.npkg <= 0 {
-    return Fail(c, 1)
-  }
-  c.pkgs = ovid/io.Alloc(c.io, c.npkg * 8)
   c.locs = ovid/io.Alloc(c.io, MAXLOC * 40)
-  c.cons = ovid/io.Alloc(c.io, MAXLOC * 24)
   var total i64 = 0
-  var i i64 = 0
-  var p i64 = ovid/json.Child(pkgs)
-  while p != 0 {
-    store64(c.pkgs + (i * 8), p)
-    var fns i64 = SGet(p, strptr("funcs"), strlen("funcs"))
-    if fns != 0 {
-      total = total + ovid/json.Count(fns)
-    }
-    i = i + 1
-    p = ovid/json.Next(p)
+  while k != 0 as *ovid/parse.Pkg {
+    total = total + ovid/parse.CountDecls(k.fs)
+    k = k.next
   }
+  var sz i64 = 64
+  while sz < (total * 2) {
+    sz = sz * 2
+  }
+  c.ftab = ovid/io.Alloc(c.io, sz * 8)
+  c.fmask = sz - 1
   c.nfn = 0
   c.fns = ovid/io.Alloc(c.io, (total + 1) * FNREC)
-  i = 0
-  while i < c.npkg {
-    var pkg i64 = load64(c.pkgs + (i * 8))
-    var path i64 = SGet(pkg, strptr("path"), strlen("path"))
-    var fns i64 = SGet(pkg, strptr("funcs"), strlen("funcs"))
-    if fns != 0 {
-      var f i64 = ovid/json.Child(fns)
-      while f != 0 {
-        if AddFn(c, pkg, f, JStrP(path), JStrN(path)) != 0 {
-          return c.err
-        }
-        f = ovid/json.Next(f)
+  k = c.mod.pkgs
+  while k != 0 as *ovid/parse.Pkg {
+    var f *ovid/parse.Decl = k.fs
+    while f != 0 as *ovid/parse.Decl {
+      if AddFn(c, k, f) != 0 {
+        return c.err
       }
+      f = f.next
     }
-    i = i + 1
+    k = k.next
   }
   return 0
 }
@@ -328,214 +214,101 @@ func AddLoc(c *C, np i64, nn i64, tp i64, tn i64) i64 {
   return 0
 }
 
-func FindCon(c *C, np i64, nn i64) i64 {
-  var i i64 = 0
-  while i < c.ncon {
-    var rec i64 = c.cons + (i * 24)
-    if ovid/mem.Eq(load64(rec + 0), load64(rec + 8), np, nn) {
-      return rec
+// CollectStmts gives every var declared in the statement list s a slot.
+func CollectStmts(c *C, s *ovid/parse.Node) i64 {
+  while s != 0 as *ovid/parse.Node {
+    if s.op == ovid/parse.OP_VAR {
+      if s.namen != 0 {
+        AddLoc(c, s.namep, s.namen, s.typp, s.typn)
+      }
+    } else if s.op == ovid/parse.OP_IF {
+      CollectStmts(c, s.then)
+      CollectStmts(c, s.els)
+    } else if s.op == ovid/parse.OP_WHILE {
+      CollectStmts(c, s.body)
     }
-    i = i + 1
+    s = s.next
   }
   return 0
 }
 
-func LoadConsts(c *C, pkg i64) i64 {
-  c.ncon = 0
-  var arr i64 = SGet(pkg, strptr("consts"), strlen("consts"))
-  if arr == 0 {
-    return 0
-  }
-  var k i64 = ovid/json.Child(arr)
-  while k != 0 {
-    if c.ncon >= MAXLOC {
-      return Fail(c, 6)
-    }
-    var rec i64 = c.cons + (c.ncon * 24)
-    var nm i64 = SGet(k, strptr("name"), strlen("name"))
-    var vl i64 = SGet(k, strptr("value"), strlen("value"))
-    var iv i64 = 0
-    if vl != 0 {
-      iv = ovid/json.Int(vl)
-    }
-    store64(rec + 0, JStrP(nm))
-    store64(rec + 8, JStrN(nm))
-    store64(rec + 16, iv)
-    c.ncon = c.ncon + 1
-    k = ovid/json.Next(k)
-  }
-  return 0
-}
-
-func CollectParams(c *C, fn i64) i64 {
-  var params i64 = SGet(fn, strptr("params"), strlen("params"))
-  if params == 0 {
-    return 0
-  }
-  var p i64 = ovid/json.Child(params)
-  while p != 0 {
-    var nm i64 = SGet(p, strptr("name"), strlen("name"))
-    var ty i64 = SGet(p, strptr("type"), strlen("type"))
-    AddLoc(c, JStrP(nm), JStrN(nm), JStrP(ty), JStrN(ty))
-    p = ovid/json.Next(p)
-  }
-  return 0
-}
-
-func CollectStmts(c *C, arr i64) i64 {
-  if arr == 0 {
-    return 0
-  }
-  var s i64 = ovid/json.Child(arr)
-  while s != 0 {
-    CollectOne(c, s)
-    s = ovid/json.Next(s)
-  }
-  return 0
-}
-
-func CollectOne(c *C, s i64) i64 {
-  var op i64 = SGet(s, strptr("op"), strlen("op"))
-  if Lit(op, strptr("var"), strlen("var")) {
-    var nm i64 = SGet(s, strptr("name"), strlen("name"))
-    var ty i64 = SGet(s, strptr("type"), strlen("type"))
-    if nm != 0 {
-      AddLoc(c, JStrP(nm), JStrN(nm), JStrP(ty), JStrN(ty))
-    }
-    return 0
-  }
-  if Lit(op, strptr("if"), strlen("if")) {
-    CollectStmts(c, SGet(s, strptr("then"), strlen("then")))
-    CollectStmts(c, SGet(s, strptr("else"), strlen("else")))
-    return 0
-  }
-  if Lit(op, strptr("while"), strlen("while")) {
-    CollectStmts(c, SGet(s, strptr("body"), strlen("body")))
-    return 0
-  }
-  return 0
-}
-
-func CallPeak(n i64, lv i64) i64 {
+func CallPeak(n *ovid/parse.Node, lv i64) i64 {
   var m i64 = -1
-  var args i64 = SGet(n, strptr("args"), strlen("args"))
-  if args == 0 {
-    return m
-  }
   var i i64 = 0
-  var a i64 = ovid/json.Child(args)
-  while a != 0 {
+  var a *ovid/parse.Node = n.args
+  while a != 0 as *ovid/parse.Node {
     var p i64 = ExprPeak(a, lv + i)
     m = Max(m, Max(p, lv + i))
     i = i + 1
-    a = ovid/json.Next(a)
+    a = a.next
   }
   return m
 }
 
-func ExprPeak(n i64, lv i64) i64 {
-  if n == 0 {
+// ExprPeak is the highest temp slot evaluating n at level lv uses, or -1.
+func ExprPeak(n *ovid/parse.Node, lv i64) i64 {
+  if n == 0 as *ovid/parse.Node {
     return -1
   }
-  var op i64 = SGet(n, strptr("op"), strlen("op"))
-  if LeafOp(op) {
+  var op i64 = n.op
+  if LeafOp(op) || op == ovid/parse.OP_BOOL || op == ovid/parse.OP_NAME {
     return -1
   }
-  if Lit(op, strptr("bool"), strlen("bool")) {
-    return -1
-  }
-  if Lit(op, strptr("name"), strlen("name")) {
-    return -1
-  }
-  if ArithOp(op) {
-    var l i64 = ExprPeak(SGet(n, strptr("left"), strlen("left")), lv)
-    var r i64 = ExprPeak(SGet(n, strptr("right"), strlen("right")), lv + 1)
+  if ArithOp(op) || CmpOp(op) {
+    var l i64 = ExprPeak(n.left, lv)
+    var r i64 = ExprPeak(n.right, lv + 1)
     return Max(l, Max(r, lv))
   }
-  if CmpOp(op) {
-    var l i64 = ExprPeak(SGet(n, strptr("left"), strlen("left")), lv)
-    var r i64 = ExprPeak(SGet(n, strptr("right"), strlen("right")), lv + 1)
-    return Max(l, Max(r, lv))
-  }
-  if Lit(op, strptr("land"), strlen("land")) {
-    var l i64 = ExprPeak(SGet(n, strptr("left"), strlen("left")), lv)
-    var r i64 = ExprPeak(SGet(n, strptr("right"), strlen("right")), lv)
-    return Max(l, r)
-  }
-  if Lit(op, strptr("lor"), strlen("lor")) {
-    var l i64 = ExprPeak(SGet(n, strptr("left"), strlen("left")), lv)
-    var r i64 = ExprPeak(SGet(n, strptr("right"), strlen("right")), lv)
+  if op == ovid/parse.OP_LAND || op == ovid/parse.OP_LOR {
+    var l i64 = ExprPeak(n.left, lv)
+    var r i64 = ExprPeak(n.right, lv)
     return Max(l, r)
   }
   if UnaryOp(op) {
-    return ExprPeak(SGet(n, strptr("arg"), strlen("arg")), lv)
+    return ExprPeak(n.arg, lv)
   }
-  if Lit(op, strptr("field"), strlen("field")) {
-    return ExprPeak(SGet(n, strptr("base"), strlen("base")), lv)
+  if op == ovid/parse.OP_FIELD {
+    return ExprPeak(n.base, lv)
   }
-  if Lit(op, strptr("call"), strlen("call")) {
-    return CallPeak(n, lv)
-  }
-  if Lit(op, strptr("syscall"), strlen("syscall")) {
+  if op == ovid/parse.OP_CALL || op == ovid/parse.OP_SYSCALL {
     return CallPeak(n, lv)
   }
   return lv
 }
 
-func StmtsPeak(arr i64) i64 {
-  if arr == 0 {
-    return -1
-  }
+func StmtsPeak(s *ovid/parse.Node) i64 {
   var m i64 = -1
-  var s i64 = ovid/json.Child(arr)
-  while s != 0 {
+  while s != 0 as *ovid/parse.Node {
     m = Max(m, StmtPeak(s))
-    s = ovid/json.Next(s)
+    s = s.next
   }
   return m
 }
 
-func StmtPeak(s i64) i64 {
-  if s == 0 {
-    return -1
+func StmtPeak(s *ovid/parse.Node) i64 {
+  var op i64 = s.op
+  if op == ovid/parse.OP_VAR || op == ovid/parse.OP_ASSIGN || op == ovid/parse.OP_EXPR || op == ovid/parse.OP_RETURN {
+    return ExprPeak(s.val, 0)
   }
-  var op i64 = SGet(s, strptr("op"), strlen("op"))
-  if Lit(op, strptr("var"), strlen("var")) {
-    return ExprPeak(SGet(s, strptr("val"), strlen("val")), 0)
-  }
-  if Lit(op, strptr("assign"), strlen("assign")) {
-    return ExprPeak(SGet(s, strptr("val"), strlen("val")), 0)
-  }
-  if Lit(op, strptr("expr"), strlen("expr")) {
-    return ExprPeak(SGet(s, strptr("val"), strlen("val")), 0)
-  }
-  if Lit(op, strptr("return"), strlen("return")) {
-    return ExprPeak(SGet(s, strptr("val"), strlen("val")), 0)
-  }
-  if Lit(op, strptr("setfield"), strlen("setfield")) {
-    var b i64 = ExprPeak(SGet(s, strptr("base"), strlen("base")), 0)
-    var v i64 = ExprPeak(SGet(s, strptr("val"), strlen("val")), 1)
+  if op == ovid/parse.OP_SETFIELD {
+    var b i64 = ExprPeak(s.base, 0)
+    var v i64 = ExprPeak(s.val, 1)
     return Max(b, Max(v, 1))
   }
-  if Lit(op, strptr("store8"), strlen("store8")) {
-    var b i64 = ExprPeak(SGet(s, strptr("addr"), strlen("addr")), 0)
-    var v i64 = ExprPeak(SGet(s, strptr("val"), strlen("val")), 1)
+  if op == ovid/parse.OP_STORE8 || op == ovid/parse.OP_STORE64 {
+    var b i64 = ExprPeak(s.addr, 0)
+    var v i64 = ExprPeak(s.val, 1)
     return Max(b, Max(v, 1))
   }
-  if Lit(op, strptr("store64"), strlen("store64")) {
-    var b i64 = ExprPeak(SGet(s, strptr("addr"), strlen("addr")), 0)
-    var v i64 = ExprPeak(SGet(s, strptr("val"), strlen("val")), 1)
-    return Max(b, Max(v, 1))
-  }
-  if Lit(op, strptr("if"), strlen("if")) {
-    var m i64 = ExprPeak(SGet(s, strptr("cond"), strlen("cond")), 0)
-    m = Max(m, StmtsPeak(SGet(s, strptr("then"), strlen("then"))))
-    m = Max(m, StmtsPeak(SGet(s, strptr("else"), strlen("else"))))
+  if op == ovid/parse.OP_IF {
+    var m i64 = ExprPeak(s.cond, 0)
+    m = Max(m, StmtsPeak(s.then))
+    m = Max(m, StmtsPeak(s.els))
     return m
   }
-  if Lit(op, strptr("while"), strlen("while")) {
-    var cnd i64 = ExprPeak(SGet(s, strptr("cond"), strlen("cond")), 0)
-    return Max(cnd, StmtsPeak(SGet(s, strptr("body"), strlen("body"))))
+  if op == ovid/parse.OP_WHILE {
+    var cnd i64 = ExprPeak(s.cond, 0)
+    return Max(cnd, StmtsPeak(s.body))
   }
   return -1
 }
@@ -552,8 +325,8 @@ func SetBool(c *C) i64 {
   return 0
 }
 
-// SizeOf is the byte size of struct type pkg.T (tp/tn): 8 per field.
-func SizeOf(c *C, tp i64, tn i64) i64 {
+// FindType returns the struct type pkg.T named by tp[0:tn], or nil.
+func FindType(c *C, tp i64, tn i64) *ovid/parse.Decl {
   var dot i64 = -1
   var i i64 = 0
   while i < tn {
@@ -563,158 +336,89 @@ func SizeOf(c *C, tp i64, tn i64) i64 {
     i = i + 1
   }
   if dot < 1 {
-    Fail(c, 4)
-    return -1
+    return 0 as *ovid/parse.Decl
   }
-  var pkg i64 = FindPkg(c, tp, dot)
-  if pkg == 0 {
-    Fail(c, 4)
-    return -1
+  var k *ovid/parse.Pkg = FindPkg(c, tp, dot)
+  if k == 0 as *ovid/parse.Pkg {
+    return 0 as *ovid/parse.Decl
   }
-  var types i64 = SGet(pkg, strptr("types"), strlen("types"))
-  var t i64 = 0
-  if types != 0 {
-    t = ovid/json.Child(types)
-  }
-  while t != 0 {
-    var nm i64 = SGet(t, strptr("name"), strlen("name"))
-    if Lit(nm, (tp + dot) + 1, (tn - dot) - 1) {
-      var fields i64 = SGet(t, strptr("fields"), strlen("fields"))
-      if fields == 0 {
-        return 0
-      }
-      return ovid/json.Count(fields) * 8
-    }
-    t = ovid/json.Next(t)
-  }
-  Fail(c, 4)
-  return -1
+  return ovid/parse.FindDecl(k.ts, (tp + dot) + 1, (tn - dot) - 1)
 }
 
+// SizeOf is the byte size of struct type pkg.T (tp/tn): 8 per field.
+func SizeOf(c *C, tp i64, tn i64) i64 {
+  var t *ovid/parse.Decl = FindType(c, tp, tn)
+  if t == 0 as *ovid/parse.Decl {
+    Fail(c, 4)
+    return -1
+  }
+  return ovid/parse.CountDecls(t.sub) * 8
+}
+
+// OffsetOf is the byte offset of field fp[0:fnn] in the pointer type
+// tp[0:tn] (*pkg.T); it sets the current type to the field's.
 func OffsetOf(c *C, tp i64, tn i64, fp i64, fnn i64) i64 {
-  if tn < 2 {
-    Fail(c, 4)
-    return -1
-  }
-  if load8(tp) != 42 {
-    Fail(c, 4)
-    return -1
-  }
-  var p i64 = tp + 1
-  var n i64 = tn - 1
-  var dot i64 = -1
-  var i i64 = 0
-  while i < n {
-    if load8(p + i) == 46 {
-      dot = i
+  var t *ovid/parse.Decl = 0 as *ovid/parse.Decl
+  if tn >= 2 {
+    if load8(tp) == 42 {
+      t = FindType(c, tp + 1, tn - 1)
     }
-    i = i + 1
   }
-  if dot < 1 {
+  if t == 0 as *ovid/parse.Decl {
     Fail(c, 4)
     return -1
   }
-  var pkg i64 = FindPkg(c, p, dot)
-  if pkg == 0 {
-    Fail(c, 4)
-    return -1
-  }
-  var tnamep i64 = (p + dot) + 1
-  var tnamen i64 = (n - dot) - 1
-  var types i64 = SGet(pkg, strptr("types"), strlen("types"))
-  if types == 0 {
-    Fail(c, 4)
-    return -1
-  }
-  var t i64 = ovid/json.Child(types)
-  while t != 0 {
-    var nm i64 = SGet(t, strptr("name"), strlen("name"))
-    if Lit(nm, tnamep, tnamen) {
-      var fields i64 = SGet(t, strptr("fields"), strlen("fields"))
-      if fields == 0 {
-        Fail(c, 4)
-        return -1
-      }
-      var k i64 = 0
-      var f i64 = ovid/json.Child(fields)
-      while f != 0 {
-        var fnm i64 = SGet(f, strptr("name"), strlen("name"))
-        if Lit(fnm, fp, fnn) {
-          var fty i64 = SGet(f, strptr("type"), strlen("type"))
-          c.typ = JStrP(fty)
-          c.tyn = JStrN(fty)
-          return k * 8
-        }
-        k = k + 1
-        f = ovid/json.Next(f)
-      }
-      Fail(c, 4)
-      return -1
+  var k i64 = 0
+  var f *ovid/parse.Decl = t.sub
+  while f != 0 as *ovid/parse.Decl {
+    if ovid/mem.Eq(f.namep, f.namen, fp, fnn) {
+      c.typ = f.typp
+      c.tyn = f.typn
+      return k * 8
     }
-    t = ovid/json.Next(t)
+    k = k + 1
+    f = f.next
   }
   Fail(c, 4)
   return -1
 }
 
-func TypeOf(c *C, n i64) i64 {
+// CallRec returns the func record call node n resolves to, or 0.
+func CallRec(c *C, n *ovid/parse.Node, pp i64, pn i64) i64 {
+  if n.pkgn != 0 {
+    pp = n.pkgp
+    pn = n.pkgn
+  }
+  return FindFnRec(c, pp, pn, n.fnp, n.fnn)
+}
+
+func TypeOf(c *C, n *ovid/parse.Node) i64 {
   if c.err != 0 {
     return c.err
   }
-  if n == 0 {
+  if n == 0 as *ovid/parse.Node {
     return Fail(c, 5)
   }
-  var op i64 = SGet(n, strptr("op"), strlen("op"))
-  if LeafOp(op) {
+  var op i64 = n.op
+  if LeafOp(op) || ArithOp(op) || op == ovid/parse.OP_NEG || op == ovid/parse.OP_BNOT {
     return SetI64(c)
   }
-  if ArithOp(op) {
+  if op == ovid/parse.OP_LOAD8 || op == ovid/parse.OP_LOAD32 || op == ovid/parse.OP_LOAD64 || op == ovid/parse.OP_SYSCALL {
     return SetI64(c)
   }
-  if Lit(op, strptr("neg"), strlen("neg")) {
-    return SetI64(c)
-  }
-  if Lit(op, strptr("bnot"), strlen("bnot")) {
-    return SetI64(c)
-  }
-  if Lit(op, strptr("load8"), strlen("load8")) {
-    return SetI64(c)
-  }
-  if Lit(op, strptr("load32"), strlen("load32")) {
-    return SetI64(c)
-  }
-  if Lit(op, strptr("load64"), strlen("load64")) {
-    return SetI64(c)
-  }
-  if Lit(op, strptr("syscall"), strlen("syscall")) {
-    return SetI64(c)
-  }
-  if Lit(op, strptr("bool"), strlen("bool")) {
+  if op == ovid/parse.OP_BOOL || CmpOp(op) || op == ovid/parse.OP_LAND || op == ovid/parse.OP_LOR || op == ovid/parse.OP_NOT {
     return SetBool(c)
   }
-  if CmpOp(op) {
-    return SetBool(c)
-  }
-  if Lit(op, strptr("land"), strlen("land")) {
-    return SetBool(c)
-  }
-  if Lit(op, strptr("lor"), strlen("lor")) {
-    return SetBool(c)
-  }
-  if Lit(op, strptr("not"), strlen("not")) {
-    return SetBool(c)
-  }
-  if Lit(op, strptr("name"), strlen("name")) {
-    if SGet(n, strptr("pkg"), strlen("pkg")) != 0 {
-      if PkgConst(c, n) != 0 {
+  if op == ovid/parse.OP_NAME {
+    if n.pkgn != 0 {
+      if PkgConst(c, n) != 0 as *ovid/parse.Decl {
         return SetI64(c)
       }
       return Fail(c, 2)
     }
-    var nm i64 = SGet(n, strptr("name"), strlen("name"))
-    var loc i64 = FindLoc(c, JStrP(nm), JStrN(nm))
+    var loc i64 = FindLoc(c, n.namep, n.namen)
     if loc == 0 {
-      if FindCon(c, JStrP(nm), JStrN(nm)) != 0 {
+      if ovid/parse.FindDecl(c.pkg.cs, n.namep, n.namen) != 0 as *ovid/parse.Decl {
         return SetI64(c)
       }
       return Fail(c, 2)
@@ -723,89 +427,43 @@ func TypeOf(c *C, n i64) i64 {
     c.tyn = load64(loc + 32)
     return 0
   }
-  if Lit(op, strptr("cast"), strlen("cast")) {
-    var ty i64 = SGet(n, strptr("type"), strlen("type"))
-    c.typ = JStrP(ty)
-    c.tyn = JStrN(ty)
+  if op == ovid/parse.OP_CAST {
+    c.typ = n.typp
+    c.tyn = n.typn
     return 0
   }
-  if Lit(op, strptr("field"), strlen("field")) {
-    if TypeOf(c, SGet(n, strptr("base"), strlen("base"))) != 0 {
+  if op == ovid/parse.OP_FIELD {
+    if TypeOf(c, n.base) != 0 {
       return c.err
     }
-    var tp i64 = c.typ
-    var tn i64 = c.tyn
-    var nm i64 = SGet(n, strptr("name"), strlen("name"))
-    if OffsetOf(c, tp, tn, JStrP(nm), JStrN(nm)) < 0 {
+    if OffsetOf(c, c.typ, c.tyn, n.namep, n.namen) < 0 {
       return c.err
     }
     return 0
   }
-  if Lit(op, strptr("call"), strlen("call")) {
-    var pp i64 = c.pathp
-    var pn i64 = c.pathn
-    var pk i64 = SGet(n, strptr("pkg"), strlen("pkg"))
-    if pk != 0 {
-      pp = JStrP(pk)
-      pn = JStrN(pk)
-    }
-    var nm i64 = SGet(n, strptr("func"), strlen("func"))
-    var rec i64 = FindFnRec(c, pp, pn, JStrP(nm), JStrN(nm))
+  if op == ovid/parse.OP_CALL {
+    var rec i64 = CallRec(c, n, c.pathp, c.pathn)
     if rec == 0 {
       return Fail(c, 3)
     }
-    var fn i64 = load64(rec + 8)
-    var rs i64 = SGet(fn, strptr("result"), strlen("result"))
-    c.typ = JStrP(rs)
-    c.tyn = JStrN(rs)
+    var fn *ovid/parse.Decl = load64(rec + 8) as *ovid/parse.Decl
+    c.typ = fn.typp
+    c.tyn = fn.typn
     return 0
   }
   return Fail(c, 5)
 }
 
-func FieldOff(c *C, base i64, fp i64, fnn i64) i64 {
+func FieldOff(c *C, base *ovid/parse.Node, fp i64, fnn i64) i64 {
   if TypeOf(c, base) != 0 {
     return -1
   }
-  var tp i64 = c.typ
-  var tn i64 = c.tyn
-  return OffsetOf(c, tp, tn, fp, fnn)
+  return OffsetOf(c, c.typ, c.tyn, fp, fnn)
 }
 
+// CapOff is the offset of field fp[0:fnn] in ovid/io.Cap.
 func CapOff(c *C, fp i64, fnn i64) i64 {
-  var pkg i64 = FindPkg(c, strptr("ovid/io"), strlen("ovid/io"))
-  if pkg == 0 {
-    Fail(c, 4)
-    return -1
-  }
-  var types i64 = SGet(pkg, strptr("types"), strlen("types"))
-  if types == 0 {
-    Fail(c, 4)
-    return -1
-  }
-  var t i64 = ovid/json.Child(types)
-  while t != 0 {
-    var nm i64 = SGet(t, strptr("name"), strlen("name"))
-    if Lit(nm, strptr("Cap"), strlen("Cap")) {
-      var fields i64 = SGet(t, strptr("fields"), strlen("fields"))
-      var k i64 = 0
-      var f i64 = 0
-      if fields != 0 {
-        f = ovid/json.Child(fields)
-      }
-      while f != 0 {
-        var fnm i64 = SGet(f, strptr("name"), strlen("name"))
-        if Lit(fnm, fp, fnn) {
-          return k * 8
-        }
-        k = k + 1
-        f = ovid/json.Next(f)
-      }
-    }
-    t = ovid/json.Next(t)
-  }
-  Fail(c, 4)
-  return -1
+  return OffsetOf(c, strptr("*ovid/io.Cap"), strlen("*ovid/io.Cap"), fp, fnn)
 }
 
 func TempDisp(c *C, lv i64) i64 {
@@ -858,12 +516,12 @@ func SysReg(i i64) i64 {
   return 9
 }
 
-func EmitBin(c *C, n i64, lv i64) i64 {
-  if EmitExpr(c, SGet(n, strptr("left"), strlen("left")), lv) != 0 {
+func EmitBin(c *C, n *ovid/parse.Node, lv i64) i64 {
+  if EmitExpr(c, n.left, lv) != 0 {
     return c.err
   }
   StoreTemp(c, lv)
-  if EmitExpr(c, SGet(n, strptr("right"), strlen("right")), lv + 1) != 0 {
+  if EmitExpr(c, n.right, lv + 1) != 0 {
     return c.err
   }
   ovid/asm.MovRegReg(c.code, 1, 0)
@@ -872,44 +530,44 @@ func EmitBin(c *C, n i64, lv i64) i64 {
 }
 
 func EmitArith(c *C, op i64) i64 {
-  if Lit(op, strptr("add"), strlen("add")) {
+  if op == ovid/parse.OP_ADD {
     ovid/asm.AddRaxRcx(c.code)
     return 0
   }
-  if Lit(op, strptr("sub"), strlen("sub")) {
+  if op == ovid/parse.OP_SUB {
     ovid/asm.SubRaxRcx(c.code)
     return 0
   }
-  if Lit(op, strptr("mul"), strlen("mul")) {
+  if op == ovid/parse.OP_MUL {
     ovid/asm.ImulRaxRcx(c.code)
     return 0
   }
-  if Lit(op, strptr("and"), strlen("and")) {
+  if op == ovid/parse.OP_AND {
     ovid/asm.AndRaxRcx(c.code)
     return 0
   }
-  if Lit(op, strptr("or"), strlen("or")) {
+  if op == ovid/parse.OP_OR {
     ovid/asm.OrRaxRcx(c.code)
     return 0
   }
-  if Lit(op, strptr("xor"), strlen("xor")) {
+  if op == ovid/parse.OP_XOR {
     ovid/asm.XorRaxRcx(c.code)
     return 0
   }
-  if Lit(op, strptr("shl"), strlen("shl")) {
+  if op == ovid/parse.OP_SHL {
     ovid/asm.ShlRaxCl(c.code)
     return 0
   }
-  if Lit(op, strptr("shr"), strlen("shr")) {
+  if op == ovid/parse.OP_SHR {
     ovid/asm.SarRaxCl(c.code)
     return 0
   }
-  if Lit(op, strptr("div"), strlen("div")) {
+  if op == ovid/parse.OP_DIV {
     ovid/asm.Cqo(c.code)
     ovid/asm.IdivRcx(c.code)
     return 0
   }
-  if Lit(op, strptr("mod"), strlen("mod")) {
+  if op == ovid/parse.OP_MOD {
     ovid/asm.Cqo(c.code)
     ovid/asm.IdivRcx(c.code)
     ovid/asm.MovRegReg(c.code, 0, 2)
@@ -919,165 +577,130 @@ func EmitArith(c *C, op i64) i64 {
 }
 
 func CmpCC(op i64) i64 {
-  if Lit(op, strptr("eq"), strlen("eq")) {
+  if op == ovid/parse.OP_EQ {
     return 0x94
   }
-  if Lit(op, strptr("ne"), strlen("ne")) {
+  if op == ovid/parse.OP_NE {
     return 0x95
   }
-  if Lit(op, strptr("lt"), strlen("lt")) {
+  if op == ovid/parse.OP_LT {
     return 0x9C
   }
-  if Lit(op, strptr("ge"), strlen("ge")) {
+  if op == ovid/parse.OP_GE {
     return 0x9D
   }
-  if Lit(op, strptr("le"), strlen("le")) {
+  if op == ovid/parse.OP_LE {
     return 0x9E
   }
   return 0x9F
 }
 
-func EmitCall(c *C, n i64, lv i64) i64 {
-  var pp i64 = c.pathp
-  var pn i64 = c.pathn
-  var pk i64 = SGet(n, strptr("pkg"), strlen("pkg"))
-  if pk != 0 {
-    pp = JStrP(pk)
-    pn = JStrN(pk)
-  }
-  var nm i64 = SGet(n, strptr("func"), strlen("func"))
-  var rec i64 = FindFnRec(c, pp, pn, JStrP(nm), JStrN(nm))
-  if rec == 0 {
-    return Fail(c, 3)
-  }
-  var args i64 = SGet(n, strptr("args"), strlen("args"))
-  var nargs i64 = 0
-  if args != 0 {
-    nargs = ovid/json.Count(args)
-  }
-  if nargs > 6 {
-    return Fail(c, 6)
-  }
+// EmitArgs evaluates the argument list a into temps lv, lv+1, ...
+func EmitArgs(c *C, a *ovid/parse.Node, lv i64) i64 {
   var i i64 = 0
-  var a i64 = 0
-  if args != 0 {
-    a = ovid/json.Child(args)
-  }
-  while a != 0 {
+  while a != 0 as *ovid/parse.Node {
     if EmitExpr(c, a, lv + i) != 0 {
       return c.err
     }
     StoreTemp(c, lv + i)
     i = i + 1
-    a = ovid/json.Next(a)
+    a = a.next
   }
-  i = 0
-  a = 0
-  if args != 0 {
-    a = ovid/json.Child(args)
+  return 0
+}
+
+func EmitCall(c *C, n *ovid/parse.Node, lv i64) i64 {
+  var rec i64 = CallRec(c, n, c.pathp, c.pathn)
+  if rec == 0 {
+    return Fail(c, 3)
   }
-  while a != 0 {
+  var nargs i64 = ovid/parse.CountNodes(n.args)
+  if nargs > 6 {
+    return Fail(c, 6)
+  }
+  if EmitArgs(c, n.args, lv) != 0 {
+    return c.err
+  }
+  var i i64 = 0
+  while i < nargs {
     ovid/asm.MovRegMemRbp(c.code, ArgReg(i), TempDisp(c, lv + i))
     i = i + 1
-    a = ovid/json.Next(a)
   }
   ovid/asm.Call(c.code, load64(rec + 48))
   return 0
 }
 
-func EmitSys(c *C, n i64, lv i64) i64 {
-  var args i64 = SGet(n, strptr("args"), strlen("args"))
-  var nargs i64 = 0
-  if args != 0 {
-    nargs = ovid/json.Count(args)
-  }
-  if nargs != 7 {
+func EmitSys(c *C, n *ovid/parse.Node, lv i64) i64 {
+  if ovid/parse.CountNodes(n.args) != 7 {
     return Fail(c, 6)
   }
-  var i i64 = 0
-  var a i64 = ovid/json.Child(args)
-  while a != 0 {
-    if EmitExpr(c, a, lv + i) != 0 {
-      return c.err
-    }
-    StoreTemp(c, lv + i)
-    i = i + 1
-    a = ovid/json.Next(a)
+  if EmitArgs(c, n.args, lv) != 0 {
+    return c.err
   }
-  i = 0
-  a = ovid/json.Child(args)
-  while a != 0 {
+  var i i64 = 0
+  while i < 7 {
     ovid/asm.MovRegMemRbp(c.code, SysReg(i), TempDisp(c, lv + i))
     i = i + 1
-    a = ovid/json.Next(a)
   }
   ovid/asm.Syscall(c.code)
   return 0
 }
 
-func EmitExpr(c *C, n i64, lv i64) i64 {
+func EmitExpr(c *C, n *ovid/parse.Node, lv i64) i64 {
   if c.err != 0 {
     return c.err
   }
-  if n == 0 {
+  if n == 0 as *ovid/parse.Node {
     return Fail(c, 5)
   }
-  var op i64 = SGet(n, strptr("op"), strlen("op"))
-  if Lit(op, strptr("int"), strlen("int")) {
-    var v i64 = SGet(n, strptr("value"), strlen("value"))
-    ovid/asm.MovRegImm(c.code, 0, ovid/json.Int(v))
+  var op i64 = n.op
+  if op == ovid/parse.OP_INT {
+    ovid/asm.MovRegImm(c.code, 0, n.ival)
     return 0
   }
-  if Lit(op, strptr("sizeof"), strlen("sizeof")) {
-    var ty i64 = SGet(n, strptr("type"), strlen("type"))
-    var sz i64 = SizeOf(c, JStrP(ty), JStrN(ty))
+  if op == ovid/parse.OP_SIZEOF {
+    var sz i64 = SizeOf(c, n.typp, n.typn)
     if sz < 0 {
       return c.err
     }
     ovid/asm.MovRegImm(c.code, 0, sz)
     return 0
   }
-  if Lit(op, strptr("bool"), strlen("bool")) {
-    var v i64 = SGet(n, strptr("value"), strlen("value"))
+  if op == ovid/parse.OP_BOOL {
     var b i64 = 0
-    if ovid/json.Int(v) != 0 {
+    if n.ival != 0 {
       b = 1
     }
     ovid/asm.MovRegImm(c.code, 0, b)
     return 0
   }
-  if Lit(op, strptr("strptr"), strlen("strptr")) {
-    var v i64 = SGet(n, strptr("value"), strlen("value"))
-    var off i64 = ovid/asm.Intern(c.code, JStrP(v), JStrN(v))
+  if op == ovid/parse.OP_STRPTR {
+    var off i64 = ovid/asm.Intern(c.code, n.strp, n.strn)
     ovid/asm.MovRegImm(c.code, 0, 0)
     ovid/asm.AbsHere(c.code, off)
     return 0
   }
-  if Lit(op, strptr("strlen"), strlen("strlen")) {
-    var v i64 = SGet(n, strptr("value"), strlen("value"))
-    ovid/asm.MovRegImm(c.code, 0, JStrN(v))
+  if op == ovid/parse.OP_STRLEN {
+    ovid/asm.MovRegImm(c.code, 0, n.strn)
     return 0
   }
-  if Lit(op, strptr("name"), strlen("name")) {
-    if SGet(n, strptr("pkg"), strlen("pkg")) != 0 {
-      var pc i64 = PkgConst(c, n)
-      if pc == 0 {
+  if op == ovid/parse.OP_NAME {
+    if n.pkgn != 0 {
+      var pc *ovid/parse.Decl = PkgConst(c, n)
+      if pc == 0 as *ovid/parse.Decl {
         return Fail(c, 2)
       }
-      ovid/asm.MovRegImm(c.code, 0, ovid/json.Int(SGet(pc, strptr("value"), strlen("value"))))
+      ovid/asm.MovRegImm(c.code, 0, pc.val)
       return 0
     }
-    var nm i64 = SGet(n, strptr("name"), strlen("name"))
-    var np i64 = JStrP(nm)
-    var nn i64 = JStrN(nm)
-    var loc i64 = FindLoc(c, np, nn)
+    var loc i64 = FindLoc(c, n.namep, n.namen)
     if loc != 0 {
       ovid/asm.MovRaxMemRbp(c.code, load64(loc + 16))
       return 0
     }
-    var con i64 = FindCon(c, np, nn)
-    if con != 0 {
-      ovid/asm.MovRegImm(c.code, 0, load64(con + 16))
+    var con *ovid/parse.Decl = ovid/parse.FindDecl(c.pkg.cs, n.namep, n.namen)
+    if con != 0 as *ovid/parse.Decl {
+      ovid/asm.MovRegImm(c.code, 0, con.val)
       return 0
     }
     return Fail(c, 2)
@@ -1097,15 +720,15 @@ func EmitExpr(c *C, n i64, lv i64) i64 {
     ovid/asm.MovzxRaxAl(c.code)
     return 0
   }
-  if Lit(op, strptr("land"), strlen("land")) {
+  if op == ovid/parse.OP_LAND {
     var no i64 = ovid/asm.NewLabel(c.code)
     var end i64 = ovid/asm.NewLabel(c.code)
-    if EmitExpr(c, SGet(n, strptr("left"), strlen("left")), lv) != 0 {
+    if EmitExpr(c, n.left, lv) != 0 {
       return c.err
     }
     ovid/asm.TestRaxRax(c.code)
     ovid/asm.Jz(c.code, no)
-    if EmitExpr(c, SGet(n, strptr("right"), strlen("right")), lv) != 0 {
+    if EmitExpr(c, n.right, lv) != 0 {
       return c.err
     }
     ovid/asm.Jmp(c.code, end)
@@ -1114,15 +737,15 @@ func EmitExpr(c *C, n i64, lv i64) i64 {
     ovid/asm.Mark(c.code, end)
     return 0
   }
-  if Lit(op, strptr("lor"), strlen("lor")) {
+  if op == ovid/parse.OP_LOR {
     var yes i64 = ovid/asm.NewLabel(c.code)
     var end i64 = ovid/asm.NewLabel(c.code)
-    if EmitExpr(c, SGet(n, strptr("left"), strlen("left")), lv) != 0 {
+    if EmitExpr(c, n.left, lv) != 0 {
       return c.err
     }
     ovid/asm.TestRaxRax(c.code)
     ovid/asm.Jnz(c.code, yes)
-    if EmitExpr(c, SGet(n, strptr("right"), strlen("right")), lv) != 0 {
+    if EmitExpr(c, n.right, lv) != 0 {
       return c.err
     }
     ovid/asm.Jmp(c.code, end)
@@ -1131,180 +754,132 @@ func EmitExpr(c *C, n i64, lv i64) i64 {
     ovid/asm.Mark(c.code, end)
     return 0
   }
-  if Lit(op, strptr("not"), strlen("not")) {
-    if EmitExpr(c, SGet(n, strptr("arg"), strlen("arg")), lv) != 0 {
-      return c.err
-    }
-    ovid/asm.TestRaxRax(c.code)
-    ovid/asm.SetccAl(c.code, 0x94)
-    ovid/asm.MovzxRaxAl(c.code)
-    return 0
+  if op == ovid/parse.OP_CAST {
+    return EmitExpr(c, n.arg, lv)
   }
-  if Lit(op, strptr("neg"), strlen("neg")) {
-    if EmitExpr(c, SGet(n, strptr("arg"), strlen("arg")), lv) != 0 {
-      return c.err
-    }
-    ovid/asm.NegRax(c.code)
-    return 0
-  }
-  if Lit(op, strptr("bnot"), strlen("bnot")) {
-    if EmitExpr(c, SGet(n, strptr("arg"), strlen("arg")), lv) != 0 {
-      return c.err
-    }
-    ovid/asm.NotRax(c.code)
-    return 0
-  }
-  if Lit(op, strptr("cast"), strlen("cast")) {
-    return EmitExpr(c, SGet(n, strptr("arg"), strlen("arg")), lv)
-  }
-  if Lit(op, strptr("field"), strlen("field")) {
-    var nm i64 = SGet(n, strptr("name"), strlen("name"))
-    var base i64 = SGet(n, strptr("base"), strlen("base"))
-    var off i64 = FieldOff(c, base, JStrP(nm), JStrN(nm))
+  if op == ovid/parse.OP_FIELD {
+    var off i64 = FieldOff(c, n.base, n.namep, n.namen)
     if off < 0 {
       return c.err
     }
-    if EmitExpr(c, base, lv) != 0 {
+    if EmitExpr(c, n.base, lv) != 0 {
       return c.err
     }
     ovid/asm.MovRaxMemRegDisp(c.code, 0, off)
     return 0
   }
-  if Lit(op, strptr("load8"), strlen("load8")) {
-    if EmitExpr(c, SGet(n, strptr("arg"), strlen("arg")), lv) != 0 {
-      return c.err
-    }
-    ovid/asm.MovRegReg(c.code, 1, 0)
-    ovid/asm.MovzxRaxByteRcx(c.code)
-    return 0
-  }
-  if Lit(op, strptr("load32"), strlen("load32")) {
-    if EmitExpr(c, SGet(n, strptr("arg"), strlen("arg")), lv) != 0 {
-      return c.err
-    }
-    ovid/asm.MovRegReg(c.code, 1, 0)
-    ovid/asm.MovEaxDwordRcx(c.code)
-    return 0
-  }
-  if Lit(op, strptr("load64"), strlen("load64")) {
-    if EmitExpr(c, SGet(n, strptr("arg"), strlen("arg")), lv) != 0 {
-      return c.err
-    }
-    ovid/asm.MovRegReg(c.code, 1, 0)
-    ovid/asm.MovRaxQwordRcx(c.code)
-    return 0
-  }
-  if Lit(op, strptr("call"), strlen("call")) {
+  if op == ovid/parse.OP_CALL {
     return EmitCall(c, n, lv)
   }
-  if Lit(op, strptr("syscall"), strlen("syscall")) {
+  if op == ovid/parse.OP_SYSCALL {
     return EmitSys(c, n, lv)
   }
-  return Fail(c, 5)
-}
-
-func EmitStmts(c *C, arr i64) i64 {
-  if c.err != 0 {
+  if !UnaryOp(op) {
+    return Fail(c, 5)
+  }
+  if EmitExpr(c, n.arg, lv) != 0 {
     return c.err
   }
-  if arr == 0 {
-    return 0
-  }
-  var s i64 = ovid/json.Child(arr)
-  while s != 0 {
-    if EmitStmt(c, s) != 0 {
-      return c.err
+  if op == ovid/parse.OP_NOT {
+    ovid/asm.TestRaxRax(c.code)
+    ovid/asm.SetccAl(c.code, 0x94)
+    ovid/asm.MovzxRaxAl(c.code)
+  } else if op == ovid/parse.OP_NEG {
+    ovid/asm.NegRax(c.code)
+  } else if op == ovid/parse.OP_BNOT {
+    ovid/asm.NotRax(c.code)
+  } else {
+    ovid/asm.MovRegReg(c.code, 1, 0)
+    if op == ovid/parse.OP_LOAD8 {
+      ovid/asm.MovzxRaxByteRcx(c.code)
+    } else if op == ovid/parse.OP_LOAD32 {
+      ovid/asm.MovEaxDwordRcx(c.code)
+    } else {
+      ovid/asm.MovRaxQwordRcx(c.code)
     }
-    s = ovid/json.Next(s)
   }
   return 0
 }
 
-func EmitStmt(c *C, s i64) i64 {
+func EmitStmts(c *C, s *ovid/parse.Node) i64 {
   if c.err != 0 {
     return c.err
   }
-  if s == 0 {
-    return Fail(c, 5)
-  }
-  var op i64 = SGet(s, strptr("op"), strlen("op"))
-  if Lit(op, strptr("var"), strlen("var")) {
-    var val i64 = SGet(s, strptr("val"), strlen("val"))
-    if val == 0 {
-      return 0
-    }
-    if EmitExpr(c, val, 0) != 0 {
+  while s != 0 as *ovid/parse.Node {
+    if EmitStmt(c, s) != 0 {
       return c.err
     }
-    var nm i64 = SGet(s, strptr("name"), strlen("name"))
-    var loc i64 = FindLoc(c, JStrP(nm), JStrN(nm))
+    s = s.next
+  }
+  return 0
+}
+
+// EmitStore evaluates addr (or a base) and val, leaving the address in rcx
+// and the value in rax.
+func EmitStore(c *C, addr *ovid/parse.Node, val *ovid/parse.Node) i64 {
+  if EmitExpr(c, addr, 0) != 0 {
+    return c.err
+  }
+  StoreTemp(c, 0)
+  if EmitExpr(c, val, 1) != 0 {
+    return c.err
+  }
+  ovid/asm.MovRcxMemRbp(c.code, TempDisp(c, 0))
+  return 0
+}
+
+func EmitStmt(c *C, s *ovid/parse.Node) i64 {
+  if c.err != 0 {
+    return c.err
+  }
+  var op i64 = s.op
+  if op == ovid/parse.OP_VAR || op == ovid/parse.OP_ASSIGN {
+    if s.val == 0 as *ovid/parse.Node {
+      if op == ovid/parse.OP_VAR {
+        return 0
+      }
+    }
+    if EmitExpr(c, s.val, 0) != 0 {
+      return c.err
+    }
+    var loc i64 = FindLoc(c, s.namep, s.namen)
     if loc == 0 {
       return Fail(c, 2)
     }
     ovid/asm.MovMemRbpRax(c.code, load64(loc + 16))
     return 0
   }
-  if Lit(op, strptr("assign"), strlen("assign")) {
-    if EmitExpr(c, SGet(s, strptr("val"), strlen("val")), 0) != 0 {
-      return c.err
-    }
-    var nm i64 = SGet(s, strptr("name"), strlen("name"))
-    var loc i64 = FindLoc(c, JStrP(nm), JStrN(nm))
-    if loc == 0 {
-      return Fail(c, 2)
-    }
-    ovid/asm.MovMemRbpRax(c.code, load64(loc + 16))
-    return 0
-  }
-  if Lit(op, strptr("setfield"), strlen("setfield")) {
-    var nm i64 = SGet(s, strptr("name"), strlen("name"))
-    var base i64 = SGet(s, strptr("base"), strlen("base"))
-    var off i64 = FieldOff(c, base, JStrP(nm), JStrN(nm))
+  if op == ovid/parse.OP_SETFIELD {
+    var off i64 = FieldOff(c, s.base, s.namep, s.namen)
     if off < 0 {
       return c.err
     }
-    if EmitExpr(c, base, 0) != 0 {
+    if EmitStore(c, s.base, s.val) != 0 {
       return c.err
     }
-    StoreTemp(c, 0)
-    if EmitExpr(c, SGet(s, strptr("val"), strlen("val")), 1) != 0 {
-      return c.err
-    }
-    ovid/asm.MovRcxMemRbp(c.code, TempDisp(c, 0))
     ovid/asm.MovMemRegDispRax(c.code, 1, off)
     return 0
   }
-  if Lit(op, strptr("store8"), strlen("store8")) {
-    if EmitExpr(c, SGet(s, strptr("addr"), strlen("addr")), 0) != 0 {
+  if op == ovid/parse.OP_STORE8 {
+    if EmitStore(c, s.addr, s.val) != 0 {
       return c.err
     }
-    StoreTemp(c, 0)
-    if EmitExpr(c, SGet(s, strptr("val"), strlen("val")), 1) != 0 {
-      return c.err
-    }
-    ovid/asm.MovRcxMemRbp(c.code, TempDisp(c, 0))
     ovid/asm.MovByteRcxAl(c.code)
     return 0
   }
-  if Lit(op, strptr("store64"), strlen("store64")) {
-    if EmitExpr(c, SGet(s, strptr("addr"), strlen("addr")), 0) != 0 {
+  if op == ovid/parse.OP_STORE64 {
+    if EmitStore(c, s.addr, s.val) != 0 {
       return c.err
     }
-    StoreTemp(c, 0)
-    if EmitExpr(c, SGet(s, strptr("val"), strlen("val")), 1) != 0 {
-      return c.err
-    }
-    ovid/asm.MovRcxMemRbp(c.code, TempDisp(c, 0))
     ovid/asm.MovQwordRcxRax(c.code)
     return 0
   }
-  if Lit(op, strptr("expr"), strlen("expr")) {
-    return EmitExpr(c, SGet(s, strptr("val"), strlen("val")), 0)
+  if op == ovid/parse.OP_EXPR {
+    return EmitExpr(c, s.val, 0)
   }
-  if Lit(op, strptr("return"), strlen("return")) {
-    var val i64 = SGet(s, strptr("val"), strlen("val"))
-    if val != 0 {
-      if EmitExpr(c, val, 0) != 0 {
+  if op == ovid/parse.OP_RETURN {
+    if s.val != 0 as *ovid/parse.Node {
+      if EmitExpr(c, s.val, 0) != 0 {
         return c.err
       }
     } else {
@@ -1313,45 +888,40 @@ func EmitStmt(c *C, s i64) i64 {
     ovid/asm.Jmp(c.code, c.epi)
     return 0
   }
-  if Lit(op, strptr("if"), strlen("if")) {
-    if EmitExpr(c, SGet(s, strptr("cond"), strlen("cond")), 0) != 0 {
+  if op == ovid/parse.OP_IF {
+    if EmitExpr(c, s.cond, 0) != 0 {
       return c.err
     }
     ovid/asm.TestRaxRax(c.code)
     var end i64 = ovid/asm.NewLabel(c.code)
     var elseL i64 = end
-    var el i64 = SGet(s, strptr("else"), strlen("else"))
-    var hasElse bool = false
-    if el != 0 {
-      if ovid/json.Count(el) > 0 {
-        hasElse = true
-        elseL = ovid/asm.NewLabel(c.code)
-      }
+    if s.els != 0 as *ovid/parse.Node {
+      elseL = ovid/asm.NewLabel(c.code)
     }
     ovid/asm.Jz(c.code, elseL)
-    if EmitStmts(c, SGet(s, strptr("then"), strlen("then"))) != 0 {
+    if EmitStmts(c, s.then) != 0 {
       return c.err
     }
-    if hasElse {
+    if s.els != 0 as *ovid/parse.Node {
       ovid/asm.Jmp(c.code, end)
       ovid/asm.Mark(c.code, elseL)
-      if EmitStmts(c, el) != 0 {
+      if EmitStmts(c, s.els) != 0 {
         return c.err
       }
     }
     ovid/asm.Mark(c.code, end)
     return 0
   }
-  if Lit(op, strptr("while"), strlen("while")) {
+  if op == ovid/parse.OP_WHILE {
     var begin i64 = ovid/asm.NewLabel(c.code)
     var end i64 = ovid/asm.NewLabel(c.code)
     ovid/asm.Mark(c.code, begin)
-    if EmitExpr(c, SGet(s, strptr("cond"), strlen("cond")), 0) != 0 {
+    if EmitExpr(c, s.cond, 0) != 0 {
       return c.err
     }
     ovid/asm.TestRaxRax(c.code)
     ovid/asm.Jz(c.code, end)
-    if EmitStmts(c, SGet(s, strptr("body"), strlen("body"))) != 0 {
+    if EmitStmts(c, s.body) != 0 {
       return c.err
     }
     ovid/asm.Jmp(c.code, begin)
@@ -1363,15 +933,17 @@ func EmitStmt(c *C, s i64) i64 {
 
 func EmitFunc(c *C, rec i64) i64 {
   c.nloc = 0
-  c.ncon = 0
   c.err = 0
+  c.pkg = load64(rec + 0) as *ovid/parse.Pkg
   c.pathp = load64(rec + 32)
   c.pathn = load64(rec + 40)
-  c.fn = load64(rec + 8)
-  var pkg i64 = load64(rec + 0)
-  LoadConsts(c, pkg)
-  CollectParams(c, c.fn)
-  var body i64 = SGet(c.fn, strptr("body"), strlen("body"))
+  c.fn = load64(rec + 8) as *ovid/parse.Decl
+  var pa *ovid/parse.Decl = c.fn.sub
+  while pa != 0 as *ovid/parse.Decl {
+    AddLoc(c, pa.namep, pa.namen, pa.typp, pa.typn)
+    pa = pa.next
+  }
+  var body *ovid/parse.Node = c.fn.body
   CollectStmts(c, body)
   if c.err != 0 {
     return c.err
@@ -1399,21 +971,16 @@ func EmitFunc(c *C, rec i64) i64 {
       d = d + 8
     }
   }
-  var params i64 = SGet(c.fn, strptr("params"), strlen("params"))
   var i i64 = 0
-  var pa i64 = 0
-  if params != 0 {
-    pa = ovid/json.Child(params)
-  }
-  while pa != 0 {
-    var nm i64 = SGet(pa, strptr("name"), strlen("name"))
-    var loc i64 = FindLoc(c, JStrP(nm), JStrN(nm))
+  pa = c.fn.sub
+  while pa != 0 as *ovid/parse.Decl {
+    var loc i64 = FindLoc(c, pa.namep, pa.namen)
     if loc == 0 {
       return Fail(c, 2)
     }
     ovid/asm.MovMemRbpReg(c.code, ArgReg(i), load64(loc + 16))
     i = i + 1
-    pa = ovid/json.Next(pa)
+    pa = pa.next
   }
   if EmitStmts(c, body) != 0 {
     return c.err
@@ -1433,42 +1000,33 @@ func MarkLive(c *C, rec i64) i64 {
     return 0
   }
   store64(rec + 64, 1)
-  var body i64 = SGet(load64(rec + 8), strptr("body"), strlen("body"))
-  if body != 0 {
-    WalkLive(c, body, load64(rec + 32), load64(rec + 40))
-  }
+  var fn *ovid/parse.Decl = load64(rec + 8) as *ovid/parse.Decl
+  WalkLive(c, fn.body, load64(rec + 32), load64(rec + 40))
   return 0
 }
 
-// WalkLive marks the callee of every call node under v; pp/pn is the
+// WalkLive marks the callee of every call in the node list n; pp/pn is the
 // package that unqualified calls resolve in.
-func WalkLive(c *C, v i64, pp i64, pn i64) i64 {
-  var k i64 = ovid/json.Kind(v)
-  if k == 5 {
-    var op i64 = SGet(v, strptr("op"), strlen("op"))
-    if op != 0 && Lit(op, strptr("call"), strlen("call")) {
-      var cp i64 = pp
-      var cn i64 = pn
-      var pk i64 = SGet(v, strptr("pkg"), strlen("pkg"))
-      if pk != 0 {
-        cp = JStrP(pk)
-        cn = JStrN(pk)
-      }
-      var nm i64 = SGet(v, strptr("func"), strlen("func"))
-      if nm != 0 {
-        var rec i64 = FindFnRec(c, cp, cn, JStrP(nm), JStrN(nm))
-        if rec != 0 {
-          MarkLive(c, rec)
-        }
+func WalkLive(c *C, n *ovid/parse.Node, pp i64, pn i64) i64 {
+  while n != 0 as *ovid/parse.Node {
+    if n.op == ovid/parse.OP_CALL {
+      var rec i64 = CallRec(c, n, pp, pn)
+      if rec != 0 {
+        MarkLive(c, rec)
       }
     }
-  }
-  if k == 4 || k == 5 {
-    var ch i64 = ovid/json.Child(v)
-    while ch != 0 {
-      WalkLive(c, ch, pp, pn)
-      ch = ovid/json.Next(ch)
-    }
+    WalkLive(c, n.left, pp, pn)
+    WalkLive(c, n.right, pp, pn)
+    WalkLive(c, n.arg, pp, pn)
+    WalkLive(c, n.base, pp, pn)
+    WalkLive(c, n.addr, pp, pn)
+    WalkLive(c, n.val, pp, pn)
+    WalkLive(c, n.cond, pp, pn)
+    WalkLive(c, n.args, pp, pn)
+    WalkLive(c, n.then, pp, pn)
+    WalkLive(c, n.els, pp, pn)
+    WalkLive(c, n.body, pp, pn)
+    n = n.next
   }
   return 0
 }
@@ -1533,12 +1091,10 @@ func EmitStartup(c *C, mainLab i64) i64 {
   return 0
 }
 
-func Compile(io *ovid/io.Cap, root i64, errp i64) *ovid/mem.Buf {
+// Compile emits the checked module m as a static executable, or returns
+// nil with a code at errp.
+func Compile(io *ovid/io.Cap, m *ovid/parse.Mod, errp i64) *ovid/mem.Buf {
   var z i64 = 0
-  if root == 0 {
-    store64(errp, 1)
-    return z as *ovid/mem.Buf
-  }
   var raw i64 = ovid/io.Alloc(io, sizeof(C))
   if raw == 0 {
     store64(errp, 1)
@@ -1546,14 +1102,13 @@ func Compile(io *ovid/io.Cap, root i64, errp i64) *ovid/mem.Buf {
   }
   var c *C = raw as *C
   c.io = io
-  c.root = root
+  c.mod = m
   c.code = ovid/asm.New(io)
   if IndexProg(c) != 0 {
     store64(errp, c.err)
     return z as *ovid/mem.Buf
   }
-  var ent i64 = SGet(root, strptr("entry"), strlen("entry"))
-  var mainRec i64 = FindFnRec(c, JStrP(ent), JStrN(ent), strptr("main"), strlen("main"))
+  var mainRec i64 = FindFnRec(c, m.entryp, m.entryn, strptr("main"), strlen("main"))
   if mainRec == 0 {
     store64(errp, 1)
     return z as *ovid/mem.Buf

@@ -1015,6 +1015,24 @@ func TestSelfHost(t *testing.T) {
 	if out, code := run(t, hs); code != 0 || out != "hello, world\n" {
 		t.Fatalf("%d %q", code, out)
 	}
+
+	// The self-hosted checker names each error's node and source line, and
+	// reports a second decl of a name once, at that decl.
+	bad := mkmod(t, demo("package demo\nimport ovid/io\nfunc F() i64 {\n  return 1\n}\nfunc F() i64 {\n  return 2\n}\nfunc main(io *ovid/io.Cap) i64 {\n  var x i64 = true\n  return x\n}\n"))
+	out, code := run(t, s1, "check", bad, "--std", stdDir)
+	ds := lines(t, out)
+	if code != 1 || len(ds) != 3 {
+		t.Fatalf("self-hosted check %d: %s", code, out)
+	}
+	if d := ds[0]; d["code"] != "duplicate_id" || d["id"] != "fn:demo.F" || d["line"] != float64(6) {
+		t.Fatalf("duplicate: %v", d)
+	}
+	if d := ds[1]; d["code"] != "type_mismatch" || d["id"] != "ex:demo.main:1" || d["func"] != "main" || d["line"] != float64(10) || d["col"] != float64(15) || d["source"] != "  var x i64 = true" {
+		t.Fatalf("mismatch: %v", d)
+	}
+	if d := ds[2]; d["ok"] != false || d["errors"] != float64(2) {
+		t.Fatalf("summary: %v", d)
+	}
 }
 
 func TestHints(t *testing.T) {
