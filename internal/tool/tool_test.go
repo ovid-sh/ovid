@@ -561,9 +561,17 @@ func TestRefsAndOutline(t *testing.T) {
 		t.Fatalf("refs %v", rs)
 	}
 	b.Reset()
-	Outline(dir, "demo", false, &b)
+	Outline(dir, "demo", false, false, &b)
 	if rs := lines(t, b.String()); len(rs) != 3 || rs[0]["sig"] != "func Add(a i64, b i64) i64" {
 		t.Fatalf("outline %v", rs)
+	}
+	if s := rs[1]; s["files"] != float64(1) || s["external"] != float64(0) || s["by_pkg"].(map[string]any)["demo"] != float64(1) {
+		t.Fatalf("refs summary %v", s)
+	}
+	b.Reset()
+	Outline(dir, "demo", false, true, &b)
+	if rs := lines(t, b.String()); rs[0]["used_by"].(map[string]any)["demo"] != float64(1) {
+		t.Fatalf("outline --uses %v", rs)
 	}
 }
 

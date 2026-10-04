@@ -132,8 +132,8 @@ func main() {
 		a := parse(cmd, argv, []string{"C"}, nil)
 		os.Exit(tool.Dump(dirArg(a, 0), w))
 	case "outline":
-		a := parse(cmd, argv, []string{"C", "pkg"}, []string{"all"})
-		os.Exit(tool.Outline(dirArg(a, 0), a.vals["pkg"], a.bools["all"], w))
+		a := parse(cmd, argv, []string{"C", "pkg"}, []string{"all", "uses"})
+		os.Exit(tool.Outline(dirArg(a, 0), a.vals["pkg"], a.bools["all"], a.bools["uses"], w))
 	case "show":
 		a := parse(cmd, argv, []string{"C"}, []string{"ids", "plain", "json"})
 		if len(a.pos) == 0 {

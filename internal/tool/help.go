@@ -154,13 +154,16 @@ ovid test [--run substr] [--list]
   each call leading to it, innermost first), and for a bad load or store
   "fault_addr"; a hung test reads "signal":"timeout".
   --list prints the tests without running them.
-ovid outline [--pkg P] [--all]
+ovid outline [--pkg P] [--all] [--uses]
   Per decl: id, kind, sig, file, line, end_line, hash, and when present
-  doc (the // comment above it), size (struct bytes), test.
+  doc (the // comment above it), size (struct bytes), test. --uses adds
+  used_by: {package: refs}, so {} is dead code and a decl used by only one
+  other package is a candidate to move there.
 ovid show <id|name>... [--plain] [--json]
   Text: "// kind id file:a-b hash=H in=decl type=T" then the source, with
   "  // @id" after each line where a statement starts (--plain omits them).
-ovid refs <id|name>          {id,kind,in,file,line,col,source} per use
+ovid refs <id|name>          {id,kind,in,file,line,col,source} per use; last:
+  {"ok":true,target,count,files,by_pkg:{package: n},external}
 ovid grep <regexp> [--pkg P] [--std]
   {file,line,col,match,source,decl,stmt} per match (RE2 syntax).
 ovid edit <file|-> [--dry-run] [--require-clean] [--show]   see: ovid help edit

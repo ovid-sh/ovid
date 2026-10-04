@@ -13,7 +13,7 @@ import (
 
 // Outline lists packages, or with pkg set, that package's declarations as
 // one line each with signature, location, and hash.
-func Outline(dir, pkg string, all bool, w io.Writer) int {
+func Outline(dir, pkg string, all, uses bool, w io.Writer) int {
 	m, err := load(dir)
 	if err != nil {
 		return fail(w, "load", err.Error(), "")
@@ -45,8 +45,18 @@ func Outline(dir, pkg string, all bool, w io.Writer) int {
 			count++
 			continue
 		}
+		var res *check.Result
+		if uses && len(m.Errors) == 0 {
+			res = check.Run(m.Prog)
+		}
 		for _, l := range declLocs(m, p) {
-			emit(w, declLine(m, l))
+			d := declLine(m, l)
+			if res != nil && (l.Kind == "func" || l.Kind == "type" || l.Kind == "const") {
+				if rs, err := findRefs(m, res, l); err == nil {
+					d["used_by"] = usesByPkg(m, rs)
+				}
+			}
+			emit(w, d)
 			count++
 		}
 	}
@@ -293,8 +303,29 @@ func Refs(dir, q string, w io.Writer) int {
 		file, a, _, line := m.Where(r.span)
 		emit(w, map[string]any{"id": r.id, "kind": r.kind, "in": r.decl, "file": file, "line": a.Line, "col": a.Col, "source": strings.TrimSpace(line)})
 	}
-	emit(w, map[string]any{"ok": true, "target": target.ID, "count": len(rs)})
+	byPkg := usesByPkg(m, rs)
+	files := map[int]bool{}
+	external := 0
+	for _, r := range rs {
+		files[r.span.File] = true
+	}
+	for p, n := range byPkg {
+		if p != target.Pkg {
+			external += n
+		}
+	}
+	emit(w, map[string]any{"ok": true, "target": target.ID, "count": len(rs), "files": len(files),
+		"by_pkg": byPkg, "external": external})
 	return ExitOK
+}
+
+// usesByPkg counts refs by the package they appear in.
+func usesByPkg(m *module.Module, rs []ref) map[string]int {
+	out := map[string]int{}
+	for _, r := range rs {
+		out[filePkg(m, r.span.File)]++
+	}
+	return out
 }
 
 func findRefs(m *module.Module, res *check.Result, target *module.Loc) ([]ref, error) {
