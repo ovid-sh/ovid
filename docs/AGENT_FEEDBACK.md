@@ -16,15 +16,14 @@ The two bugs the first run hit are gone in practice, not only in the
 deterministic test: every `05-rename-type` run got the rename right in one
 `ovid rename` and none touched the file by hand (#21), and a statement
 edit with no hash is now refused (#22), which sonnet hit and recovered from
-seven times. What the runs still show:
+seven times.
 
-- `ovid replace` accepts `--before` and `--after` and ignores them: an agent
-  that meant to insert replaced instead. The check guard caught it this
-  time only because the result lacked a `return`.
-- `ovid help replace` is a usage error (exit 64): agents guess that each
-  command is a help topic.
-- Agents may skip ovid's edits and use `sed`; the hash guard then still
-  protects the other writer, as in `09-same-func`.
+The two problems this run found are fixed by #100, not yet re-run with a
+model: an edit op now refuses a field that belongs to another op, so
+`ovid replace --before` is `bad_edit` rather than a replace (#98), and
+`ovid help replace` prints that command's entry instead of exiting 64
+(#99). Agents may still skip ovid's edits and use `sed`; the hash guard
+then still protects the other writer, as in `09-same-func`.
 
 ## 2026-10-04, b4c231f: opus-5-5 and sonnet-5-5
 
