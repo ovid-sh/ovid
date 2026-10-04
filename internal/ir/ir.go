@@ -1,12 +1,14 @@
 // Package ir is the Ovid program tree. The source of truth is .ov text; the
 // parser builds this tree with an id and a source span on every node. The JSON
-// form (ovid dump) is a derived view for tools and for the self-hosted CLI.
+// form (ovid dump) is a derived view for tools.
 package ir
 
 import (
 	"bytes"
+	"encoding/hex"
 	"encoding/json"
 	"strconv"
+	"unicode/utf8"
 )
 
 // Span is a byte range in one source file. File indexes Program.Files.
@@ -142,8 +144,13 @@ func (n *Node) MarshalJSON() ([]byte, error) {
 			b.WriteString("false")
 		}
 	case 3:
-		b.WriteString(`,"value":`)
-		writeJSONString(&b, n.Str)
+		if utf8.ValidString(n.Str) {
+			b.WriteString(`,"value":`)
+			writeJSONString(&b, n.Str)
+		} else {
+			// Bytes JSON cannot carry: hex, so nothing is lost.
+			b.WriteString(`,"value_hex":"` + hex.EncodeToString([]byte(n.Str)) + `"`)
+		}
 	}
 	writeNode(&b, "left", n.Left)
 	writeNode(&b, "right", n.Right)
@@ -199,73 +206,6 @@ func writeJSONString(b *bytes.Buffer, s string) {
 	b.Write(raw)
 }
 
-func (n *Node) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
-		return nil
-	}
-	var raw struct {
-		ID    string          `json:"id"`
-		Op    string          `json:"op"`
-		Name  string          `json:"name"`
-		Type  string          `json:"type"`
-		Pkg   string          `json:"pkg"`
-		Func  string          `json:"func"`
-		Value json.RawMessage `json:"value"`
-		Left  *Node           `json:"left"`
-		Right *Node           `json:"right"`
-		Arg   *Node           `json:"arg"`
-		Base  *Node           `json:"base"`
-		Addr  *Node           `json:"addr"`
-		Val   *Node           `json:"val"`
-		Cond  *Node           `json:"cond"`
-		Args  []*Node         `json:"args"`
-		Then  []*Node         `json:"then"`
-		Else  []*Node         `json:"else"`
-		Body  []*Node         `json:"body"`
-	}
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return err
-	}
-	n.ID = raw.ID
-	n.Op = raw.Op
-	n.Name = raw.Name
-	n.Type = raw.Type
-	n.Pkg = raw.Pkg
-	n.Func = raw.Func
-	n.Left = raw.Left
-	n.Right = raw.Right
-	n.Arg = raw.Arg
-	n.Base = raw.Base
-	n.Addr = raw.Addr
-	n.Val = raw.Val
-	n.Cond = raw.Cond
-	n.Args = raw.Args
-	n.Then = raw.Then
-	n.Else = raw.Else
-	n.Body = raw.Body
-	if len(raw.Value) == 0 {
-		return nil
-	}
-	switch raw.Value[0] {
-	case '"':
-		if err := json.Unmarshal(raw.Value, &n.Str); err != nil {
-			return err
-		}
-		n.ValK = 3
-	case 't', 'f':
-		if err := json.Unmarshal(raw.Value, &n.Bool); err != nil {
-			return err
-		}
-		n.ValK = 2
-	default:
-		if err := json.Unmarshal(raw.Value, &n.Int); err != nil {
-			return err
-		}
-		n.ValK = 1
-	}
-	return nil
-}
-
 func (n *Node) Walk(fn func(*Node)) {
 	if n == nil {
 		return
@@ -301,16 +241,6 @@ func Marshal(p *Program) ([]byte, error) {
 		return nil, err
 	}
 	return buf.Bytes(), nil
-}
-
-func Unmarshal(data []byte) (*Program, error) {
-	var p Program
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.UseNumber()
-	if err := dec.Decode(&p); err != nil {
-		return nil, err
-	}
-	return &p, nil
 }
 
 // Children returns the direct child nodes of n in source order.

@@ -28,7 +28,7 @@ func WriteFiles(files map[string][]byte, mode os.FileMode) (written []string, er
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 			return nil, err
 		}
-		t, err := writeTemp(p, files[p], mode)
+		t, err := writeTemp(p, files[p], mode, true)
 		if err != nil {
 			return nil, err
 		}
@@ -51,8 +51,28 @@ func WriteFiles(files map[string][]byte, mode os.FileMode) (written []string, er
 	return written, nil
 }
 
-// writeTemp writes src to a fresh temp file next to p.
-func writeTemp(p string, src []byte, mode os.FileMode) (string, error) {
+// ReplaceFile replaces or creates p in one step, through a temp file in its
+// directory and a rename, so a reader sees the old file or the new one and
+// a program running from p can be replaced. Nothing is synced: it is for a
+// file that can be made again, like a build's output, where WriteFiles is
+// for source. Mode 0 means what it does to WriteFiles.
+func ReplaceFile(p string, src []byte, mode os.FileMode) error {
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		return err
+	}
+	t, err := writeTemp(p, src, mode, false)
+	if err != nil {
+		return err
+	}
+	if err := os.Rename(t, p); err != nil {
+		os.Remove(t)
+		return err
+	}
+	return nil
+}
+
+// writeTemp writes src to a fresh temp file next to p, and syncs it if sync.
+func writeTemp(p string, src []byte, mode os.FileMode, sync bool) (string, error) {
 	if mode == 0 {
 		mode = 0o644
 		if st, err := os.Stat(p); err == nil {
@@ -67,7 +87,7 @@ func writeTemp(p string, src []byte, mode os.FileMode) (string, error) {
 	if err == nil {
 		err = f.Chmod(mode)
 	}
-	if err == nil {
+	if err == nil && sync {
 		err = f.Sync()
 	}
 	if cerr := f.Close(); err == nil {

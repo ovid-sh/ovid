@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -15,7 +14,12 @@ import (
 	"ovid/internal/module"
 )
 
-const testTimeout = 10 * time.Second
+// testTimeout is how long one test may run. A variable so that a test of
+// this package can shorten it.
+var testTimeout = 10 * time.Second
+
+// maxTestOutput is how much of a test's output its record keeps.
+const maxTestOutput = 4000
 
 const testPkg = "ovid/testmain"
 
@@ -89,56 +93,84 @@ func Test(dir, filter string, list bool, w io.Writer) int {
 		return ExitOK
 	}
 	prog := testProgram(m.Prog, tests)
-	tmpd, err := os.MkdirTemp("", "ovid-test-")
-	if err != nil {
-		return fail(w, "write", err.Error(), "")
-	}
-	defer os.RemoveAll(tmpd)
-	bin := filepath.Join(tmpd, "test")
 	exe, marks, err := compile.CompileMap(prog)
-	if err == nil {
-		err = os.WriteFile(bin, exe, 0o755)
-	}
 	if err != nil {
 		return fail(w, "compile", err.Error(), "")
 	}
-	outPath := filepath.Join(tmpd, "out")
+	// A missing temporary directory is not fatal yet: stage may still hold
+	// the program in memory.
+	tmpd, terr := os.MkdirTemp("", "ovid-test-")
+	if terr == nil {
+		defer os.RemoveAll(tmpd)
+	}
+	// fd 3 is the returned mark; the program, if held in memory, is fd 4.
+	st, err := stage(exe, tmpd, "test", returnedFD+1)
+	if terr != nil && err != nil {
+		err = terr
+	}
+	if err != nil {
+		return fail(w, "run", err.Error(), tmpHint)
+	}
+	defer st.done()
 	passed, failed := 0, 0
 	for k, t := range tests {
 		args := make([]string, k+1)
 		for i := range args {
 			args[i] = "t"
 		}
-		of, err := os.Create(outPath)
+		// Output and the returned mark come back through pipes, cut at what
+		// the record needs: a test may write to either without end.
+		oc, err := newPipeCapture(maxTestOutput + 1)
 		if err != nil {
-			return fail(w, "write", err.Error(), "")
+			return fail(w, "run", err.Error(), "")
+		}
+		rc, err := newPipeCapture(1)
+		if err != nil {
+			oc.finish()
+			return fail(w, "run", err.Error(), "")
 		}
 		t0 := time.Now()
-		pr := runProc(bin, args, procIO{stdout: of, stderr: of}, testTimeout)
+		pio := procIO{stdout: oc.w, stderr: oc.w, extra: []*os.File{rc.w}, argv0: "test"}
+		if st.extra != nil {
+			pio.extra = append(pio.extra, st.extra)
+		}
+		pr := runProc(st.path, args, pio, testTimeout)
 		ms := time.Since(t0).Milliseconds()
-		of.Close()
-		out, _ := os.ReadFile(outPath)
+		out, outBytes := oc.finish()
+		_, retBytes := rc.finish()
+		if pr.err != nil {
+			// The program could not be started: that is the environment's
+			// doing and the same for every test, so it is one failure of
+			// the request, not a failed test.
+			return fail(w, "run", pr.err.Error(), tmpHint)
+		}
+		returned := retBytes > 0
 		r := map[string]any{"fact": "test", "id": t.id, "ms": ms}
 		if l := m.Index[t.id]; l != nil {
 			file, a, _, _ := m.Where(l.Span)
 			r["file"], r["line"] = file, a.Line
 		}
 		code := pr.code
-		ok := pr.err == nil && pr.exited && code == 0
+		ok := pr.exited && code == 0
 		switch {
-		case pr.err != nil:
-			r["error"] = pr.err.Error()
 		case pr.timedOut:
 			r["signal"] = "timeout"
 			r["hint"] = fmt.Sprintf("killed after %s", testTimeout)
 		case !pr.exited:
 			code = -1
-			describeCrash(m, marks, pr, r)
+			describeCrash(m, exe, marks, pr, r)
+		}
+		// The runtime ends a program it could not get memory for with this
+		// code. The test did not return it: the wrapper marks every return.
+		oom := pr.exited && code == compile.ExitOOM && !returned
+		if oom {
+			r["error"] = "out_of_memory"
+			r["hint"] = "the kernel refused the program memory: an Alloc too large to map, or a host or limit too small for the heap's first 128 MiB region"
 		}
 		r["ok"] = ok
 		if !ok {
 			r["exit"] = code
-			if r["signal"] == nil {
+			if r["signal"] == nil && !oom {
 				if rs := returnsOf(m, t.id, code); len(rs) > 0 {
 					r["returned_by"] = rs
 				}
@@ -149,8 +181,9 @@ func Test(dir, filter string, list bool, w io.Writer) int {
 		}
 		if len(out) > 0 {
 			s := string(out)
-			if len(s) > 4000 {
-				s = s[:4000] + "...(truncated)"
+			if len(s) > maxTestOutput {
+				s = s[:maxTestOutput] + "...(truncated)"
+				r["output_bytes"] = outBytes
 			}
 			r["output"] = s
 		}
@@ -205,6 +238,11 @@ func returnsOf(m *module.Module, id string, code int) []map[string]any {
 	return out
 }
 
+// returnedFD is where the test wrapper writes one byte when a test returns,
+// so an exit code that came from the test's own return can be told from the
+// same code set by the runtime (out of memory).
+const returnedFD = 3
+
 // testProgram adds a package whose main runs test k when it gets k+1 args.
 func testProgram(p *ir.Program, tests []testFn) *ir.Program {
 	n := 0
@@ -215,7 +253,8 @@ func testProgram(p *ir.Program, tests []testFn) *ir.Program {
 	pkg := ir.Package{ID: "pkg:" + testPkg, Path: testPkg}
 	imported := map[string]bool{"ovid/io": true}
 	pkg.Imports = append(pkg.Imports, ir.Import{ID: "im:" + testPkg + ":ovid/io", Path: "ovid/io"})
-	var body []*ir.Node
+	body := []*ir.Node{{ID: id("st"), Op: "var", Name: "r", Type: "i64",
+		Val: &ir.Node{ID: id("ex"), Op: "int", ValK: 1, Int: 0}}}
 	for k, t := range tests {
 		if !imported[t.pkg] {
 			imported[t.pkg] = true
@@ -226,8 +265,15 @@ func testProgram(p *ir.Program, tests []testFn) *ir.Program {
 			Right: &ir.Node{ID: id("ex"), Op: "int", ValK: 1, Int: int64(k + 2)}}
 		call := &ir.Node{ID: id("ex"), Op: "call", Pkg: t.pkg, Func: t.name,
 			Args: []*ir.Node{{ID: id("ex"), Op: "name", Name: "io"}}}
-		body = append(body, &ir.Node{ID: id("st"), Op: "if", Cond: cond,
-			Then: []*ir.Node{{ID: id("st"), Op: "return", Val: call}}})
+		// r = T(io); ovid/io.Write(returnedFD, strptr("r"), 1); return r
+		mark := &ir.Node{ID: id("ex"), Op: "call", Pkg: "ovid/io", Func: "Write", Args: []*ir.Node{
+			{ID: id("ex"), Op: "int", ValK: 1, Int: returnedFD},
+			{ID: id("ex"), Op: "strptr", ValK: 3, Str: "r"},
+			{ID: id("ex"), Op: "int", ValK: 1, Int: 1}}}
+		body = append(body, &ir.Node{ID: id("st"), Op: "if", Cond: cond, Then: []*ir.Node{
+			{ID: id("st"), Op: "assign", Name: "r", Val: call},
+			{ID: id("st"), Op: "expr", Val: mark},
+			{ID: id("st"), Op: "return", Val: &ir.Node{ID: id("ex"), Op: "name", Name: "r"}}}})
 	}
 	body = append(body, &ir.Node{ID: id("st"), Op: "return", Val: &ir.Node{ID: id("ex"), Op: "int", ValK: 1, Int: 99}})
 	pkg.Funcs = []ir.Func{{ID: "fn:" + testPkg + ".main", Name: "main",

@@ -10,11 +10,13 @@ import (
 	"os/exec"
 	"ovid/internal/module"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 // repo is the repository root, found from this package's directory.
@@ -214,41 +216,6 @@ func main(io *ovid/io.Cap) i64 {
 		t.Fatalf("sha: code %d out %q", code, out)
 	}
 
-	js := withProg(t, demo(`package demo
-import ovid/io
-import ovid/json
-func main(io *ovid/io.Cap) i64 {
-  var raw i64 = strptr("{\"a\":[1,true,null],\"b\":\"hi\\n\"}")
-  var n i64 = strlen("{\"a\":[1,true,null],\"b\":\"hi\\n\"}")
-  var root i64 = ovid/json.Parse(io, raw, n)
-  if root == 0 {
-    return 1
-  }
-  var a i64 = ovid/json.GetLit(root, strptr("a"), strlen("a"))
-  if ovid/json.Int(ovid/json.At(a, 0)) != 1 {
-    return 2
-  }
-  if ovid/json.Kind(ovid/json.At(a, 2)) != 0 {
-    return 4
-  }
-  var b i64 = ovid/json.GetLit(root, strptr("b"), strlen("b"))
-  if ovid/json.StrN(b) != 3 {
-    return 5
-  }
-  var e i64 = ovid/json.Parse(io, strptr("\x22\x5c\x75\x30\x30\x65\x39\x5c\x62\x22"), 10)
-  if ovid/json.StrN(e) != 3 {
-    return 6
-  }
-  if load8(ovid/json.StrP(e)) != 0xC3 {
-    return 7
-  }
-  return 0
-}
-`), "ovid/json")
-	if out, code := buildRun(t, js); code != 0 {
-		t.Fatalf("json: code %d out %q", code, out)
-	}
-
 	elfOut := filepath.Join(t.TempDir(), "exit.elf")
 	asm := withProg(t, demo(`package demo
 import ovid/io
@@ -359,6 +326,37 @@ func TestGrepPages(t *testing.T) {
 	Grep(dir, `\bx\b`, "", false, 3, 0, &b)
 	if end := last(t, b.String()); end["count"] != 1.0 || end["has_more"] != false {
 		t.Fatalf("last page: %s", b.String())
+	}
+}
+
+// TestBuildSkipsTests: build and run compile the program without its
+// _test.ov files, so a broken test stops check and test but not them, and
+// the program cannot use a test's helpers.
+func TestBuildSkipsTests(t *testing.T) {
+	files := demo("package demo\n\nimport ovid/io\n\nfunc main(io *ovid/io.Cap) i64 {\n  return 3\n}\n")
+	files["demo/main_test.ov"] = "package demo\n\nfunc TestX(io *ovid/io.Cap) i64 {\n  return nope\n}\n"
+	dir := mkmod(t, files)
+	var b bytes.Buffer
+	if code := Build(dir, filepath.Join(t.TempDir(), "x"), &b); code != 0 {
+		t.Fatalf("build: %d %s", code, b.String())
+	}
+	if canExec {
+		b.Reset()
+		if code := Run(dir, nil, &b); code != 3 {
+			t.Fatalf("run: %d %s", code, b.String())
+		}
+	}
+	b.Reset()
+	if code := Check(dir, false, &b); code != ExitFail {
+		t.Fatalf("check passed a broken test: %s", b.String())
+	}
+
+	files["demo/main.ov"] = "package demo\n\nimport ovid/io\n\nfunc main(io *ovid/io.Cap) i64 {\n  return helper()\n}\n"
+	files["demo/main_test.ov"] = "package demo\n\nfunc helper() i64 {\n  return 0\n}\n"
+	dir = mkmod(t, files)
+	b.Reset()
+	if code := Build(dir, filepath.Join(t.TempDir(), "x"), &b); code != ExitFail || !strings.Contains(b.String(), `"unknown_name"`) {
+		t.Fatalf("build used a test helper: %d %s", code, b.String())
 	}
 }
 
@@ -613,9 +611,7 @@ func Four() i64 {
 // TestRunCrash: a program that faults under ovid run gets its exit code
 // passed through, and stderr names the statement and the calls that led to it.
 func TestRunCrash(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("crash sites need ptrace")
-	}
+	needExec(t) // and ptrace, which linux has
 	dir := mkmod(t, demo(`package demo
 
 import ovid/io
@@ -650,6 +646,40 @@ func main(io *ovid/io.Cap) i64 {
 	}
 	if outer, _ := stack[1].(map[string]any); outer["id"] != "st:demo.main:2" {
 		t.Fatalf("caller: %s", errb)
+	}
+}
+
+// TestRunStoreLiteral: a store into a strptr literal faults, since rodata
+// is read-only, and the hint says so; a store into a copy works.
+func TestRunStoreLiteral(t *testing.T) {
+	needExec(t) // and ptrace, which linux has
+	src := `package demo
+
+import ovid/io
+import ovid/mem
+
+func main(io *ovid/io.Cap) i64 {
+  var p i64 = strptr("abc")
+  COPY
+  store8(p + 1, 66)
+  return load8(p + 1)
+}
+`
+	dir := mkmod(t, demo(strings.Replace(src, "COPY", "", 1)))
+	stderr := filepath.Join(dir, "err")
+	if code := withStdio(t, os.DevNull, stderr, func() int { return Run(dir, nil, io.Discard) }); code != 128+11 {
+		t.Fatalf("exit %d", code)
+	}
+	errb, _ := os.ReadFile(stderr)
+	r := last(t, string(errb))
+	at, _ := r["at"].(map[string]any)
+	if hint, _ := r["hint"].(string); !strings.Contains(hint, "string literal") || at["id"] != "st:demo.main:2" {
+		t.Fatalf("stderr: %s", errb)
+	}
+
+	dir = mkmod(t, demo(strings.Replace(src, "COPY", "var b i64 = ovid/io.Alloc(io, 4)\n  ovid/mem.Copy(b, p, 4)\n  p = b", 1)))
+	if code := withStdio(t, os.DevNull, stderr, func() int { return Run(dir, nil, io.Discard) }); code != 66 {
+		t.Fatalf("store into a copy: exit %d", code)
 	}
 }
 
@@ -714,7 +744,7 @@ func main(io *ovid/io.Cap) i64 {
 		if err != nil {
 			t.Fatal(err)
 		}
-		pr := runner(bin, nil, procIO{stdin, open(name + ".out"), open(name + ".err")}, 0)
+		pr := runner(bin, nil, procIO{stdin: stdin, stdout: open(name + ".out"), stderr: open(name + ".err")}, 0)
 		stdin.Close()
 		if pr.err != nil || !pr.exited {
 			t.Fatalf("%s: %+v", name, pr)
@@ -1172,7 +1202,7 @@ func TestSelfHost(t *testing.T) {
 	if code != 1 || len(ds) != 3 {
 		t.Fatalf("self-hosted check %d: %s", code, out)
 	}
-	if d := ds[0]; d["code"] != "duplicate_id" || d["id"] != "fn:demo.F" || d["line"] != float64(6) {
+	if d := ds[0]; d["code"] != "duplicate_name" || d["id"] != "fn:demo.F" || d["line"] != float64(6) {
 		t.Fatalf("duplicate: %v", d)
 	}
 	if d := ds[1]; d["code"] != "type_mismatch" || d["id"] != "ex:demo.main:1" || d["func"] != "main" || d["line"] != float64(10) || d["col"] != float64(15) || d["source"] != "  var x i64 = true" {
@@ -1201,6 +1231,48 @@ func TestSelfHost(t *testing.T) {
 	out, code = run(t, s1, "check", broken, "--std", stdDir)
 	if d := last(t, out); code != 1 || d["fact"] != "summary" || d["ok"] != false || d["errors"] != float64(1) {
 		t.Fatalf("check of a syntax error %d: %s", code, out)
+	}
+
+	// Both dumps are valid JSON and say the same thing. A literal's bytes
+	// that are not UTF-8 (prog's asm tests have some) come out as
+	// value_hex, which loses nothing.
+	lit := mkmod(t, demo("package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  return load8(strptr(\"\\xb8\\n\") + 1) + strlen(\"é\")\n}\n"))
+	for _, dir := range []string{prog, lit} {
+		b.Reset()
+		Dump(dir, &b)
+		out, code := run(t, s1, "dump", dir, "--std", stdDir)
+		var g, o any
+		if !utf8.ValidString(out) || json.Unmarshal(b.Bytes(), &g) != nil || json.Unmarshal([]byte(out), &o) != nil || code != 0 {
+			t.Fatalf("dump of %s is not valid JSON (%d)", dir, code)
+		}
+		if !reflect.DeepEqual(g, o) {
+			t.Fatalf("dumps of %s differ", dir)
+		}
+	}
+	if b.Reset(); Dump(lit, &b) != 0 || !strings.Contains(b.String(), `"value_hex": "b80a"`) || !strings.Contains(b.String(), `"value": "é"`) {
+		t.Fatalf("dump of literals: %s", b.String())
+	}
+	// A source line that is not UTF-8 is still valid JSON in a diagnostic.
+	badSrc := mkmod(t, demo("package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  return true // \xff\xe2\x82\n}\n"))
+	b.Reset()
+	Check(badSrc, false, &b)
+	out, _ = run(t, s1, "check", badSrc, "--std", stdDir)
+	if !utf8.ValidString(out) || lines(t, out)[0]["source"] != lines(t, b.String())[0]["source"] {
+		t.Fatalf("diagnostic source: self-hosted %q, go %q", out, b.String())
+	}
+
+	// Its build leaves out _test.ov files too, so an error in one does not
+	// stop it, and the two binaries still agree.
+	tbad := filepath.Join(hello, "hello", "bad_test.ov")
+	if err := os.WriteFile(tbad, []byte("package hello\nfunc TestBad() i64 {\n  return nope\n}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, code := run(t, s1, "build", hello, "-o", hs, "--std", stdDir); code != 0 {
+		t.Fatalf("self-hosted build with a broken test %d: %s", code, out)
+	}
+	same(mustBuild(t, hello), hs)
+	if _, code := run(t, s1, "check", hello, "--std", stdDir); code != 1 {
+		t.Fatalf("self-hosted check passed a broken test")
 	}
 }
 

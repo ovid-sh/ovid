@@ -7,7 +7,7 @@ toolchain (`cmd/ovid`); the self-hosted compiler in `prog/` implements only
 
 ## Output
 
-Every command except `run`, `help`, and `show` without `--json` writes JSON
+Every command except `run` without `--json`, `help`, and `show` without `--json` writes JSON
 lines to stdout, one object per line, and nothing else. `show` prints the
 source with an id comment on each line; its failures are JSON like any
 other. The **last line**
@@ -34,6 +34,42 @@ program runs under ptrace; `fault_addr` for SIGSEGV and SIGBUS. `ovid test`
 reports crashes with the same fields. A ^C reaches the program, and ovid
 stays to report it (`"signal":"interrupt"`).
 
+`dump` writes the program tree as one JSON object. A `strptr`/`strlen`
+literal's bytes are its `"value"`, or, when they are not valid UTF-8 (a
+`\x` escape can make any byte), `"value_hex"`: two lowercase hex digits per
+byte. Any other JSON string, such as a diagnostic's `source`, has each
+byte that is not UTF-8 replaced by U+FFFD.
+
+### `run --json`
+
+With `--json`, `run` captures the program's output instead of passing it
+through, and ends with one record on stdout:
+
+```json
+{"ok":true,"exit":3,"ms":12,"stdout":TEXT,"stderr":TEXT}
+```
+
+`ok` says the program was built and started, whatever became of it, and
+ovid then exits 0: the record, not the exit code, says how the program
+ended. A program killed by a signal has `"signal"` in place of `"exit"`,
+with `at`, `stack`, `fault_addr`, and `hint` as above. One ended by
+`--timeout <duration>` (`5s`, `500ms`; no limit without it) has
+`"signal":"timeout"`.
+
+Each of `stdout` and `stderr` keeps its first 65,536 bytes, or
+`--max-output <bytes>`. Past that the record has `"truncated":true` and
+`"stdout_bytes"` or `"stderr_bytes"`, the full size; the rest is discarded
+as it is written. Bytes that are not UTF-8 are replaced, so the line is
+always valid JSON.
+
+A module that does not build ends as without `--json`: the diagnostics,
+then `{"ok":false,"errors":N}`, exit 125. So does a program that could not
+be placed or started: `{"ok":false,"error":"run",...}`, exit 125.
+
+Without `--json`, `--timeout` still ends the program: `run` writes
+`{"ok":false,"error":"killed","signal":"timeout","exit":124,...}` to stderr
+and exits 124.
+
 ## Exit codes
 
 | code | meaning |
@@ -42,10 +78,35 @@ stays to report it (`"signal":"interrupt"`).
 | 1 | the program has errors, or the request failed (see `error`) |
 | 2 | stale: an edit's `expect` hash or `revision` no longer matches; nothing was written |
 | 64 | bad command line (`"error":"usage"`) |
-| 125 | `run` could not build the program |
+| 124 | `run --timeout` ended the program (without `--json`) |
+| 125 | `run` could not build the program, or could not place or start it |
 
 `run` otherwise exits with the program's own code, or 128 + the signal
 number if a signal killed it, so any value is possible there.
+
+An Ovid program that the kernel refuses memory, for its heap's first region
+at startup or for a later `Alloc`, writes `out of memory` to stderr and
+exits 71. `run` passes that through, and `test` reports the test with
+`"error":"out_of_memory"` and no `returned_by`.
+
+## What `run` and `test` need
+
+Both compile the program and execute it. They write it to a temporary
+directory (`TMPDIR`, else `/tmp`) and run it from there. On Linux x86-64,
+where that directory is missing or mounted `noexec`, they hold the program
+in memory instead and execute it through `/proc/self/fd`, so `/proc` must be
+mounted for that. Neither needs the directory for anything else: a test's
+output comes back through a pipe.
+
+`test` keeps the first 4,000 bytes of a test's output in its record. Longer
+output ends in `...(truncated)` and the record adds `"output_bytes"`, the
+size of all of it. The rest is discarded as it is written, so a test that
+prints without end costs no memory or disk before its timeout ends it.
+
+When neither works, the request fails once with `"error":"run"` and a
+`hint` naming `TMPDIR`: `run` exits 125, and `test` exits 1 without
+reporting any test. Tracing a crash to its statement needs ptrace; without
+it the program still runs, and a crash is reported without `at` and `stack`.
 
 ## Failures
 
@@ -81,7 +142,7 @@ below. Codes:
 | `rolled_back` | one move of several failed and every file was put back | `moved_before_failure` |
 | `restore` | putting files back after a failed move failed; the module may be half-moved | |
 | `bad_pattern` | grep's regexp does not compile | |
-| `compile`, `run`, `dump` | the backend, the launch, or the dump failed | |
+| `compile`, `run`, `dump` | the backend, the launch (the program could not be placed or started; see above), or the dump failed | |
 | `init`, `exists` | init could not write, or `ovid.mod` already exists | |
 
 ## Diagnostics
@@ -104,6 +165,21 @@ does not match its directory, or a file sits in the module root). From the check
 `struct_value`, `duplicate_name`, `duplicate_id`, `duplicate_package`,
 `import_self`, `syscall_forbidden`, `bad_main`, `bad_abi`, `no_entry`,
 `bad_module`.
+
+## Paths
+
+A `file` in a record, and each entry of a receipt's `files`, is by default
+relative to the working directory ovid was started in, so that it can be
+opened as it stands. It is absolute when the file lies more than one
+directory above that.
+
+With `OVID_PATHS=module` in the environment, every such path is relative to
+the module root instead, with forward slashes, and a file of a shipped
+package reads `std:<package>/<file>`. The same module at the same revision
+then reports the same paths wherever it is and wherever ovid runs, which is
+what comparing or replaying records between two copies of a module needs (a
+sandbox's and its host's). `OVID_PATHS=cwd` is the default; any other value
+is a usage error.
 
 ## Ids and hashes
 

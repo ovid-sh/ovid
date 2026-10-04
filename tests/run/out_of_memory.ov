@@ -1,0 +1,14 @@
+// A block the kernel cannot map ends the program: "out of memory" on
+// standard error and exit 71, never a 0 from Alloc.
+// exit: 71
+// stdout: "before\n"
+package demo
+
+import ovid/io
+
+func main(io *ovid/io.Cap) i64 {
+  ovid/io.Print(strptr("before\n"))
+  var p i64 = ovid/io.Alloc(io, 1 << 47)
+  ovid/io.Print(strptr("after\n"))
+  return p & 1
+}
