@@ -1,0 +1,7 @@
+// ovid.mod has no module line. The diagnostic has no position.
+// error: bad_module
+package demo
+import ovid/io
+func main(io *ovid/io.Cap) i64 {
+  return 0
+}

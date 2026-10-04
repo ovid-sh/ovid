@@ -1,0 +1,18 @@
+package demo
+import ovid/io
+type Pair struct {
+  a i64
+}
+type Outer struct {
+  inner Pair // error: struct_value 3
+}
+func Param(p Pair) i64 { // error: struct_value 12
+  return 0
+}
+func Result() Pair { // error: struct_value 1
+  return Result()
+}
+func main(io *ovid/io.Cap) i64 {
+  var p Pair = Result() // error: struct_value 3
+  return 0
+}

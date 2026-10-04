@@ -7,5 +7,5 @@ func Add(a i64, b i64) i64 {
 }
 
 func main(io *ovid/io.Cap) i64 {
-  return Add(1, true) // error: type_mismatch 17
+  return Add(1, true) // error: type_mismatch 17 expected="i64" got="bool" hint="demo: func Add(a i64, b i64) i64"
 }

@@ -2,6 +2,7 @@ package tool
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -173,28 +174,43 @@ func TestCorpusRun(t *testing.T) {
 	}
 }
 
-// wantErr is one "// error: code [col]" comment: a diagnostic with that
-// code is expected on the comment's own line.
+// wantErr is one `// error: code [col] [expected="..."] [got="..."]
+// [hint="..."]` comment: a diagnostic with that code is expected on the
+// comment's own line, with those fields when they are given.
 type wantErr struct {
-	file string // module-relative
-	line int
-	col  int // 0: any
-	code string
+	file  string // module-relative
+	line  int
+	col   int // 0: any
+	code  string
+	attrs map[string]string // expected, got, hint
+	text  string            // the comment after "// error: ", for messages
 }
 
-var errDirective = regexp.MustCompile(`// error: ([a-z_]+)(?: (\d+))?\s*$`)
+var (
+	errDirective = regexp.MustCompile(`// error: ([a-z_]+)(?: (\d+))?((?: (?:expected|got|hint)="(?:[^"\\]|\\.)*")*)`)
+	errAttr      = regexp.MustCompile(` (expected|got|hint)=("(?:[^"\\]|\\.)*")`)
+)
 
-func (c *corpusCase) wantErrs() []wantErr {
+func (c *corpusCase) wantErrs() ([]wantErr, error) {
 	var ws []wantErr
 	for _, rel := range c.sortedFiles() {
 		for i, line := range strings.Split(c.files[rel], "\n") {
-			if m := errDirective.FindStringSubmatch(line); m != nil {
+			for _, m := range errDirective.FindAllStringSubmatch(line, -1) {
 				col, _ := strconv.Atoi(m[2])
-				ws = append(ws, wantErr{file: rel, line: i + 1, col: col, code: m[1]})
+				w := wantErr{file: rel, line: i + 1, col: col, code: m[1], attrs: map[string]string{},
+					text: strings.TrimPrefix(m[0], "// error: ")}
+				for _, a := range errAttr.FindAllStringSubmatch(m[3], -1) {
+					v, err := strconv.Unquote(a[2])
+					if err != nil {
+						return nil, fmt.Errorf("%s:%d: %s wants a quoted string, got %s", c.shown[rel], i+1, a[1], a[2])
+					}
+					w.attrs[a[1]] = v
+				}
+				ws = append(ws, w)
 			}
 		}
 	}
-	return ws
+	return ws, nil
 }
 
 // TestCorpusFail checks every program of tests/fail: the diagnostics must be
@@ -202,7 +218,10 @@ func (c *corpusCase) wantErrs() []wantErr {
 func TestCorpusFail(t *testing.T) {
 	for _, c := range corpus(t, "fail") {
 		t.Run(c.name, func(t *testing.T) {
-			wants := c.wantErrs()
+			wants, err := c.wantErrs()
+			if err != nil {
+				t.Fatal(err)
+			}
 			if len(wants) == 0 {
 				t.Fatalf("tests/%s has no // error: comment", c.name)
 			}
@@ -211,6 +230,17 @@ func TestCorpusFail(t *testing.T) {
 			type diag struct {
 				Fact, Code, Message, File string
 				Line, Col                 int
+				Expected, Got, Hint       string
+			}
+			// attrs is d's optional fields, written as a comment gives them.
+			attrs := func(d diag) string {
+				s := ""
+				for _, kv := range [][2]string{{"expected", d.Expected}, {"got", d.Got}, {"hint", d.Hint}} {
+					if kv[1] != "" {
+						s += fmt.Sprintf(" %s=%q", kv[0], kv[1])
+					}
+				}
+				return s
 			}
 			var got []diag
 			for _, ln := range strings.Split(strings.TrimSpace(b.String()), "\n") {
@@ -235,30 +265,28 @@ func TestCorpusFail(t *testing.T) {
 			var diff []string
 			met := make([]bool, len(wants))
 			for _, d := range got {
+				// With -v: what was reported, in the form a comment takes.
+				t.Logf("%s:%d: // error: %s %d%s", cmp.Or(c.shown[d.File], d.File), d.Line, d.Code, d.Col, attrs(d))
 				found := false
 				for i, w := range wants {
 					// A diagnostic without a position matches by code alone.
 					here := d.Line == 0 || (d.Line == w.line && d.File == w.file)
-					if !met[i] && d.Code == w.code && here && (w.col == 0 || d.Line == 0 || d.Col == w.col) {
+					same := true
+					for k, v := range w.attrs {
+						same = same && v == map[string]string{"expected": d.Expected, "got": d.Got, "hint": d.Hint}[k]
+					}
+					if !met[i] && d.Code == w.code && here && same && (w.col == 0 || d.Line == 0 || d.Col == w.col) {
 						met[i], found = true, true
 						break
 					}
 				}
 				if !found {
-					at := d.File
-					if shown, ok := c.shown[d.File]; ok {
-						at = shown
-					}
-					diff = append(diff, fmt.Sprintf("unexpected: %s:%d:%d %s: %s", at, d.Line, d.Col, d.Code, d.Message))
+					diff = append(diff, fmt.Sprintf("unexpected: %s:%d: %s %d%s (%s)", cmp.Or(c.shown[d.File], d.File), d.Line, d.Code, d.Col, attrs(d), d.Message))
 				}
 			}
 			for i, w := range wants {
 				if !met[i] {
-					col := ""
-					if w.col != 0 {
-						col = fmt.Sprintf(":%d", w.col)
-					}
-					diff = append(diff, fmt.Sprintf("missing:    %s:%d%s %s", c.shown[w.file], w.line, col, w.code))
+					diff = append(diff, fmt.Sprintf("missing:    %s:%d: %s", c.shown[w.file], w.line, w.text))
 				}
 			}
 			if len(diff) > 0 {
