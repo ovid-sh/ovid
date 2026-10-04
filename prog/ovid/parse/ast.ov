@@ -50,8 +50,9 @@ const OP_SHR i64 = 47
 
 // Node is a statement or expression. num is its per-func id number; lists
 // (args, then, els, body) are chained through next. valk selects the JSON
-// value: 1 int, 2 bool, 3 string. The heap is never reused, so Alloc memory
-// starts zeroed.
+// value: 1 int, 2 bool, 3 string. loc is for the code generator: on a var,
+// an assign, or a name, the local it is, by number from 1 (0 for none). The
+// heap is never reused, so Alloc memory starts zeroed.
 type Node struct {
   op i64
   num i64
@@ -81,6 +82,7 @@ type Node struct {
   next *Node
   off i64
   end i64
+  loc i64
 }
 
 // Decl is an import (name = path), const, type, field, func, or param.

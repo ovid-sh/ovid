@@ -1,0 +1,43 @@
+// Siblings declare v and p with the same types and different values, in
+// if blocks and in both branches of an if/else; one sibling's value never
+// shows through in another.
+// exit: 0
+package demo
+
+import ovid/io
+
+type T struct {
+  a i64
+}
+
+func main(io *ovid/io.Cap) i64 {
+  var r i64 = 0
+  var keep *T = 0 as *T
+  if true {
+    var v i64 = 3
+    var p *T = ovid/io.Alloc(io, sizeof(T)) as *T
+    p.a = 1
+    keep = p
+    r = r + v
+  }
+  if true {
+    var v i64 = 40
+    var p *T = ovid/io.Alloc(io, sizeof(T)) as *T
+    p.a = 2
+    r = r + v
+  }
+  if r == 0 {
+    var v i64 = 1
+    r = r + v
+  } else {
+    var v i64 = 2
+    r = r + v
+  }
+  if r != 45 {
+    return 1
+  }
+  if keep.a != 1 {
+    return 2
+  }
+  return 0
+}

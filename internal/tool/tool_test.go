@@ -1212,6 +1212,17 @@ func TestSelfHost(t *testing.T) {
 		t.Fatalf("summary: %v", d)
 	}
 
+	// A var's value is checked before its name is in scope, by both
+	// checkers, so check fails where build would.
+	self := mkmod(t, demo("package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  var x i64 = x\n  return x\n}\n"))
+	b.Reset()
+	Check(self, false, &b)
+	gd := lines(t, b.String())[0]
+	out, code = run(t, s1, "check", self, "--std", stdDir)
+	if d := lines(t, out)[0]; code != 1 || d["code"] != "unknown_name" || gd["code"] != "unknown_name" || d["line"] != gd["line"] || d["col"] != gd["col"] {
+		t.Fatalf("var x = x: self-hosted %d %s; go %v", code, out, gd)
+	}
+
 	// Like this compiler, its build prints only the receipt, or the errors
 	// and their count.
 	if out, _ := run(t, s1, "build", hello, "-o", hs, "--std", stdDir); len(lines(t, out)) != 1 || last(t, out)["output"] != hs {

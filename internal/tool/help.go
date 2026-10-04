@@ -71,7 +71,7 @@ File:
     next *Pair
   }
   func Sum(p *Pair, n i64) i64 {
-    var t i64 = 0           // every local is declared with a type and value
+    var t i64 = 0           // every local is declared with a type; var t i64 is 0
     while n > 0 {
       t = t + p.a
       p = p.next
@@ -84,7 +84,7 @@ Types: i64, bool, *T (T a struct in this package or path.T from an import).
 No struct values, slices, arrays, strings, generics, methods, globals, or
 closures. At most 6 params; exactly one result type.
 
-Statements: var x T = e | x = e | p.f = e | if c { } else if c { } else { }
+Statements: var x T = e | var x T (zero: 0, false, or a null pointer) | x = e | p.f = e | if c { } else if c { } else { }
 | while c { } | return e | store8(addr, v) | store64(addr, v) | call(...).
 Every path through a func must return.
 

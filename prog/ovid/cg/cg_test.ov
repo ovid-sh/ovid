@@ -1,0 +1,123 @@
+package ovid/cg
+
+import ovid/io
+import ovid/mem
+import ovid/parse
+
+// MsgIs reports whether c failed with the message want[0:n].
+func MsgIs(io *ovid/io.Cap, c *C, want i64, n i64) bool {
+  if c.err == 0 {
+    ovid/io.Eprint(strptr("no failure\n"))
+    return false
+  }
+  if ovid/mem.Eq(c.msg.data, c.msg.len, want, n) {
+    return true
+  }
+  ovid/io.Eprint(strptr("got "))
+  ovid/io.Stderr(c.msg.data, c.msg.len)
+  ovid/io.Eprint(strptr("\n"))
+  return false
+}
+
+// A failure says what failed, and only the first one is kept.
+func TestFailMessage(io *ovid/io.Cap) i64 {
+  var c *C = ovid/io.Alloc(io, sizeof(C)) as *C
+  c.io = io
+  if OffsetOf(c, strptr("i64"), strlen("i64"), strptr("a"), strlen("a")) != -1 {
+    return 1
+  }
+  if !MsgIs(io, c, strptr("field a on i64"), strlen("field a on i64")) {
+    return 2
+  }
+  Fail(c, strptr("later"), strlen("later"))
+  Add(c, strptr(" and more"), strlen(" and more"))
+  if !MsgIs(io, c, strptr("field a on i64"), strlen("field a on i64")) {
+    return 3
+  }
+  return 0
+}
+
+// Stmt is a statement of kind op, followed by next.
+func Stmt(io *ovid/io.Cap, op i64, next *ovid/parse.Node) *ovid/parse.Node {
+  var n *ovid/parse.Node = ovid/io.Alloc(io, sizeof(ovid/parse.Node)) as *ovid/parse.Node
+  n.op = op
+  n.next = next
+  return n
+}
+
+// Var declares np[0:nn] of type tp[0:tn], followed by next.
+func Var(io *ovid/io.Cap, np i64, nn i64, tp i64, tn i64, next *ovid/parse.Node) *ovid/parse.Node {
+  var n *ovid/parse.Node = Stmt(io, ovid/parse.OP_VAR, next)
+  n.namep = np
+  n.namen = nn
+  n.typp = tp
+  n.typn = tn
+  return n
+}
+
+// I64 declares np[0:nn] of type i64, followed by next.
+func I64(io *ovid/io.Cap, np i64, nn i64, next *ovid/parse.Node) *ovid/parse.Node {
+  return Var(io, np, nn, strptr("i64"), strlen("i64"), next)
+}
+
+// Use is an expression statement naming np[0:nn], followed by next.
+func Use(io *ovid/io.Cap, np i64, nn i64, next *ovid/parse.Node) *ovid/parse.Node {
+  var n *ovid/parse.Node = Stmt(io, ovid/parse.OP_EXPR, next)
+  var e *ovid/parse.Node = Stmt(io, ovid/parse.OP_NAME, 0 as *ovid/parse.Node)
+  e.namep = np
+  e.namen = nn
+  n.val = e
+  return n
+}
+
+// Each declaration has its own local and type, a name resolves to the
+// declaration in scope, and sibling blocks reuse slots, so a frame holds
+// the most locals in scope at once: the same body as the Go compiler's
+// TestBind.
+func TestBind(io *ovid/io.Cap) i64 {
+  var none *ovid/parse.Node = 0 as *ovid/parse.Node
+  var last *ovid/parse.Node = I64(io, strptr("f"), 1, none)
+  var inner *ovid/parse.Node = Stmt(io, ovid/parse.OP_IF, none)
+  inner.then = I64(io, strptr("e"), 1, none)
+  var loop *ovid/parse.Node = Stmt(io, ovid/parse.OP_WHILE, last)
+  loop.body = I64(io, strptr("d"), 1, inner)
+  var if2 *ovid/parse.Node = Stmt(io, ovid/parse.OP_IF, loop)
+  if2.then = I64(io, strptr("b"), 1, none)
+  var useT *ovid/parse.Node = Use(io, strptr("b"), 1, none)
+  var bT *ovid/parse.Node = Var(io, strptr("b"), 1, strptr("*T"), 2, I64(io, strptr("c"), 1, useT))
+  var useBool *ovid/parse.Node = Use(io, strptr("b"), 1, none)
+  var bBool *ovid/parse.Node = Var(io, strptr("b"), 1, strptr("bool"), 4, useBool)
+  var if1 *ovid/parse.Node = Stmt(io, ovid/parse.OP_IF, if2)
+  if1.then = bT
+  if1.els = bBool
+  var body *ovid/parse.Node = I64(io, strptr("a"), 1, if1)
+  var c *C = ovid/io.Alloc(io, sizeof(C)) as *C
+  c.io = io
+  c.locs = ovid/io.Alloc(io, MAXLOC * LOCSIZE)
+  c.scope = ovid/io.Alloc(io, MAXLOC * 8)
+  AddLoc(c, none, strptr("p"), 1, strptr("i64"), 3)
+  BindStmts(c, body)
+  if c.nloc != 9 {
+    return 1
+  }
+  // In scope at once at most: p, a, and the then branch's b and c, or p,
+  // a, and the loop's d and e. 9 would mean siblings did not share slots.
+  if c.live != 4 {
+    return 2
+  }
+  var i i64 = LocOf(c, useT.val)
+  var j i64 = LocOf(c, useBool.val)
+  if i != LocOf(c, bT) || j != LocOf(c, bBool) || i == j {
+    return 3
+  }
+  if !ovid/mem.Eq(load64(i + 24), load64(i + 32), strptr("*T"), 2) {
+    return 4
+  }
+  if !ovid/mem.Eq(load64(j + 24), load64(j + 32), strptr("bool"), 4) {
+    return 5
+  }
+  if load64(i + 16) != load64(j + 16) {
+    return 6
+  }
+  return 0
+}

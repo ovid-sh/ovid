@@ -1,0 +1,22 @@
+package demo
+import ovid/io
+func F(n i64) i64 {
+  if n > 0 {
+    var n i64 = 2 // error: duplicate_name 5
+    return n
+  }
+  return n
+}
+func main(io *ovid/io.Cap) i64 {
+  var x i64 = 1
+  if x == 1 {
+    var x bool = true // error: duplicate_name 5
+  }
+  while x < 3 {
+    if true {
+      var x i64 = 2 // error: duplicate_name 7
+    }
+    x = x + 1
+  }
+  return F(x)
+}

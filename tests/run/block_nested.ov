@@ -1,0 +1,51 @@
+// x is declared in a nested block, then in the block around it once the
+// nested one has ended, then at func level after both: three variables,
+// three types. Shadowing a name that is still in scope is an error
+// (tests/fail/shadow.ov), so this is the nesting the language allows.
+// Params keep their own slots while blocks declare locals.
+// exit: 123
+package demo
+
+import ovid/io
+
+type T struct {
+  a i64
+  b i64
+}
+
+type U struct {
+  b i64
+  a i64
+}
+
+func F(n i64, p *T) i64 {
+  if n > 0 {
+    var q i64 = p as i64
+    store64(q + 8, n)
+  }
+  if n > 1 {
+    var q *T = p
+    q.a = n * 2
+  }
+  return p.a + p.b + n
+}
+
+func main(io *ovid/io.Cap) i64 {
+  var r i64 = 0
+  if true {
+    if true {
+      var x *U = ovid/io.Alloc(io, sizeof(U)) as *U
+      x.a = 1
+      x.b = 2
+      r = r + x.a
+    }
+    var x *T = ovid/io.Alloc(io, sizeof(T)) as *T
+    x.a = 10
+    x.b = 20
+    r = r + load64(x as i64)
+  }
+  var x i64 = 100
+  r = r + x
+  var t *T = ovid/io.Alloc(io, sizeof(T)) as *T
+  return r + F(3, t)
+}
