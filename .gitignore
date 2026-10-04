@@ -4,3 +4,4 @@ bin/
 /ovid-self
 /tmpbin/
 agent-tools/
+.claude/worktrees/
