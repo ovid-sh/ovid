@@ -162,8 +162,9 @@ func Build(dir, out string, w io.Writer) int {
 }
 
 // Run builds to a temporary file and runs it with the given args. stdio is
-// the program's; the exit code is the program's. If the build fails, ovid
-// prints the errors and exits 125. If the program is killed by a signal,
+// the program's; the exit code is the program's. If the build fails, or
+// the program cannot be placed or started, ovid prints the errors and
+// exits 125. If the program is killed by a signal,
 // ovid writes one JSON line to stderr saying which, and for a fault the
 // statement and calls it died in, and exits 128 + the signal number.
 func Run(dir string, args []string, w io.Writer) int {
@@ -178,30 +179,40 @@ func Run(dir string, args []string, w io.Writer) int {
 		emit(w, map[string]any{"ok": false, "errors": len(c.diags)})
 		return ExitBuild
 	}
-	tmpd, err := os.MkdirTemp("", "ovid-run-")
-	if err != nil {
-		fail(w, "write", err.Error(), "")
-		return ExitBuild
-	}
-	defer os.RemoveAll(tmpd)
-	bin := filepath.Join(tmpd, filepath.Base(m.Name))
 	exe, marks, err := compile.CompileMap(m.Prog)
-	if err == nil {
-		_, err = module.WriteFiles(map[string][]byte{bin: exe}, 0o755)
-	}
 	if err != nil {
 		fail(w, "compile", err.Error(), "")
 		return ExitBuild
+	}
+	// A missing temporary directory is not fatal yet: stage may still hold
+	// the program in memory.
+	tmpd, terr := os.MkdirTemp("", "ovid-run-")
+	if terr == nil {
+		defer os.RemoveAll(tmpd)
+	}
+	name := filepath.Base(m.Name)
+	st, err := stage(exe, tmpd, name, 3)
+	if terr != nil && err != nil {
+		err = terr
+	}
+	if err != nil {
+		fail(w, "run", err.Error(), tmpHint)
+		return ExitBuild
+	}
+	defer st.done()
+	pio := procIO{stdin: os.Stdin, stdout: os.Stdout, stderr: os.Stderr, argv0: name}
+	if st.extra != nil {
+		pio.extra = []*os.File{st.extra}
 	}
 	// ^C goes to the program; ovid stays to report how it ended. Caught,
 	// not ignored, so the program gets the default action.
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, os.Interrupt, syscall.SIGQUIT)
 	defer signal.Stop(sigs)
-	pr := runProc(bin, args, procIO{stdin: os.Stdin, stdout: os.Stdout, stderr: os.Stderr}, 0)
+	pr := runProc(st.path, args, pio, 0)
 	switch {
 	case pr.err != nil:
-		fail(w, "run", pr.err.Error(), "")
+		fail(w, "run", pr.err.Error(), tmpHint)
 		return ExitBuild
 	case pr.exited:
 		return pr.code

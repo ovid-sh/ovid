@@ -34,12 +34,16 @@ type procIO struct {
 	stdin          io.Reader
 	stdout, stderr io.Writer
 	extra          []*os.File // fd 3 and up
+	argv0          string     // the program's name for itself, when it is not bin
 }
 
 func (pio procIO) command(bin string, args []string) *exec.Cmd {
 	cmd := exec.Command(bin, args...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = pio.stdin, pio.stdout, pio.stderr
 	cmd.ExtraFiles = pio.extra
+	if pio.argv0 != "" {
+		cmd.Args[0] = pio.argv0
+	}
 	return cmd
 }
 

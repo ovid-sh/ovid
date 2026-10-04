@@ -89,19 +89,23 @@ func Test(dir, filter string, list bool, w io.Writer) int {
 		return ExitOK
 	}
 	prog := testProgram(m.Prog, tests)
-	tmpd, err := os.MkdirTemp("", "ovid-test-")
-	if err != nil {
-		return fail(w, "write", err.Error(), "")
-	}
-	defer os.RemoveAll(tmpd)
-	bin := filepath.Join(tmpd, "test")
 	exe, marks, err := compile.CompileMap(prog)
-	if err == nil {
-		err = os.WriteFile(bin, exe, 0o755)
-	}
 	if err != nil {
 		return fail(w, "compile", err.Error(), "")
 	}
+	// The tests' output is collected in files here, so unlike run, test
+	// cannot do without the directory.
+	tmpd, err := os.MkdirTemp("", "ovid-test-")
+	if err != nil {
+		return fail(w, "run", err.Error(), tmpHint)
+	}
+	defer os.RemoveAll(tmpd)
+	// fd 3 is the returned mark; the program, if held in memory, is fd 4.
+	st, err := stage(exe, tmpd, "test", returnedFD+1)
+	if err != nil {
+		return fail(w, "run", err.Error(), tmpHint)
+	}
+	defer st.done()
 	outPath := filepath.Join(tmpd, "out")
 	retPath := filepath.Join(tmpd, "returned")
 	passed, failed := 0, 0
@@ -120,10 +124,20 @@ func Test(dir, filter string, list bool, w io.Writer) int {
 			return fail(w, "write", err.Error(), "")
 		}
 		t0 := time.Now()
-		pr := runProc(bin, args, procIO{stdout: of, stderr: of, extra: []*os.File{rf}}, testTimeout)
+		pio := procIO{stdout: of, stderr: of, extra: []*os.File{rf}, argv0: "test"}
+		if st.extra != nil {
+			pio.extra = append(pio.extra, st.extra)
+		}
+		pr := runProc(st.path, args, pio, testTimeout)
 		ms := time.Since(t0).Milliseconds()
 		of.Close()
 		rf.Close()
+		if pr.err != nil {
+			// The program could not be started: that is the environment's
+			// doing and the same for every test, so it is one failure of
+			// the request, not a failed test.
+			return fail(w, "run", pr.err.Error(), tmpHint)
+		}
 		out, _ := os.ReadFile(outPath)
 		ret, _ := os.ReadFile(retPath)
 		returned := len(ret) > 0
@@ -133,10 +147,8 @@ func Test(dir, filter string, list bool, w io.Writer) int {
 			r["file"], r["line"] = file, a.Line
 		}
 		code := pr.code
-		ok := pr.err == nil && pr.exited && code == 0
+		ok := pr.exited && code == 0
 		switch {
-		case pr.err != nil:
-			r["error"] = pr.err.Error()
 		case pr.timedOut:
 			r["signal"] = "timeout"
 			r["hint"] = fmt.Sprintf("killed after %s", testTimeout)

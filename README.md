@@ -35,7 +35,7 @@ has its own copy or names a `std` directory.
 ## Commands
 
 Every command prints JSON lines and the last line has `"ok"`. Exit codes:
-0 ok, 1 errors, 2 stale edit, 64 usage, 125 `run` could not build.
+0 ok, 1 errors, 2 stale edit, 64 usage, 125 `run` could not build or start the program.
 
 | command | what |
 |---|---|
