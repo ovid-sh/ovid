@@ -13,22 +13,6 @@ import (
 	"testing"
 )
 
-// knownDisagree lists the tests/fail cases on which the self-hosted checker
-// does not yet report what the Go one does (#39). A case here is skipped
-// while they disagree and fails once they agree, so a fix removes its entry.
-// Do not add to it: a new disagreement is a bug in one of the checkers.
-var knownDisagree = map[string]bool{
-	"fail/bad_abi":          true,
-	"fail/bad_main_missing": true,
-	"fail/bad_module":       true,
-	"fail/bad_type":         true,
-	"fail/duplicate_name":   true,
-	"fail/missing_import":   true,
-	"fail/missing_return":   true,
-	"fail/no_entry":         true,
-	"fail/struct_value":     true,
-}
-
 // TestCorpusSelfHost runs the corpus through the self-hosted compiler too.
 // For a tests/run case both compilers must emit the same bytes; for a
 // tests/fail case both must report the same errors at the same places.
@@ -75,15 +59,9 @@ func TestCorpusSelfHost(t *testing.T) {
 			Check(c.root, false, &b)
 			out, _ := run(t, self, "check", c.root, "--std", stdDir)
 			g, s := where(&c, c.diags(t, b.String())), where(&c, c.diags(t, out))
-			both := fmt.Sprintf("  go:\n    %s\n  self-hosted:\n    %s", strings.Join(g, "\n    "), strings.Join(s, "\n    "))
-			if knownDisagree[c.name] {
-				if slices.Equal(g, s) {
-					t.Fatalf("tests/%s: the compilers now agree; remove it from knownDisagree", c.name)
-				}
-				t.Skipf("tests/%s: a known disagreement (#39)\n%s", c.name, both)
-			}
 			if !slices.Equal(g, s) {
-				t.Fatalf("tests/%s: the compilers disagree\n%s", c.name, both)
+				t.Fatalf("tests/%s: the compilers disagree\n  go:\n    %s\n  self-hosted:\n    %s", c.name,
+					strings.Join(g, "\n    "), strings.Join(s, "\n    "))
 			}
 		})
 	}

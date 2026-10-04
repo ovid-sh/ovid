@@ -57,3 +57,14 @@ func Link(code, rodata []byte, entryOff int) []byte {
 	copy(out[textsz:], rodata)
 	return out
 }
+
+// Rodata is the address range [lo, hi) that rodata is mapped at in an
+// image from Link: its second program header.
+func Rodata(img []byte) (lo, hi uint64) {
+	if len(img) < HeaderSize {
+		return 0, 0
+	}
+	ph := img[64+56:]
+	lo = binary.LittleEndian.Uint64(ph[16:])
+	return lo, lo + binary.LittleEndian.Uint64(ph[40:])
+}
