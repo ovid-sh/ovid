@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"ovid/internal/check"
+	"ovid/internal/module"
 	"ovid/internal/syntax"
 	"ovid/std"
 )
@@ -188,16 +189,21 @@ ovid test [--run substr] [--list]
   --list prints the tests without running them.
 ovid outline [--pkg P] [--all] [--uses]
   Per decl: id, kind, sig, file, line, end_line, hash, and when present
-  doc (the // comment above it), size (struct bytes), test. --uses adds
-  used_by: {package: refs}, so {} is dead code and a decl used by only one
-  other package is a candidate to move there.
+  doc (its doc comment: the // lines directly above it, with no blank line
+  between), size (struct bytes), test. --uses adds used_by: {package:
+  refs}, so {} is dead code and a decl used by only one other package is a
+  candidate to move there.
 ovid show <id|name>... [--plain] [--json] [--exprs]
   Text: "// kind id file:a-b hash=H in=decl type=T" then the source, with
   "  // @id" after each line where a statement starts (--plain omits them).
+  A decl's source starts at its doc comment, and a-b covers it.
   For a statement or expression (a decl with --exprs), one line per
   expression inside it follows: "//   ex:id line:col text  hash=H type=T",
-  in source order, outer before inner. --json: "exprs":[{id,line,col,text,
-  hash,type}]. Replace one by id to change part of a statement.
+  in source order, outer before inner. --json: {id,kind,file,line,end_line,
+  hash,decl,parent,text,sig,type}, plus doc and doc_line (where it starts;
+  line is the decl's own first line) for a decl with a doc comment, and
+  "exprs":[{id,line,col,text,hash,type}]. Replace one by id to change part
+  of a statement.
 ovid refs <id|name>          {id,kind,in,file,line,col,source} per use, in
   source order: the names the checker resolved to it, so a field or local
   spelled like a type, func, or const is not a use of it; last:
@@ -205,7 +211,7 @@ ovid refs <id|name>          {id,kind,in,file,line,col,source} per use, in
 ovid grep <regexp> [--pkg P] [--std] [--offset N] [--limit N]
   {file,line,col,match,source,decl,stmt} per match (RE2 syntax), at most
   200 unless --limit (0: all); last: {"ok",count,total,offset,has_more,
-  next_offset}.
+  next_offset}. A match in a doc comment is in that comment's decl.
 ovid edit <file|-> [--rev REV] [--dry-run] [--require-clean|--allow-broken] [--show]
   [--force]   see: ovid help edit
 ovid replace <id> | insert --after <id> | insert --before <id> | append <id>
@@ -271,6 +277,11 @@ indentation is normalised to the target's. insert anchors on statements and
 decls; to change part of a statement, replace one of its expressions (ovid
 show <stmt> lists them with ids and hashes).
 
+A func's, type's, or const's doc comment (the // lines directly above it,
+no blank line between) is part of it, as ovid show prints it: replace puts
+the text's own doc comment in its place, and text without one keeps it;
+delete removes it; insert before puts the new text above it.
+
 After applying, the module is reparsed (a syntax error rejects everything
 and names the op) and checked. Result: {"ok":true,"written","files",
 "check_ok","errors","errors_before","revision","ops":[{"ids":[...],
@@ -309,7 +320,9 @@ so get fresh ones after edits (edit returns the new ones).
 Commands that take an id also take a name: Sum, util.Sum (a trailing part of
 the package path), app/util.Sum, Pair.next (a field), Sum.n (a param).
 A hash is a short digest of a node's source text: edits use it to refuse
-writing over text that changed since it was read. A st:/ex: id is a
+writing over text that changed since it was read. A func's, type's, or
+const's text includes its doc comment, so editing the comment changes the
+hash of the decl and of every statement in it. A st:/ex: id is a
 position, so its hash also covers the whole decl it is in: any change to
 that decl, anywhere in it, makes every statement hash read before it stale,
 while a change to another decl leaves them alone (see ovid help edit).
@@ -381,16 +394,18 @@ func helpStd(w io.Writer) {
 	}
 }
 
-// docComment returns the // comment lines directly above off, joined.
+// docComment returns the doc comment of the decl at off (module.DocStart)
+// as one line: the text of its // lines, joined by spaces.
 func docComment(src []byte, off int) string {
-	lines := strings.Split(string(src[:lineBegin(src, off)]), "\n")
+	lo := module.DocStart(src, off)
+	if lo == off {
+		return ""
+	}
 	var doc []string
-	for i := len(lines) - 2; i >= 0; i-- {
-		t := strings.TrimSpace(lines[i])
-		if !strings.HasPrefix(t, "//") {
-			break
+	for _, ln := range strings.Split(string(src[lo:lineBegin(src, off)]), "\n") {
+		if t := strings.TrimSpace(ln); t != "" {
+			doc = append(doc, strings.TrimSpace(strings.TrimPrefix(t, "//")))
 		}
-		doc = append([]string{strings.TrimSpace(strings.TrimPrefix(t, "//"))}, doc...)
 	}
 	return strings.Join(doc, " ")
 }

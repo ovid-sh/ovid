@@ -1,6 +1,7 @@
 # The version that was read is stale: the edit must be refused with exit 2.
 code=0
-ovid replace fn:price.Price --expect c24bc7bb9248 <<'EOF' || code=$?
+ovid replace fn:price.Price --expect 0094bd675479 <<'EOF' || code=$?
+// Price is what n items cost, in cents.
 func Price(n i64) i64 {
   if n <= 0 {
     return 0

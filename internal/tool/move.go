@@ -77,7 +77,7 @@ func move(dir, q, to, file string, dryRun bool, w io.Writer) int {
 
 	res := check.Run(m.Prog)
 	src := m.Files[t.Span.File].Src
-	lo := docStart(src, t.Span.Off)
+	lo := t.Full.Off
 	inMoved := func(fi, off int) bool { return fi == t.Span.File && off >= lo && off < t.Span.End }
 
 	// Each use is a qualifier change at a name token: the qualifier before
@@ -294,22 +294,6 @@ func filePkg(m *module.Module, fi int) string {
 		}
 	}
 	return ""
-}
-
-// docStart is where the // comment block directly above off begins.
-func docStart(src []byte, off int) int {
-	start := lineBegin(src, off)
-	for start > 0 {
-		pl := lineBegin(src, start-1)
-		if !strings.HasPrefix(strings.TrimSpace(string(src[pl:start-1])), "//") {
-			break
-		}
-		start = pl
-	}
-	if start < off && strings.TrimSpace(string(src[start:off])) == "" {
-		return off
-	}
-	return start
 }
 
 // pkgsUsed lists the packages a decl's types, calls, and consts name.

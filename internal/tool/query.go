@@ -182,11 +182,17 @@ func Show(dir string, ids []string, withIDs, asJSON, exprs bool, w io.Writer) in
 	for _, l := range locs {
 		file, a, b, _ := m.Where(l.Span)
 		f := m.Files[l.Span.File]
-		start := lineStart(f.Src, l.Span.Off)
-		text := string(f.Src[start:l.Span.End])
+		// A decl's text starts at its doc comment: what replace swaps.
+		start := lineStart(f.Src, l.Full.Off)
+		text := string(f.Src[start:l.Full.End])
+		docAt := f.Pos(l.Full.Off)
 		if asJSON {
 			r := map[string]any{"id": l.ID, "kind": l.Kind, "file": file, "line": a.Line, "end_line": b.Line,
-				"hash": m.Hash(l.ID), "decl": l.Decl, "parent": l.Parent, "text": m.Text(l.Span)}
+				"hash": m.Hash(l.ID), "decl": l.Decl, "parent": l.Parent, "text": m.Text(l.Full)}
+			if l.Full.Off < l.Span.Off {
+				r["doc_line"] = docAt.Line
+				r["doc"] = docComment(f.Src, l.Span.Off)
+			}
 			if t := types[l.ID]; t != "" {
 				r["type"] = t
 			}
@@ -208,7 +214,8 @@ func Show(dir string, ids []string, withIDs, asJSON, exprs bool, w io.Writer) in
 			emit(w, r)
 			continue
 		}
-		hdr := fmt.Sprintf("// %s %s %s:%d-%d hash=%s", l.Kind, l.ID, file, a.Line, b.Line, m.Hash(l.ID))
+		// The line range is the printed text's, doc comment included.
+		hdr := fmt.Sprintf("// %s %s %s:%d-%d hash=%s", l.Kind, l.ID, file, docAt.Line, b.Line, m.Hash(l.ID))
 		if l.Decl != "" && l.Decl != l.ID {
 			hdr += " in=" + l.Decl
 		}

@@ -6,6 +6,28 @@ import (
 	"testing"
 )
 
+// TestDocStart: a doc comment is the unbroken run of // lines directly
+// above a decl; a blank line or any other line ends it (#24).
+func TestDocStart(t *testing.T) {
+	for _, c := range []struct{ src, want string }{
+		{"func F", "func F"},
+		{"// a\nfunc F", "// a\nfunc F"},
+		{"package p\n\n// a\n  // b\nfunc F", "// a\n  // b\nfunc F"},
+		{"// loose\n\nfunc F", "func F"},
+		{"// a\n\n// b\nfunc F", "// b\nfunc F"},
+		{"}\n// a\nfunc F", "// a\nfunc F"},
+		{"/* a */\nfunc F", "func F"},
+		{"// a\n/* b */ func F", "func F"},
+		{"x // a\nfunc F", "func F"},
+	} {
+		src := []byte(c.src)
+		off := len(src) - len("func F")
+		if got := string(src[DocStart(src, off):]); got != c.want {
+			t.Errorf("DocStart(%q) gives %q, want %q", c.src, got, c.want)
+		}
+	}
+}
+
 func TestWriteFiles(t *testing.T) {
 	d := t.TempDir()
 	a, b := filepath.Join(d, "a.ov"), filepath.Join(d, "p", "b.ov")
