@@ -362,6 +362,35 @@ func TestGrepPages(t *testing.T) {
 	}
 }
 
+// TestBuildSkipsTests: build and run compile the program without its
+// _test.ov files, so a broken test stops check and test but not them, and
+// the program cannot use a test's helpers.
+func TestBuildSkipsTests(t *testing.T) {
+	files := demo("package demo\n\nimport ovid/io\n\nfunc main(io *ovid/io.Cap) i64 {\n  return 3\n}\n")
+	files["demo/main_test.ov"] = "package demo\n\nfunc TestX(io *ovid/io.Cap) i64 {\n  return nope\n}\n"
+	dir := mkmod(t, files)
+	var b bytes.Buffer
+	if code := Build(dir, filepath.Join(t.TempDir(), "x"), &b); code != 0 {
+		t.Fatalf("build: %d %s", code, b.String())
+	}
+	b.Reset()
+	if code := Run(dir, nil, &b); code != 3 {
+		t.Fatalf("run: %d %s", code, b.String())
+	}
+	b.Reset()
+	if code := Check(dir, false, &b); code != ExitFail {
+		t.Fatalf("check passed a broken test: %s", b.String())
+	}
+
+	files["demo/main.ov"] = "package demo\n\nimport ovid/io\n\nfunc main(io *ovid/io.Cap) i64 {\n  return helper()\n}\n"
+	files["demo/main_test.ov"] = "package demo\n\nfunc helper() i64 {\n  return 0\n}\n"
+	dir = mkmod(t, files)
+	b.Reset()
+	if code := Build(dir, filepath.Join(t.TempDir(), "x"), &b); code != ExitFail || !strings.Contains(b.String(), `"unknown_name"`) {
+		t.Fatalf("build used a test helper: %d %s", code, b.String())
+	}
+}
+
 // TestShowExprs: showing a statement lists its expressions with ids and
 // hashes, and one of them can then be replaced on its own.
 func TestShowExprs(t *testing.T) {
@@ -1201,6 +1230,20 @@ func TestSelfHost(t *testing.T) {
 	out, code = run(t, s1, "check", broken, "--std", stdDir)
 	if d := last(t, out); code != 1 || d["fact"] != "summary" || d["ok"] != false || d["errors"] != float64(1) {
 		t.Fatalf("check of a syntax error %d: %s", code, out)
+	}
+
+	// Its build leaves out _test.ov files too, so an error in one does not
+	// stop it, and the two binaries still agree.
+	tbad := filepath.Join(hello, "hello", "bad_test.ov")
+	if err := os.WriteFile(tbad, []byte("package hello\nfunc TestBad() i64 {\n  return nope\n}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, code := run(t, s1, "build", hello, "-o", hs, "--std", stdDir); code != 0 {
+		t.Fatalf("self-hosted build with a broken test %d: %s", code, out)
+	}
+	same(mustBuild(t, hello), hs)
+	if _, code := run(t, s1, "check", hello, "--std", stdDir); code != 1 {
+		t.Fatalf("self-hosted check passed a broken test")
 	}
 }
 

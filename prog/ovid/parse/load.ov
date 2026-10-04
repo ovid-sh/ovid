@@ -13,6 +13,7 @@ type Mod struct {
   io *ovid/io.Cap
   dirp i64
   dirn i64
+  notests bool
   namep i64
   namen i64
   entryp i64
@@ -240,6 +241,10 @@ func HasOvSuffix(p i64, n i64) bool {
   return n >= 3 && ovid/mem.Eq((p + n) - 3, 3, strptr(".ov"), 3)
 }
 
+func IsTestFile(p i64, n i64) bool {
+  return n >= 8 && ovid/mem.Eq((p + n) - 8, 8, strptr("_test.ov"), 8)
+}
+
 // GroupFor finds or makes the package for path p[0:n], keeping m.pkgs
 // sorted by path.
 func GroupFor(m *Mod, p i64, n i64) *Pkg {
@@ -282,7 +287,7 @@ func Walk(m *Mod, abs i64, relp i64, reln i64) i64 {
       if load8(e.relp) != 46 && ovid/io.FstatAt(modf, st) < 0 {
         Walk(m, full, crel, creln)
       }
-    } else if HasOvSuffix(e.relp, e.reln) {
+    } else if HasOvSuffix(e.relp, e.reln) && !(m.notests && IsTestFile(e.relp, e.reln)) {
       var pp i64 = ovid/io.Alloc(m.io, 8)
       var pn i64 = ovid/io.Alloc(m.io, 8)
       if ovid/io.ReadFile(m.io, full, ovid/io.CLen(full), pp, pn) == 0 {
@@ -602,10 +607,12 @@ func Revision(m *Mod) i64 {
 }
 
 // Load reads and parses the module in dir (stdp/stdn: --std override, or 0).
-// Check m.nerr; on 0, m.pkgs holds the program. Emit writes it as JSON.
-func Load(io *ovid/io.Cap, dirp i64, dirn i64, stdp i64, stdn i64) *Mod {
+// notests leaves out _test.ov files, as build does. Check m.nerr; on 0,
+// m.pkgs holds the program. Emit writes it as JSON.
+func Load(io *ovid/io.Cap, dirp i64, dirn i64, stdp i64, stdn i64, notests bool) *Mod {
   var m *Mod = ovid/io.Alloc(io, sizeof(Mod)) as *Mod
   m.io = io
+  m.notests = notests
   m.dirp = dirp
   m.dirn = dirn
   m.out = ovid/mem.New(io, 4096)
