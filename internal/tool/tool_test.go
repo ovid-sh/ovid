@@ -966,6 +966,46 @@ func TestSelfHost(t *testing.T) {
 	}
 }
 
+// TestSelfHostLarge builds a program far larger than the compiler with both
+// compilers and compares the output. It is sized to cross what used to be
+// fixed limits in the self-hosted one: a call chain 30000 funcs deep (the
+// reachability walk recursed along it), more than 65536 distinct strings
+// with repeats among them, and code, label, and fixup tables that must grow.
+func TestSelfHostLarge(t *testing.T) {
+	if testing.Short() {
+		t.Skip("large program")
+	}
+	const n = 30000
+	var src strings.Builder
+	src.WriteString("package demo\nimport ovid/io\nfunc F0() i64 {\n  return 1\n}\n")
+	for i := 1; i < n; i++ {
+		fmt.Fprintf(&src, "func F%d() i64 {\n  return (F%d() + strlen(\"a%d\") + strlen(\"b%d\") + load8(strptr(\"c%d\")) + strlen(\"a%d\")) & 1023\n}\n", i, i-1, i, i, i, i-1)
+	}
+	fmt.Fprintf(&src, "func main(io *ovid/io.Cap) i64 {\n  return F%d() & 127\n}\n", n-1)
+	dir := mkmod(t, demo(src.String()))
+	g := mustBuild(t, dir)
+
+	tmp := t.TempDir()
+	s1 := filepath.Join(tmp, "s1")
+	var b bytes.Buffer
+	if code := Build(filepath.Join(repo(t), "prog"), s1, &b); code != 0 {
+		t.Fatalf("go build of prog: %s", b.String())
+	}
+	s := filepath.Join(tmp, "big")
+	if out, code := run(t, s1, "build", dir, "-o", s, "--std", filepath.Join(repo(t), "std")); code != 0 {
+		t.Fatalf("self-hosted build %d: %s", code, out)
+	}
+	x, _ := os.ReadFile(g)
+	y, _ := os.ReadFile(s)
+	if len(x) == 0 || !bytes.Equal(x, y) {
+		t.Fatalf("outputs differ: go %d bytes, self-hosted %d bytes", len(x), len(y))
+	}
+	_, want := run(t, g)
+	if _, got := run(t, s); got != want {
+		t.Fatalf("exit %d, want %d", got, want)
+	}
+}
+
 func TestHints(t *testing.T) {
 	dir0 := mkmod(t, demo("package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  return sizeof(i64) + sizeof(Nope)\n}\n"))
 	var b0 bytes.Buffer

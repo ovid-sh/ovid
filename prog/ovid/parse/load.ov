@@ -5,7 +5,8 @@ import ovid/mem
 import ovid/sha
 
 // Mod is a loaded module: ovid.mod and its packages (sorted by path, shipped
-// ones from the std dir included). json is set by Emit.
+// ones from the std dir included). json is set by Emit; ftab/fmask are the
+// func index (see IndexFuncs).
 // nerr counts load errors (bad ovid.mod, syntax, layout); they have already
 // been printed as JSON lines.
 type Mod struct {
@@ -24,6 +25,8 @@ type Mod struct {
   nerr i64
   out *ovid/mem.Buf
   json *ovid/mem.Buf
+  ftab i64
+  fmask i64
   rev i64
   npkg i64
   nmissing i64
@@ -607,5 +610,6 @@ func Load(io *ovid/io.Cap, dirp i64, dirn i64, stdp i64, stdn i64) *Mod {
     }
     k = k.next
   }
+  IndexFuncs(m)
   return m
 }
