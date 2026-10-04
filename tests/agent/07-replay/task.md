@@ -1,10 +1,10 @@
 `Count` in the module `tally` in this directory counted each event twice:
 it had two `x = x + 1` statements, and one had to go. You read it with
 `ovid show`, and the first of the two was `st:tally.Count:2` with hash
-`fa799c299f8e`. You then ran
+`adb929245855`. You then ran
 
 ```
-ovid delete st:tally.Count:2 --expect fa799c299f8e
+ovid delete st:tally.Count:2 --expect adb929245855
 ```
 
 but the connection dropped before you saw any output, so you do not know
