@@ -1202,7 +1202,7 @@ func TestSelfHost(t *testing.T) {
 	if code != 1 || len(ds) != 3 {
 		t.Fatalf("self-hosted check %d: %s", code, out)
 	}
-	if d := ds[0]; d["code"] != "duplicate_id" || d["id"] != "fn:demo.F" || d["line"] != float64(6) {
+	if d := ds[0]; d["code"] != "duplicate_name" || d["id"] != "fn:demo.F" || d["line"] != float64(6) {
 		t.Fatalf("duplicate: %v", d)
 	}
 	if d := ds[1]; d["code"] != "type_mismatch" || d["id"] != "ex:demo.main:1" || d["func"] != "main" || d["line"] != float64(10) || d["col"] != float64(15) || d["source"] != "  var x i64 = true" {

@@ -90,7 +90,13 @@ func runCheck(m *module.Module) *checked {
 	for _, is := range c.res.Issues {
 		d := module.Diag{Fact: "error", Code: is.Code, Message: is.Message, ID: is.ID,
 			Expected: is.Expected, Got: is.Got, Hint: is.Hint}
-		m.Locate(&d)
+		if is.At != nil {
+			var a, b module.Pos
+			d.File, a, b, d.Source = m.Where(*is.At)
+			d.Line, d.Col, d.EndLine, d.EndCol = a.Line, a.Col, b.Line, b.Col
+		} else {
+			m.Locate(&d)
+		}
 		c.diags = append(c.diags, d)
 	}
 	return c

@@ -219,9 +219,9 @@ func HashStr(p i64, n i64) i64 {
   return h
 }
 
-// Claim records the id of the decl the checker is at and reports a second
-// decl with the same id. Statement and expression ids are numbered by the
-// parser, so only decls can collide.
+// Claim records the id of the decl the checker is at. It returns 1, and
+// records nothing, when an earlier decl has the same id. Statement and
+// expression ids are numbered by the parser, so only decls can collide.
 func Claim(c *Ch) i64 {
   c.ib.len = 0
   WId(c, c.ib)
@@ -240,8 +240,7 @@ func Claim(c *Ch) i64 {
       return 0
     }
     if ovid/mem.Eq(sp, sn, p, n) {
-      Err(c, strptr("duplicate_id"), strlen("duplicate_id"), p, n)
-      return 0
+      return 1
     }
     idx = (idx + 1) & c.tabmask
   }
@@ -914,11 +913,18 @@ func CountIds(m *ovid/parse.Mod) i64 {
   return n
 }
 
-// ClaimDecls claims the id of every decl in the list d of package k.
-func ClaimDecls(c *Ch, kind i64, k *ovid/parse.Pkg, d *ovid/parse.Decl, o *ovid/parse.Decl) i64 {
+// A second decl of a name in a package gets one duplicate_name error, at
+// that decl, and nothing else about it is checked: not a repeated type's
+// fields, nor a repeated func's params, result, or body.
+
+// Consts claims the ids of package k's consts.
+func Consts(c *Ch, k *ovid/parse.Pkg) i64 {
+  var d *ovid/parse.Decl = k.cs
   while d != 0 as *ovid/parse.Decl {
-    HereDecl(c, kind, k, d, o)
-    Claim(c)
+    HereDecl(c, H_CONST, k, d, 0 as *ovid/parse.Decl)
+    if Claim(c) != 0 {
+      Err(c, strptr("duplicate_name"), strlen("duplicate_name"), d.namep, d.namen)
+    }
     d = d.next
   }
   return 0
@@ -930,16 +936,23 @@ func Types(c *Ch, k *ovid/parse.Pkg) i64 {
   var t *ovid/parse.Decl = k.ts
   while t != 0 as *ovid/parse.Decl {
     HereDecl(c, H_TYPE, k, t, 0 as *ovid/parse.Decl)
-    Claim(c)
-    if ovid/parse.FindDecl(k.cs, t.namep, t.namen) != 0 as *ovid/parse.Decl {
-      Err(c, strptr("duplicate_name"), strlen("duplicate_name"), t.namep, t.namen)
+    var taken bool = Claim(c) != 0
+    if !taken {
+      taken = ovid/parse.FindDecl(k.cs, t.namep, t.namen) != 0 as *ovid/parse.Decl
     }
-    var f *ovid/parse.Decl = t.sub
-    while f != 0 as *ovid/parse.Decl {
-      HereDecl(c, H_FIELD, k, f, t)
-      Claim(c)
-      DeclTy(c, f)
-      f = f.next
+    if taken {
+      Err(c, strptr("duplicate_name"), strlen("duplicate_name"), t.namep, t.namen)
+    } else {
+      var f *ovid/parse.Decl = t.sub
+      while f != 0 as *ovid/parse.Decl {
+        HereDecl(c, H_FIELD, k, f, t)
+        if Claim(c) != 0 {
+          Err(c, strptr("duplicate_name"), strlen("duplicate_name"), f.namep, f.namen)
+        } else {
+          DeclTy(c, f)
+        }
+        f = f.next
+      }
     }
     t = t.next
   }
@@ -948,28 +961,32 @@ func Types(c *Ch, k *ovid/parse.Pkg) i64 {
 
 // Funcs claims the ids of package k's funcs and their params, and checks
 // each func's name against the consts and types and its param and result
-// types.
+// types. A repeated param is reported by CheckFunc.
 func Funcs(c *Ch, k *ovid/parse.Pkg) i64 {
   var fn *ovid/parse.Decl = k.fs
   while fn != 0 as *ovid/parse.Decl {
     HereDecl(c, H_FUNC, k, fn, fn)
-    Claim(c)
-    var taken bool = ovid/parse.FindDecl(k.cs, fn.namep, fn.namen) != 0 as *ovid/parse.Decl
+    var taken bool = Claim(c) != 0
+    if !taken {
+      taken = ovid/parse.FindDecl(k.cs, fn.namep, fn.namen) != 0 as *ovid/parse.Decl
+    }
     if !taken {
       taken = ovid/parse.FindDecl(k.ts, fn.namep, fn.namen) != 0 as *ovid/parse.Decl
     }
     if taken {
       Err(c, strptr("duplicate_name"), strlen("duplicate_name"), fn.namep, fn.namen)
+      fn.dup = 1
+    } else {
+      var pa *ovid/parse.Decl = fn.sub
+      while pa != 0 as *ovid/parse.Decl {
+        HereDecl(c, H_PARAM, k, pa, fn)
+        Claim(c)
+        DeclTy(c, pa)
+        pa = pa.next
+      }
+      HereDecl(c, H_FUNC, k, fn, fn)
+      DeclTy(c, fn)
     }
-    var pa *ovid/parse.Decl = fn.sub
-    while pa != 0 as *ovid/parse.Decl {
-      HereDecl(c, H_PARAM, k, pa, fn)
-      Claim(c)
-      DeclTy(c, pa)
-      pa = pa.next
-    }
-    HereDecl(c, H_FUNC, k, fn, fn)
-    DeclTy(c, fn)
     fn = fn.next
   }
   return 0
@@ -1001,26 +1018,26 @@ func Run(io *ovid/io.Cap, m *ovid/parse.Mod, build bool) i64 {
   while k != 0 as *ovid/parse.Pkg {
     npkg = npkg + 1
     HereDecl(c, H_PKG, k, 0 as *ovid/parse.Decl, 0 as *ovid/parse.Decl)
-    Claim(c)
+    if Claim(c) != 0 {
+      Err(c, strptr("duplicate_id"), strlen("duplicate_id"), c.ib.data, c.ib.len)
+    }
     var im *ovid/parse.Decl = k.ims
     while im != 0 as *ovid/parse.Decl {
       HereDecl(c, H_IMPORT, k, im, im)
-      Claim(c)
-      if ovid/mem.Eq(im.namep, im.namen, k.pathp, k.pathn) {
-        c.pathp = k.pathp
-        c.pathn = k.pathn
+      c.pathp = k.pathp
+      c.pathn = k.pathn
+      if Claim(c) != 0 {
+        Err(c, strptr("duplicate_name"), strlen("duplicate_name"), im.namep, im.namen)
+      } else if ovid/mem.Eq(im.namep, im.namen, k.pathp, k.pathn) {
         Err(c, strptr("import_self"), strlen("import_self"), im.namep, im.namen)
-      }
-      if FindPkg(c, im.namep, im.namen) == 0 as *ovid/parse.Pkg {
-        c.pathp = k.pathp
-        c.pathn = k.pathn
+      } else if FindPkg(c, im.namep, im.namen) == 0 as *ovid/parse.Pkg {
         Err(c, strptr("unknown_package"), strlen("unknown_package"), im.namep, im.namen)
       }
       im = im.next
     }
     c.pathp = k.pathp
     c.pathn = k.pathn
-    ClaimDecls(c, H_CONST, k, k.cs, 0 as *ovid/parse.Decl)
+    Consts(c, k)
     Types(c, k)
     Funcs(c, k)
     c.pathn = 0
@@ -1034,7 +1051,9 @@ func Run(io *ovid/io.Cap, m *ovid/parse.Mod, build bool) i64 {
     c.pathn = k.pathn
     var f *ovid/parse.Decl = k.fs
     while f != 0 as *ovid/parse.Decl {
-      CheckFunc(c, f)
+      if f.dup == 0 {
+        CheckFunc(c, f)
+      }
       f = f.next
     }
     k = k.next

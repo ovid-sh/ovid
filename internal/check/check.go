@@ -14,14 +14,17 @@ import (
 	"ovid/std"
 )
 
-// Issue is one error. ID names the node; the caller maps it to a location.
+// Issue is one error. ID names the node; the caller maps it to a location,
+// unless At gives one: a repeated decl shares its id with the first, so the
+// id would point there.
 type Issue struct {
-	Code     string `json:"code"`
-	ID       string `json:"id,omitempty"`
-	Message  string `json:"message"`
-	Expected string `json:"expected,omitempty"`
-	Got      string `json:"got,omitempty"`
-	Hint     string `json:"hint,omitempty"`
+	Code     string   `json:"code"`
+	ID       string   `json:"id,omitempty"`
+	At       *ir.Span `json:"-"`
+	Message  string   `json:"message"`
+	Expected string   `json:"expected,omitempty"`
+	Got      string   `json:"got,omitempty"`
+	Hint     string   `json:"hint,omitempty"`
 }
 
 // Fact is a declaration-level fact (types, layouts, signatures).
@@ -50,6 +53,7 @@ type checker struct {
 	fn       *ir.Func
 	imported map[string]bool
 	res      string
+	dup      map[*ir.Func]bool // funcs whose name was already declared
 }
 
 func (c *checker) issue(is Issue) { c.r.Issues = append(c.r.Issues, is) }
@@ -65,7 +69,7 @@ func (c *checker) mismatch(id, what, got, want string) {
 // Run checks p.
 func Run(p *ir.Program) *Result {
 	r := &Result{Types: map[string]string{}}
-	c := &checker{r: r, pkgs: map[string]*ir.Package{}, sigs: map[string]sig{}}
+	c := &checker{r: r, pkgs: map[string]*ir.Package{}, sigs: map[string]sig{}, dup: map[*ir.Func]bool{}}
 	if strings.TrimSpace(p.Module) == "" {
 		c.err("", "bad_module", "ovid.mod has no module line")
 	}
@@ -92,14 +96,27 @@ func Run(p *ir.Program) *Result {
 		pkg := &p.Packages[i]
 		c.pkg = pkg
 		seen := map[string]string{}
-		decl := func(id, name string) {
-			claim(id)
+		// decl reports whether name is new in the package. A second decl
+		// of a name gets one error, at that decl, and nothing else about
+		// it is checked: its id is the first decl's, so its fields,
+		// params, and statements could only be reported at the wrong place.
+		decl := func(id, name string, at ir.Span) bool {
 			if prev, ok := seen[name]; ok {
-				c.err(id, "duplicate_name", fmt.Sprintf("%s is already declared in package %s (%s)", name, pkg.Path, prev))
+				c.issue(Issue{Code: "duplicate_name", ID: id, At: &at,
+					Message: fmt.Sprintf("%s is already declared in package %s (%s)", name, pkg.Path, prev)})
+				return false
 			}
+			claim(id)
 			seen[name] = id
+			return true
 		}
+		iseen := map[string]bool{}
 		for _, im := range pkg.Imports {
+			if iseen[im.Path] {
+				c.issue(Issue{Code: "duplicate_name", ID: im.ID, At: &im.Span, Message: im.Path + " is imported twice"})
+				continue
+			}
+			iseen[im.Path] = true
 			claim(im.ID)
 			if im.Path == pkg.Path {
 				c.err(im.ID, "import_self", "package "+pkg.Path+" imports itself")
@@ -109,21 +126,26 @@ func Run(p *ir.Program) *Result {
 			}
 		}
 		for _, cn := range pkg.Consts {
-			decl(cn.ID, cn.Name)
+			if !decl(cn.ID, cn.Name, cn.Span) {
+				continue
+			}
 			c.r.Facts = append(c.r.Facts, Fact{"fact": "const", "id": cn.ID, "value": cn.Value})
 			if cn.Type != "i64" {
 				c.err(cn.ID, "bad_type", "const must be i64")
 			}
 		}
 		for _, t := range pkg.Types {
-			decl(t.ID, t.Name)
+			if !decl(t.ID, t.Name, t.Span) {
+				continue
+			}
 			c.r.Facts = append(c.r.Facts, Fact{"fact": "type", "id": t.ID, "fields": len(t.Fields), "size": len(t.Fields) * 8})
 			fseen := map[string]bool{}
 			for i, f := range t.Fields {
-				claim(f.ID)
 				if fseen[f.Name] {
-					c.err(f.ID, "duplicate_name", "field "+f.Name+" is declared twice")
+					c.issue(Issue{Code: "duplicate_name", ID: f.ID, At: &f.Span, Message: "field " + f.Name + " is declared twice"})
+					continue
 				}
+				claim(f.ID)
 				fseen[f.Name] = true
 				ft, err := c.resolve(f.Type)
 				c.r.Facts = append(c.r.Facts, Fact{"fact": "field", "id": f.ID, "type": ft, "offset": i * 8})
@@ -136,14 +158,22 @@ func Run(p *ir.Program) *Result {
 		}
 		for fi := range pkg.Funcs {
 			fn := &pkg.Funcs[fi]
-			decl(fn.ID, fn.Name)
+			if !decl(fn.ID, fn.Name, fn.Span) {
+				c.dup[fn] = true
+				continue
+			}
 			c.r.Funcs++
 			if len(fn.Params) > 6 {
 				c.err(fn.ID, "arity", fmt.Sprintf("%s has %d parameters; at most 6", fn.Name, len(fn.Params)))
 			}
 			var ps, names []string
+			pseen := map[string]bool{}
 			for _, pa := range fn.Params {
-				claim(pa.ID)
+				// A repeated param is reported by checkBody.
+				if !pseen[pa.Name] {
+					claim(pa.ID)
+				}
+				pseen[pa.Name] = true
 				pt, err := c.resolve(pa.Type)
 				if err != nil {
 					c.err(pa.ID, "bad_type", err.Error())
@@ -179,7 +209,9 @@ func Run(p *ir.Program) *Result {
 			c.imported[im.Path] = true
 		}
 		for fi := range pkg.Funcs {
-			c.checkBody(&pkg.Funcs[fi])
+			if !c.dup[&pkg.Funcs[fi]] {
+				c.checkBody(&pkg.Funcs[fi])
+			}
 		}
 	}
 	return r
@@ -356,7 +388,7 @@ func (c *checker) checkBody(fn *ir.Func) {
 	e := &env{vars: map[string]string{}}
 	for _, pa := range fn.Params {
 		if _, ok := e.vars[pa.Name]; ok {
-			c.err(pa.ID, "duplicate_name", "parameter "+pa.Name+" is declared twice")
+			c.issue(Issue{Code: "duplicate_name", ID: pa.ID, At: &pa.Span, Message: "parameter " + pa.Name + " is declared twice"})
 		}
 		t, err := c.resolve(pa.Type)
 		if err != nil {
