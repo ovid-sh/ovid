@@ -767,6 +767,44 @@ func TestEditStrictKeys(t *testing.T) {
 	}
 }
 
+// TestEditStrayFields: a field that belongs to another op is refused, not
+// ignored. A replace that names a before was meant as an insert; doing a
+// replace would drop the code the caller meant to keep.
+func TestEditStrayFields(t *testing.T) {
+	src := "package demo\n\nimport ovid/io\n\nfunc main(io *ovid/io.Cap) i64 {\n  var x i64 = 1\n  return x\n}\n"
+	dir := mkmod(t, demo(src))
+	h := hashOf(t, dir, "fn:demo.main")
+	for _, c := range []struct {
+		op  EditOp
+		key string
+	}{
+		{EditOp{Op: "replace", ID: "st:demo.main:2", Before: "st:demo.main:2", Text: "return 0"}, `replace takes no "before"`},
+		{EditOp{Op: "replace", ID: "st:demo.main:2", After: "st:demo.main:1", Text: "return 0"}, `replace takes no "after"`},
+		{EditOp{Op: "replace", ID: "st:demo.main:2", File: "demo/x.ov", Text: "return 0"}, `replace takes no "file"`},
+		{EditOp{Op: "delete", ID: "st:demo.main:1", Text: "var x i64 = 2"}, `delete takes no "text"`},
+		{EditOp{Op: "delete", ID: "st:demo.main:1", Into: "fn:demo.main"}, `delete takes no "into"`},
+		{EditOp{Op: "insert", ID: "st:demo.main:1", After: "st:demo.main:1", Text: "x = 2"}, `insert takes no "id"`},
+		{EditOp{Op: "insert", After: "st:demo.main:1", File: "demo/x.ov", Text: "x = 2"}, `insert takes no "file"`},
+		{EditOp{Op: "append", Into: "fn:demo.main", Before: "st:demo.main:2", Text: "x = 2"}, `append takes no "before"`},
+	} {
+		c.op.Expect = h
+		// Both forms: one op from the command line, and a JSON request.
+		var b bytes.Buffer
+		code := EditOne(dir, c.op, "", EditOpts{}, &b)
+		r := last(t, b.String())
+		if code != ExitFail || r["error"] != "bad_edit" || !strings.Contains(fmt.Sprint(r["message"]), c.key) || r["hint"] == nil {
+			t.Errorf("%s: %d %s", c.key, code, b.String())
+		}
+		r, code = editJSON(t, dir, c.op)
+		if code != ExitFail || r["error"] != "bad_edit" || !strings.Contains(fmt.Sprint(r["message"]), c.key) {
+			t.Errorf("%s (JSON): %d %v", c.key, code, r)
+		}
+		if got, _ := os.ReadFile(filepath.Join(dir, "demo/main.ov")); string(got) != src {
+			t.Fatalf("%s: written:\n%s", c.key, got)
+		}
+	}
+}
+
 func buildRunDir(t *testing.T, dir string) (string, int) {
 	t.Helper()
 	bin := filepath.Join(dir, "bin", "demo")
