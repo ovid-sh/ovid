@@ -155,6 +155,9 @@ ovid build [-o out]          default out: <module>/bin/<module name>;
                              _test.ov files are left out (so for run)
 ovid run [--] [args...]      program stdio and exit code pass through;
                              if the build fails: errors as JSON, exit 125.
+  run and test execute the program from TMPDIR (else /tmp), or from memory
+  where that is missing or noexec and /proc is mounted; if neither works:
+  {"ok":false,"error":"run",message,hint}, exit 125 (run) or 1 (test).
   Killed by a signal: exit 128+N and one line on stderr,
   {"ok":false,"error":"killed",signal,exit,at,stack,fault_addr,hint}, with
   at/stack (the statement and its callers) for a fault on Linux.

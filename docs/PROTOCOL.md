@@ -42,7 +42,7 @@ stays to report it (`"signal":"interrupt"`).
 | 1 | the program has errors, or the request failed (see `error`) |
 | 2 | stale: an edit's `expect` hash or `revision` no longer matches; nothing was written |
 | 64 | bad command line (`"error":"usage"`) |
-| 125 | `run` could not build the program |
+| 125 | `run` could not build the program, or could not place or start it |
 
 `run` otherwise exits with the program's own code, or 128 + the signal
 number if a signal killed it, so any value is possible there.
@@ -51,6 +51,20 @@ An Ovid program that the kernel refuses memory, for its heap's first region
 at startup or for a later `Alloc`, writes `out of memory` to stderr and
 exits 71. `run` passes that through, and `test` reports the test with
 `"error":"out_of_memory"` and no `returned_by`.
+
+## What `run` and `test` need
+
+Both compile the program and execute it. They write it to a temporary
+directory (`TMPDIR`, else `/tmp`) and run it from there. On Linux x86-64,
+where that directory is missing or mounted `noexec`, they hold the program
+in memory instead and execute it through `/proc/self/fd`, so `/proc` must be
+mounted for that. `test` also keeps each test's output in the temporary
+directory, so it needs a writable one even then.
+
+When neither works, the request fails once with `"error":"run"` and a
+`hint` naming `TMPDIR`: `run` exits 125, and `test` exits 1 without
+reporting any test. Tracing a crash to its statement needs ptrace; without
+it the program still runs, and a crash is reported without `at` and `stack`.
 
 ## Failures
 
@@ -85,7 +99,7 @@ below. Codes:
 | `rolled_back` | one move of several failed and every file was put back | `moved_before_failure` |
 | `restore` | putting files back after a failed move failed; the module may be half-moved | |
 | `bad_pattern` | grep's regexp does not compile | |
-| `compile`, `run`, `dump` | the backend, the launch, or the dump failed | |
+| `compile`, `run`, `dump` | the backend, the launch (the program could not be placed or started; see above), or the dump failed | |
 | `init`, `exists` | init could not write, or `ovid.mod` already exists | |
 
 ## Diagnostics
