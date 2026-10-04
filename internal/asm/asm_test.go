@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"ovid/internal/elf"
@@ -11,6 +12,9 @@ import (
 
 func runBin(t *testing.T, bin []byte, args ...string) (string, int) {
 	t.Helper()
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skipf("%s/%s cannot execute linux/amd64 binaries", runtime.GOOS, runtime.GOARCH)
+	}
 	dir := t.TempDir()
 	path := filepath.Join(dir, "prog")
 	if err := os.WriteFile(path, bin, 0o755); err != nil {

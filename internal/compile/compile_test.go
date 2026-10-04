@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"ovid/internal/ir"
@@ -67,6 +68,9 @@ func run(t *testing.T, p *ir.Program, args ...string) (string, int) {
 	bin, err := Compile(p)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skipf("compiled only: %s/%s cannot execute linux/amd64 binaries", runtime.GOOS, runtime.GOARCH)
 	}
 	dir := t.TempDir()
 	path := filepath.Join(dir, "prog")
