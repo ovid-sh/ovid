@@ -605,17 +605,23 @@ func CheckExpr(c *Ch, n *ovid/parse.Node) i64 {
   if op == ovid/parse.OP_CALL {
     var pp i64 = c.pathp
     var pn i64 = c.pathn
+    var unloaded bool = false
     if n.pkgn != 0 {
       pp = n.pkgp
       pn = n.pkgn
       if !Imported(c, pp, pn) {
         Err(c, strptr("missing_import"), strlen("missing_import"), pp, pn)
+        // A package nothing imports is not loaded, so whether it has the
+        // func is unknown; the missing import is the whole report.
+        unloaded = FindPkg(c, pp, pn) == 0 as *ovid/parse.Pkg
       }
     }
     var fn *ovid/parse.Decl = ovid/parse.FindFunc(c.mod, pp, pn, n.fnp, n.fnn)
     var a *ovid/parse.Node = n.args
     if fn == 0 as *ovid/parse.Decl {
-      Err(c, strptr("unknown_name"), strlen("unknown_name"), n.fnp, n.fnn)
+      if !unloaded {
+        Err(c, strptr("unknown_name"), strlen("unknown_name"), n.fnp, n.fnn)
+      }
       while a != 0 as *ovid/parse.Node {
         CheckExpr(c, a)
         a = a.next

@@ -646,13 +646,23 @@ func (c *checker) pkgConst(n *ir.Node) string {
 
 func (c *checker) call(e *env, n *ir.Node) string {
 	path := n.Pkg
+	missing := false
 	if path == "" {
 		path = c.pkg.Path
 	} else if path != c.pkg.Path && !c.imported[path] {
+		missing = true
 		c.issue(Issue{Code: "missing_import", ID: n.ID, Message: "call to " + path + "." + n.Func + " but " + path + " is not imported",
 			Hint: "add `import " + path + "` after the package line"})
 	}
 	sg, ok := c.sigs[path+"."+n.Func]
+	if !ok && missing && c.pkgs[path] == nil {
+		// A package nothing imports is not loaded, so whether it has the
+		// func is unknown; the missing import is the whole report.
+		for _, a := range n.Args {
+			c.expr(e, a)
+		}
+		return "invalid"
+	}
 	if !ok {
 		var cands []string
 		if pk := c.pkgs[path]; pk != nil {
