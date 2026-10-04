@@ -3,6 +3,7 @@ package tool
 import (
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"sort"
 	"syscall"
@@ -27,15 +28,18 @@ type procResult struct {
 	err      error
 }
 
-// procIO is a program's stdio; a nil field is /dev/null.
+// procIO is a program's stdio and any further files; a nil stdio field is
+// /dev/null.
 type procIO struct {
 	stdin          io.Reader
 	stdout, stderr io.Writer
+	extra          []*os.File // fd 3 and up
 }
 
 func (pio procIO) command(bin string, args []string) *exec.Cmd {
 	cmd := exec.Command(bin, args...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = pio.stdin, pio.stdout, pio.stderr
+	cmd.ExtraFiles = pio.extra
 	return cmd
 }
 

@@ -198,7 +198,7 @@ func Run(dir string, args []string, w io.Writer) int {
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, os.Interrupt, syscall.SIGQUIT)
 	defer signal.Stop(sigs)
-	pr := runProc(bin, args, procIO{os.Stdin, os.Stdout, os.Stderr}, 0)
+	pr := runProc(bin, args, procIO{stdin: os.Stdin, stdout: os.Stdout, stderr: os.Stderr}, 0)
 	switch {
 	case pr.err != nil:
 		fail(w, "run", pr.err.Error(), "")

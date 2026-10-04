@@ -714,7 +714,7 @@ func main(io *ovid/io.Cap) i64 {
 		if err != nil {
 			t.Fatal(err)
 		}
-		pr := runner(bin, nil, procIO{stdin, open(name + ".out"), open(name + ".err")}, 0)
+		pr := runner(bin, nil, procIO{stdin: stdin, stdout: open(name + ".out"), stderr: open(name + ".err")}, 0)
 		stdin.Close()
 		if pr.err != nil || !pr.exited {
 			t.Fatalf("%s: %+v", name, pr)

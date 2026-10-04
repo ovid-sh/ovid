@@ -103,6 +103,7 @@ func Test(dir, filter string, list bool, w io.Writer) int {
 		return fail(w, "compile", err.Error(), "")
 	}
 	outPath := filepath.Join(tmpd, "out")
+	retPath := filepath.Join(tmpd, "returned")
 	passed, failed := 0, 0
 	for k, t := range tests {
 		args := make([]string, k+1)
@@ -113,11 +114,19 @@ func Test(dir, filter string, list bool, w io.Writer) int {
 		if err != nil {
 			return fail(w, "write", err.Error(), "")
 		}
+		rf, err := os.Create(retPath)
+		if err != nil {
+			of.Close()
+			return fail(w, "write", err.Error(), "")
+		}
 		t0 := time.Now()
-		pr := runProc(bin, args, procIO{stdout: of, stderr: of}, testTimeout)
+		pr := runProc(bin, args, procIO{stdout: of, stderr: of, extra: []*os.File{rf}}, testTimeout)
 		ms := time.Since(t0).Milliseconds()
 		of.Close()
+		rf.Close()
 		out, _ := os.ReadFile(outPath)
+		ret, _ := os.ReadFile(retPath)
+		returned := len(ret) > 0
 		r := map[string]any{"fact": "test", "id": t.id, "ms": ms}
 		if l := m.Index[t.id]; l != nil {
 			file, a, _, _ := m.Where(l.Span)
@@ -135,10 +144,17 @@ func Test(dir, filter string, list bool, w io.Writer) int {
 			code = -1
 			describeCrash(m, marks, pr, r)
 		}
+		// The runtime ends a program it could not get memory for with this
+		// code. The test did not return it: the wrapper marks every return.
+		oom := pr.exited && code == compile.ExitOOM && !returned
+		if oom {
+			r["error"] = "out_of_memory"
+			r["hint"] = "the kernel refused the program memory: an Alloc too large to map, or a host or limit too small for the heap's first 128 MiB region"
+		}
 		r["ok"] = ok
 		if !ok {
 			r["exit"] = code
-			if r["signal"] == nil {
+			if r["signal"] == nil && !oom {
 				if rs := returnsOf(m, t.id, code); len(rs) > 0 {
 					r["returned_by"] = rs
 				}
@@ -205,6 +221,11 @@ func returnsOf(m *module.Module, id string, code int) []map[string]any {
 	return out
 }
 
+// returnedFD is where the test wrapper writes one byte when a test returns,
+// so an exit code that came from the test's own return can be told from the
+// same code set by the runtime (out of memory).
+const returnedFD = 3
+
 // testProgram adds a package whose main runs test k when it gets k+1 args.
 func testProgram(p *ir.Program, tests []testFn) *ir.Program {
 	n := 0
@@ -215,7 +236,8 @@ func testProgram(p *ir.Program, tests []testFn) *ir.Program {
 	pkg := ir.Package{ID: "pkg:" + testPkg, Path: testPkg}
 	imported := map[string]bool{"ovid/io": true}
 	pkg.Imports = append(pkg.Imports, ir.Import{ID: "im:" + testPkg + ":ovid/io", Path: "ovid/io"})
-	var body []*ir.Node
+	body := []*ir.Node{{ID: id("st"), Op: "var", Name: "r", Type: "i64",
+		Val: &ir.Node{ID: id("ex"), Op: "int", ValK: 1, Int: 0}}}
 	for k, t := range tests {
 		if !imported[t.pkg] {
 			imported[t.pkg] = true
@@ -226,8 +248,15 @@ func testProgram(p *ir.Program, tests []testFn) *ir.Program {
 			Right: &ir.Node{ID: id("ex"), Op: "int", ValK: 1, Int: int64(k + 2)}}
 		call := &ir.Node{ID: id("ex"), Op: "call", Pkg: t.pkg, Func: t.name,
 			Args: []*ir.Node{{ID: id("ex"), Op: "name", Name: "io"}}}
-		body = append(body, &ir.Node{ID: id("st"), Op: "if", Cond: cond,
-			Then: []*ir.Node{{ID: id("st"), Op: "return", Val: call}}})
+		// r = T(io); ovid/io.Write(returnedFD, strptr("r"), 1); return r
+		mark := &ir.Node{ID: id("ex"), Op: "call", Pkg: "ovid/io", Func: "Write", Args: []*ir.Node{
+			{ID: id("ex"), Op: "int", ValK: 1, Int: returnedFD},
+			{ID: id("ex"), Op: "strptr", ValK: 3, Str: "r"},
+			{ID: id("ex"), Op: "int", ValK: 1, Int: 1}}}
+		body = append(body, &ir.Node{ID: id("st"), Op: "if", Cond: cond, Then: []*ir.Node{
+			{ID: id("st"), Op: "assign", Name: "r", Val: call},
+			{ID: id("st"), Op: "expr", Val: mark},
+			{ID: id("st"), Op: "return", Val: &ir.Node{ID: id("ex"), Op: "name", Name: "r"}}}})
 	}
 	body = append(body, &ir.Node{ID: id("st"), Op: "return", Val: &ir.Node{ID: id("ex"), Op: "int", ValK: 1, Int: 99}})
 	pkg.Funcs = []ir.Func{{ID: "fn:" + testPkg + ".main", Name: "main",
