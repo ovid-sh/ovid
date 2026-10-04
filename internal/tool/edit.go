@@ -236,13 +236,14 @@ func applySplices(w io.Writer, dir string, m *module.Module, sps []*splice, ops 
 		return ExitFail
 	}
 	if !dryRun {
-		for _, abs := range changed {
-			if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
-				return fail(w, "write", err.Error(), "")
+		if done, err := module.WriteFiles(overlay, 0); err != nil {
+			var files []string
+			for _, abs := range done {
+				files = append(files, rel(m, abs))
 			}
-			if err := module.WriteFile(abs, overlay[abs]); err != nil {
-				return fail(w, "write", err.Error(), "")
-			}
+			emit(w, map[string]any{"ok": false, "error": "write", "message": err.Error(), "written_files": files,
+				"hint": "files in written_files have the new text and the rest the old; check git status"})
+			return ExitFail
 		}
 	}
 	after.writeDiags(w)

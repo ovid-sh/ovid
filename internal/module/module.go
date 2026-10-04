@@ -526,14 +526,5 @@ func suggestID(q string, ids []string) string {
 	return ""
 }
 
-// WriteFile writes a module file atomically.
-func WriteFile(abs string, src []byte) error {
-	tmp := abs + ".ovid-tmp"
-	if err := os.WriteFile(tmp, src, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, abs)
-}
-
 // Trim is used by callers that print source snippets.
 func Trim(s string) string { return string(bytes.TrimSpace([]byte(s))) }

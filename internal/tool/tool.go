@@ -126,14 +126,8 @@ func compileTo(m *module.Module, p *ir.Program, out string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
-		return 0, err
-	}
-	tmp := out + ".ovid-tmp"
-	if err := os.WriteFile(tmp, bin, 0o755); err != nil {
-		return 0, err
-	}
-	return len(bin), os.Rename(tmp, out)
+	_, err = module.WriteFiles(map[string][]byte{out: bin}, 0o755)
+	return len(bin), err
 }
 
 func Build(dir, out string, w io.Writer) int {
