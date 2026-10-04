@@ -795,6 +795,26 @@ func TestEditFailsClosed(t *testing.T) {
 	}
 }
 
+// TestEditGuardComparesErrors: trading one error for another is not "no
+// worse", even though the count is the same.
+func TestEditGuardComparesErrors(t *testing.T) {
+	src := "package demo\n\nimport ovid/io\n\nfunc main(io *ovid/io.Cap) i64 {\n  return true\n}\n"
+	dir := mkmod(t, demo(src))
+	var b bytes.Buffer
+	op := EditOp{Op: "replace", ID: "st:demo.main:1", Text: "return nope"}
+	if code := runEdit(dir, &EditReq{Ops: []EditOp{op}}, EditOpts{}, &b); code != ExitFail {
+		t.Fatalf("swap accepted: %d %s", code, b.String())
+	}
+	if rs := lines(t, b.String()); len(rs) != 2 || !strings.Contains(fmt.Sprint(rs[0]["message"]), "nope") {
+		t.Fatalf("want only the new error reported: %v", rs)
+	}
+	b.Reset()
+	op.Text = "return 0"
+	if code := runEdit(dir, &EditReq{Ops: []EditOp{op}}, EditOpts{}, &b); code != 0 || last(t, b.String())["check_ok"] != true {
+		t.Fatalf("fix refused: %d %s", code, b.String())
+	}
+}
+
 func TestMoveManyRollsBack(t *testing.T) {
 	files := map[string]string{
 		"demo/main.ov":    "package demo\n\nimport ovid/io\n\nconst K i64 = 2\n\nfunc main(io *ovid/io.Cap) i64 {\n  return K\n}\n",

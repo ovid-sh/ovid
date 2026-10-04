@@ -55,7 +55,7 @@ type splice struct {
 const (
 	guardNone    = iota
 	guardClean   // refuse if any check error remains
-	guardNoWorse // refuse if check errors increase
+	guardNoWorse // refuse if the change adds a check error (see newDiags)
 )
 
 type editErr struct {
@@ -242,9 +242,15 @@ func applySplices(w io.Writer, dir string, m *module.Module, sps []*splice, ops 
 		return fail(w, "load", err.Error(), "")
 	}
 	after := runCheck(nm)
-	worse := len(after.diags) > len(before.diags)
+	added := newDiags(before.diags, after.diags)
+	worse := len(added) > 0
 	if (guard == guardClean && len(after.diags) > 0) || (guard == guardNoWorse && worse) {
-		after.writeDiags(w)
+		if guard == guardNoWorse {
+			// Only the errors this change introduced.
+			(&checked{m: nm, diags: added}).writeDiags(w)
+		} else {
+			after.writeDiags(w)
+		}
 		emit(w, map[string]any{"ok": false, "error": "check", "message": "the change leaves check errors; nothing was written",
 			"errors": len(after.diags), "errors_before": len(before.diags),
 			"hint": "fix the text, or pass --allow-broken to write it anyway"})
@@ -293,6 +299,46 @@ func applySplices(w io.Writer, dir string, m *module.Module, sps []*splice, ops 
 	}
 	emit(w, res)
 	return ExitOK
+}
+
+// newDiags returns the diagnostics in after that before does not have,
+// counting duplicates. Two diagnostics are the same error if they agree on
+// code, message, expected, got, and the declaration they are in; lines and
+// statement numbers are left out because an edit shifts them.
+func newDiags(before, after []module.Diag) []module.Diag {
+	key := func(d module.Diag) string {
+		where := d.File
+		if d.ID != "" {
+			where = declOfID(d.ID)
+		}
+		return strings.Join([]string{d.Code, d.Message, d.Expected, d.Got, where}, "\x00")
+	}
+	have := map[string]int{}
+	for _, d := range before {
+		have[key(d)]++
+	}
+	var out []module.Diag
+	for _, d := range after {
+		k := key(d)
+		if have[k] > 0 {
+			have[k]--
+			continue
+		}
+		out = append(out, d)
+	}
+	return out
+}
+
+// declOfID is the declaration part of an id: st:app.main:3 -> app.main.
+func declOfID(id string) string {
+	rest := id
+	if i := strings.Index(id, ":"); i >= 0 {
+		rest = id[i+1:]
+	}
+	if i := strings.LastIndex(rest, ":"); i >= 0 {
+		rest = rest[:i]
+	}
+	return rest
 }
 
 func rel(m *module.Module, abs string) string {
