@@ -38,6 +38,10 @@ type EditOp struct {
 	File   string `json:"file,omitempty"`
 	Text   string `json:"text,omitempty"`
 	Expect string `json:"expect,omitempty"`
+	// Given names the fields the caller spelled out, even as "": the JSON
+	// keys of a request, or the flags of a single-op command. A field given
+	// empty is still one the op may not take.
+	Given []string `json:"-"`
 }
 
 type EditReq struct {
@@ -137,6 +141,7 @@ func parseEditReq(raw []byte) (req *EditReq, op int, err error) {
 		if err := json.Unmarshal(o, &one); err != nil {
 			return nil, i, fmt.Errorf("op %d: %v", i, err)
 		}
+		one.Given = keys
 		req.Ops = append(req.Ops, one)
 	}
 	return req, -1, nil
@@ -560,7 +565,47 @@ func newIDs(m *module.Module, sps []*splice, nops int, show bool) []map[string]a
 	return out
 }
 
+// opFields are the fields each op reads, besides op and expect. A field
+// that belongs to another op is refused, not ignored: a replace that names
+// a before was meant as an insert, and replacing would drop the code the
+// caller meant to keep.
+var opFields = map[string][]string{
+	"replace": {"id", "text"},
+	"delete":  {"id"},
+	"insert":  {"before", "after", "text"},
+	"append":  {"into", "file", "text"},
+}
+
+// strayField is the first field op sets that its kind does not read.
+func strayField(op EditOp) *editErr {
+	set := []struct {
+		k  string
+		on bool
+	}{{"id", op.ID != ""}, {"before", op.Before != ""}, {"after", op.After != ""},
+		{"into", op.Into != ""}, {"file", op.File != ""}, {"text", op.Text != ""}}
+	for _, f := range set {
+		if !(f.on || slices.Contains(op.Given, f.k)) || slices.Contains(opFields[op.Op], f.k) {
+			continue
+		}
+		hint := map[string]string{
+			"id":     map[string]string{"insert": "insert names its node with before or after", "append": "append names its node with into"}[op.Op],
+			"before": `to add code next to a node, insert: {"op":"insert","before":ID,"text":T}, or ovid insert --before ID`,
+			"after":  `to add code next to a node, insert: {"op":"insert","after":ID,"text":T}, or ovid insert --after ID`,
+			"into":   `to add code at the end of a body or package, append: {"op":"append","into":ID,"text":T}, or ovid append ID`,
+			"file":   "only append into a package takes a file",
+			"text":   "delete removes the node; to change it, replace",
+		}[f.k]
+		return &editErr{code: "bad_edit", msg: fmt.Sprintf("%s takes no %q; it reads %s", op.Op, f.k, strings.Join(opFields[op.Op], ", ")), hint: hint}
+	}
+	return nil
+}
+
 func planOp(m *module.Module, i int, op EditOp, force, rev bool) ([]*splice, *editErr) {
+	if _, ok := opFields[op.Op]; ok {
+		if e := strayField(op); e != nil {
+			return nil, e
+		}
+	}
 	target := op.ID
 	switch op.Op {
 	case "insert":

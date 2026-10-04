@@ -211,9 +211,19 @@ func main() {
 		if from == "" && cmd != "delete" {
 			from = "-"
 		}
+		// Every flag goes into the op, so one that does not belong to this
+		// command is refused by the planner rather than dropped here.
+		op.Before, op.After = a.vals["before"], a.vals["after"]
+		for _, k := range []string{"before", "after", "file"} {
+			if _, ok := a.vals[k]; ok {
+				op.Given = append(op.Given, k)
+			}
+		}
+		if _, ok := a.vals["text-file"]; ok {
+			op.Given = append(op.Given, "text")
+		}
 		switch cmd {
 		case "insert":
-			op.Before, op.After = a.vals["before"], a.vals["after"]
 			if len(a.pos) != 0 || (op.Before == "") == (op.After == "") {
 				usageErr(cmd, "usage: ovid insert --after <id> | --before <id> --expect H|--rev REV|--force <<'EOF' ... EOF")
 			}

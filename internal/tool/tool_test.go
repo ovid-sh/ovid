@@ -12,6 +12,7 @@ import (
 	"ovid/internal/module"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -764,6 +765,74 @@ func TestEditStrictKeys(t *testing.T) {
 	r, code := editJSON(t, dir, map[string]any{"op": "replace", "id": "main", "expect": h, "text": "func main(io *ovid/io.Cap) i64 {\n  return 1\n}"})
 	if code != 0 || r["written"] != true {
 		t.Fatalf("well-formed: %d %v", code, r)
+	}
+}
+
+// TestEditStrayFields: a field that belongs to another op is refused, not
+// ignored. A replace that names a before was meant as an insert; doing a
+// replace would drop the code the caller meant to keep.
+func TestEditStrayFields(t *testing.T) {
+	src := "package demo\n\nimport ovid/io\n\nfunc main(io *ovid/io.Cap) i64 {\n  var x i64 = 1\n  return x\n}\n"
+	dir := mkmod(t, demo(src))
+	h := hashOf(t, dir, "fn:demo.main")
+	for _, c := range []struct {
+		op  EditOp
+		key string
+	}{
+		{EditOp{Op: "replace", ID: "st:demo.main:2", Before: "st:demo.main:2", Text: "return 0"}, `replace takes no "before"`},
+		{EditOp{Op: "replace", ID: "st:demo.main:2", After: "st:demo.main:1", Text: "return 0"}, `replace takes no "after"`},
+		{EditOp{Op: "replace", ID: "st:demo.main:2", File: "demo/x.ov", Text: "return 0"}, `replace takes no "file"`},
+		{EditOp{Op: "delete", ID: "st:demo.main:1", Text: "var x i64 = 2"}, `delete takes no "text"`},
+		{EditOp{Op: "delete", ID: "st:demo.main:1", Into: "fn:demo.main"}, `delete takes no "into"`},
+		{EditOp{Op: "insert", ID: "st:demo.main:1", After: "st:demo.main:1", Text: "x = 2"}, `insert takes no "id"`},
+		{EditOp{Op: "insert", After: "st:demo.main:1", File: "demo/x.ov", Text: "x = 2"}, `insert takes no "file"`},
+		{EditOp{Op: "append", Into: "fn:demo.main", Before: "st:demo.main:2", Text: "x = 2"}, `append takes no "before"`},
+		// Given, even empty: "before":"" or --before= is still a field
+		// the op does not take.
+		{EditOp{Op: "replace", ID: "st:demo.main:2", Text: "return 0", Given: []string{"before"}}, `replace takes no "before"`},
+		{EditOp{Op: "delete", ID: "st:demo.main:1", Given: []string{"text"}}, `delete takes no "text"`},
+	} {
+		c.op.Expect = h
+		// Both forms: one op from the command line, and a JSON request.
+		var b bytes.Buffer
+		code := EditOne(dir, c.op, "", EditOpts{}, &b)
+		r := last(t, b.String())
+		if code != ExitFail || r["error"] != "bad_edit" || !strings.Contains(fmt.Sprint(r["message"]), c.key) || r["hint"] == nil {
+			t.Errorf("%s: %d %s", c.key, code, b.String())
+		}
+		// In JSON a given field is a key, here spelled out empty.
+		raw, _ := json.Marshal(c.op)
+		var req map[string]any
+		json.Unmarshal(raw, &req)
+		for _, k := range c.op.Given {
+			req[k] = ""
+		}
+		r, code = editJSON(t, dir, req)
+		if code != ExitFail || r["error"] != "bad_edit" || !strings.Contains(fmt.Sprint(r["message"]), c.key) {
+			t.Errorf("%s (JSON): %d %v", c.key, code, r)
+		}
+		if got, _ := os.ReadFile(filepath.Join(dir, "demo/main.ov")); string(got) != src {
+			t.Fatalf("%s: written:\n%s", c.key, got)
+		}
+	}
+}
+
+// TestHelpCommand: ovid help <command> prints that command's entry, since
+// agents ask for it by name; the edit ops share one entry.
+func TestHelpCommand(t *testing.T) {
+	for _, c := range []string{"init", "check", "build", "run", "test", "outline", "show", "refs", "grep",
+		"replace", "insert", "append", "delete", "rename", "move", "dump", "version", "help"} {
+		var b bytes.Buffer
+		if code := Help(c, &b); code != ExitOK || !regexp.MustCompile(`(?m)(^ovid |\| )`+c+`\b`).MatchString(b.String()) {
+			t.Errorf("help %s: %d\n%s", c, code, b.String())
+		}
+	}
+	var b bytes.Buffer
+	if Help("show", &b); strings.Contains(b.String(), "ovid refs") {
+		t.Errorf("help show includes other entries:\n%s", b.String())
+	}
+	if code := Help("nope", &b); code != ExitUsage {
+		t.Errorf("help nope: %d", code)
 	}
 }
 
