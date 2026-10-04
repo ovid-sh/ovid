@@ -96,7 +96,10 @@ values: var sp bool = c == 32 || c == 9 || c == 10.
 Strings: there is no string type. strptr("hi\n") is the address of an
 interned NUL-terminated literal and strlen("hi\n") is its length (3),
 computed by the compiler, so never count bytes by hand. Literals are
-NUL-terminated, so printing one needs only its address:
+read-only: a store into one kills the program (SIGSEGV), so to change the
+bytes, copy them first: var b i64 = ovid/io.Alloc(io, n) then
+ovid/mem.Copy(b, strptr("..."), n). Literals are NUL-terminated, so
+printing one needs only its address:
   ovid/io.Print(strptr("total: "))     // Eprint writes to stderr
   ovid/io.PrintInt(io, n)              // a number in decimal
   ovid/io.Stdout(p, n)                 // n bytes at p, for non-literals
