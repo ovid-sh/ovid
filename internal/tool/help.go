@@ -96,7 +96,10 @@ values: var sp bool = c == 32 || c == 9 || c == 10.
 Strings: there is no string type. strptr("hi\n") is the address of an
 interned NUL-terminated literal and strlen("hi\n") is its length (3),
 computed by the compiler, so never count bytes by hand. Literals are
-NUL-terminated, so printing one needs only its address:
+read-only: a store into one kills the program (SIGSEGV), so to change the
+bytes, copy them first: var b i64 = ovid/io.Alloc(io, n) then
+ovid/mem.Copy(b, strptr("..."), n). Literals are NUL-terminated, so
+printing one needs only its address:
   ovid/io.Print(strptr("total: "))     // Eprint writes to stderr
   ovid/io.PrintInt(io, n)              // a number in decimal
   ovid/io.Stdout(p, n)                 // n bytes at p, for non-literals
@@ -137,7 +140,9 @@ io is the capability for argv, heap, and syscalls. syscall(...) is only
 allowed inside ovid/io; everyone else calls ovid/io funcs.
 
 Tests: any func TestX(io *ovid/io.Cap) i64 in any module package; 0 passes,
-anything else fails (the value is reported as the exit code).
+anything else fails (the value is reported as the exit code). build and run
+leave out _test.ov files: an error there stops check and test, not them, and
+the program cannot call what they declare.
 `
 
 const helpCommands = `Commands. Each prints JSON lines; the last line has "ok".
@@ -146,7 +151,8 @@ ovid check [--facts]
   One {"fact":"error"} line per problem: code, message, id, file, line, col,
   end_line, end_col, source, and when known expected, got, hint. Summary
   last: {"fact":"summary","ok",errors,packages,funcs,revision,ms}.
-ovid build [-o out]          default out: <module>/bin/<module name>
+ovid build [-o out]          default out: <module>/bin/<module name>;
+                             _test.ov files are left out (so for run)
 ovid run [--] [args...]      program stdio and exit code pass through;
                              if the build fails: errors as JSON, exit 125.
   run and test execute the program from TMPDIR (else /tmp), or from memory

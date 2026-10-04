@@ -70,6 +70,14 @@ func load(dir string) (*module.Module, error) {
 	return module.Load(dir)
 }
 
+// loadBuild is load without _test.ov files.
+func loadBuild(dir string) (*module.Module, error) {
+	if dir == "" {
+		dir = "."
+	}
+	return module.LoadBuild(dir)
+}
+
 func runCheck(m *module.Module) *checked {
 	c := &checked{m: m}
 	c.diags = append(c.diags, m.Errors...)
@@ -135,12 +143,12 @@ func compileTo(m *module.Module, p *ir.Program, out string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	_, err = module.WriteFiles(map[string][]byte{out: bin}, 0o755)
+	err = module.ReplaceFile(out, bin, 0o755)
 	return len(bin), err
 }
 
 func Build(dir, out string, w io.Writer) int {
-	m, err := load(dir)
+	m, err := loadBuild(dir)
 	if err != nil {
 		return fail(w, "load", err.Error(), "")
 	}
@@ -168,7 +176,7 @@ func Build(dir, out string, w io.Writer) int {
 // ovid writes one JSON line to stderr saying which, and for a fault the
 // statement and calls it died in, and exits 128 + the signal number.
 func Run(dir string, args []string, w io.Writer) int {
-	m, err := load(dir)
+	m, err := loadBuild(dir)
 	if err != nil {
 		fail(w, "load", err.Error(), "")
 		return ExitBuild
@@ -218,7 +226,7 @@ func Run(dir string, args []string, w io.Writer) int {
 		return pr.code
 	}
 	r := map[string]any{"ok": false, "error": "killed", "exit": 128 + int(pr.signal)}
-	describeCrash(m, marks, pr, r)
+	describeCrash(m, exe, marks, pr, r)
 	emit(os.Stderr, r)
 	return 128 + int(pr.signal)
 }

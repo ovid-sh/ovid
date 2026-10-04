@@ -122,9 +122,17 @@ func Find(dir string) (string, error) {
 // Load reads the module rooted at (or above) dir.
 func Load(dir string) (*Module, error) { return LoadOverlay(dir, nil) }
 
+// LoadBuild is Load without the module's _test.ov files: the program that
+// build and run compile, so an error in a test cannot stop them.
+func LoadBuild(dir string) (*Module, error) { return load(dir, nil, true) }
+
 // LoadOverlay is Load with some files replaced by in-memory contents, keyed
 // by absolute path. Overlay files that do not exist on disk are added.
 func LoadOverlay(dir string, overlay map[string][]byte) (*Module, error) {
+	return load(dir, overlay, false)
+}
+
+func load(dir string, overlay map[string][]byte, noTests bool) (*Module, error) {
 	root, err := Find(dir)
 	if err != nil {
 		return nil, err
@@ -185,7 +193,7 @@ func LoadOverlay(dir string, overlay map[string][]byte) (*Module, error) {
 			}
 			return nil
 		}
-		if !strings.HasSuffix(p, ".ov") {
+		if !strings.HasSuffix(p, ".ov") || noTests && strings.HasSuffix(p, "_test.ov") {
 			return nil
 		}
 		src, ok := overlay[p]

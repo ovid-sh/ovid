@@ -41,7 +41,7 @@ Every command prints JSON lines and the last line has `"ok"`. Exit codes:
 |---|---|
 | `ovid init <dir>` | new module with a main and a test |
 | `ovid check [--facts]` | errors, then a summary with the module revision |
-| `ovid build [-o out]` / `ovid run [-- args]` | compile; run passes stdio and the exit code through and reports a death by signal on stderr, on Linux with the statement and call stack |
+| `ovid build [-o out]` / `ovid run [-- args]` | compile, leaving out `_test.ov` files; run passes stdio and the exit code through and reports a death by signal on stderr, on Linux with the statement and call stack |
 | `ovid test [--run substr] [--list]` | each `TestX(io *ovid/io.Cap) i64` in its own process; 0 passes; a failure names the `return` that produced it, a crash its signal (on Linux, the statement and call stack) |
 | `ovid outline [--pkg P]` | packages, or a package's decls with signature, doc, struct size, lines, hash |
 | `ovid show <id\|name>... [--plain] [--exprs]` | source of a node, each statement line tagged with its id; a statement's expressions listed with ids and hashes |
@@ -80,7 +80,7 @@ re-read), so pass it even where it is optional.
 No struct values, globals, function pointers, methods, generics, or implicit
 allocation. At most six parameters, one result. Operators follow Go
 precedence; `>>` is arithmetic. String literals exist only as `strptr("…")`
-and `strlen("…")`. Memory is `load8/32/64`, `store8/64`, and
+and `strlen("…")`, and are read-only. Memory is `load8/32/64`, `store8/64`, and
 `ovid/io.Alloc`. `main` is `func main(io *ovid/io.Cap) i64`; `io` is the
 capability for argv, the heap, and syscalls, and `syscall` is only allowed in
 `ovid/io`. Other packages' funcs and consts spell the import path:
@@ -89,9 +89,8 @@ written `util.F()`.
 
 ## Self-hosting
 
-`prog/` is the compiler again, written in Ovid (about 7,200 lines across eight
-packages, including a JSON parser, SHA-256, an x86-64 assembler, and an ELF
-writer). It reads `ovid.mod` and `.ov` files itself and offers only
+`prog/` is the compiler again, written in Ovid (about 6,200 lines across seven
+packages, including SHA-256, an x86-64 assembler, and an ELF writer). It reads `ovid.mod` and `.ov` files itself and offers only
 `check`, `build`, and `dump`; give it the standard library with
 `--std <dir>`, since only the Go binary embeds it. The agent commands
 (`show`, `refs`, `grep`, `edit`, `rename`, `move`, `test`) exist only in the

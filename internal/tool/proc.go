@@ -121,8 +121,9 @@ func crashStack(m *module.Module, marks []compile.Mark, r procResult) []map[stri
 
 // describeCrash adds to r what is known about a program killed by a
 // signal: the signal, the statement it died in and the calls that led
-// there, the faulting address, and a hint for the common causes.
-func describeCrash(m *module.Module, marks []compile.Mark, pr procResult, r map[string]any) {
+// there, the faulting address, and a hint for the common causes. exe is the
+// program's image.
+func describeCrash(m *module.Module, exe []byte, marks []compile.Mark, pr procResult, r map[string]any) {
 	r["signal"] = pr.signal.String()
 	if st := crashStack(m, marks, pr); len(st) > 0 {
 		r["at"] = st[0]
@@ -133,8 +134,10 @@ func describeCrash(m *module.Module, marks []compile.Mark, pr procResult, r map[
 	}
 	if pr.hasAddr {
 		r["fault_addr"] = fmt.Sprintf("%#x", pr.addr)
-		if pr.addr < 4096 {
+		if lo, hi := elf.Rodata(exe); pr.addr < 4096 {
 			r["hint"] = "a load or store through a null pointer (or a field of one): check for 0 as *T before use"
+		} else if pr.addr >= lo && pr.addr < hi {
+			r["hint"] = "a store into a string literal, which is read-only: copy it into ovid/io.Alloc memory (ovid/mem.Copy) and write there"
 		}
 	}
 }

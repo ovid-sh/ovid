@@ -27,7 +27,7 @@ func stage(exe []byte, dir, name string, fd int) (*staged, error) {
 	err := fmt.Errorf("no temporary directory")
 	if dir != "" {
 		bin := filepath.Join(dir, name)
-		if _, err = module.WriteFiles(map[string][]byte{bin: exe}, 0o755); err == nil {
+		if err = module.ReplaceFile(bin, exe, 0o755); err == nil {
 			if err = syscall.Access(bin, 1); err == nil { // X_OK: fails on a noexec mount
 				return &staged{path: bin, done: func() {}}, nil
 			}

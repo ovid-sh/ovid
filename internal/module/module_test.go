@@ -34,6 +34,34 @@ func TestWriteFiles(t *testing.T) {
 	}
 }
 
+func TestReplaceFile(t *testing.T) {
+	d := t.TempDir()
+	p := filepath.Join(d, "bin", "out")
+	for _, want := range []string{"first", "second"} {
+		if err := ReplaceFile(p, []byte(want), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if got, _ := os.ReadFile(p); string(got) != want {
+			t.Fatalf("%s = %q", p, got)
+		}
+	}
+	if st, _ := os.Stat(p); st.Mode().Perm() != 0o755 {
+		t.Fatalf("mode %v", st.Mode())
+	}
+	if ents, _ := os.ReadDir(filepath.Dir(p)); len(ents) != 1 {
+		t.Fatalf("%d entries; want only the file", len(ents))
+	}
+	// A target that cannot be replaced is an error and leaves no temp file.
+	os.Mkdir(filepath.Join(d, "dir"), 0o755)
+	os.WriteFile(filepath.Join(d, "dir", "x"), nil, 0o644)
+	if err := ReplaceFile(filepath.Join(d, "dir"), []byte("x"), 0o755); err == nil {
+		t.Fatal("replaced a non-empty directory")
+	}
+	if ents, _ := os.ReadDir(d); len(ents) != 2 {
+		t.Fatalf("%d entries in %s; want bin and dir", len(ents), d)
+	}
+}
+
 func TestHashTellsTwinsApart(t *testing.T) {
 	d := t.TempDir()
 	os.WriteFile(filepath.Join(d, "ovid.mod"), []byte("module m\nentry m\n"), 0o644)
