@@ -1059,7 +1059,8 @@ func EmitStartup(c *C, mainLab i64) i64 {
   ovid/asm.MovRegImm(c.code, 7, 0)
   ovid/asm.MovRegImm(c.code, 6, HEAP)
   ovid/asm.MovRegImm(c.code, 2, 3)
-  ovid/asm.MovRegImm(c.code, 10, 0x22)
+  // MAP_PRIVATE|MAP_ANONYMOUS|MAP_NORESERVE, as in internal/compile.
+  ovid/asm.MovRegImm(c.code, 10, 0x4022)
   ovid/asm.MovRegImm(c.code, 8, -1)
   ovid/asm.MovRegImm(c.code, 9, 0)
   ovid/asm.MovRegImm(c.code, 0, 9)

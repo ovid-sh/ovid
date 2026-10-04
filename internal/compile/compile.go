@@ -174,7 +174,10 @@ func (c *cg) emitStartup(mainLab int) error {
 	c.b.MovRegImm64(asm.RDI, 0)
 	c.b.MovRegImm64(asm.RSI, heapSize)
 	c.b.MovRegImm64(asm.RDX, 3)
-	c.b.MovRegImm64(asm.R10, 0x22)
+	// MAP_PRIVATE|MAP_ANONYMOUS|MAP_NORESERVE: the heap is address space
+	// until it is touched, so it must not count against the overcommit limit
+	// of a host with less memory than the heap.
+	c.b.MovRegImm64(asm.R10, 0x4022)
 	c.b.MovRegImm64(asm.R8, -1)
 	c.b.MovRegImm64(asm.R9, 0)
 	c.b.MovRegImm64(asm.RAX, 9)
