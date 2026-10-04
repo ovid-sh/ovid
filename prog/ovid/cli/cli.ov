@@ -1,7 +1,6 @@
 package ovid/cli
 
 import ovid/io
-import ovid/json
 import ovid/mem
 import ovid/check
 import ovid/cg
@@ -132,10 +131,6 @@ func LoadArgs(io *ovid/io.Cap, a *Args) *ovid/parse.Mod {
   return m
 }
 
-func Tree(io *ovid/io.Cap, m *ovid/parse.Mod) i64 {
-  return ovid/json.Parse(io, m.json.data, m.json.len)
-}
-
 func CmdCheck(io *ovid/io.Cap) i64 {
   var a *Args = ParseArgs(io, false)
   if a.bad != 0 {
@@ -145,11 +140,7 @@ func CmdCheck(io *ovid/io.Cap) i64 {
   if m == 0 as *ovid/parse.Mod {
     return 1
   }
-  var root i64 = Tree(io, m)
-  if root == 0 {
-    return Fail(io, strptr("internal"), 8, strptr("program JSON did not parse"), strlen("program JSON did not parse"))
-  }
-  if ovid/check.Run(io, root, m) != 0 {
+  if ovid/check.Run(io, m) != 0 {
     return 1
   }
   return 0
@@ -164,6 +155,7 @@ func CmdDump(io *ovid/io.Cap) i64 {
   if m == 0 as *ovid/parse.Mod {
     return 1
   }
+  ovid/parse.Emit(m)
   ovid/io.Stdout(m.json.data, m.json.len)
   return 0
 }
@@ -177,11 +169,7 @@ func CmdBuild(io *ovid/io.Cap) i64 {
   if m == 0 as *ovid/parse.Mod {
     return 1
   }
-  var root i64 = Tree(io, m)
-  if root == 0 {
-    return Fail(io, strptr("internal"), 8, strptr("program JSON did not parse"), strlen("program JSON did not parse"))
-  }
-  if ovid/check.Run(io, root, m) != 0 {
+  if ovid/check.Run(io, m) != 0 {
     return 1
   }
   var out i64 = a.out
@@ -191,7 +179,7 @@ func CmdBuild(io *ovid/io.Cap) i64 {
   }
   var errp i64 = ovid/io.Alloc(io, 8)
   store64(errp, 0)
-  var b *ovid/mem.Buf = ovid/cg.Compile(io, root, errp)
+  var b *ovid/mem.Buf = ovid/cg.Compile(io, m, errp)
   if load64(errp) != 0 {
     var tmp i64 = ovid/io.Alloc(io, 64)
     var en i64 = ovid/mem.FormatI64(tmp, load64(errp))

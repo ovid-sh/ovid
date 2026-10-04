@@ -51,7 +51,7 @@ Every command prints JSON lines and the last line has `"ok"`. Exit codes:
 | `ovid replace <id>`, `insert --after <id>`, `append <id>`, `delete <id>` | one edit op with its code on stdin, so a heredoc needs no JSON escaping |
 | `ovid rename <id\|name> <new>` | token-precise rename; refuses collisions and new errors |
 | `ovid move <id\|name>... <pkg>` | move decls to another (or a new) package, all or none; requalifies uses, adds imports |
-| `ovid dump` | the program tree as JSON (the self-hosted compiler's input) |
+| `ovid dump` | the program tree as JSON |
 
 All commands take `-C <dir>`; by default they use the module that contains
 the working directory. `ovid help commands`, `ovid help edit`, and
@@ -105,8 +105,8 @@ cmp /tmp/s1 /tmp/s2                        # byte-identical
 
 The two compilers emit byte-identical binaries for the same source, and
 `go test ./internal/tool -run TestSelfHost` checks it. The self-hosted
-compiler is 239,460 bytes (2026-10-03). On an idle starship (Ryzen 7
-8745HS) it built `prog/` in 104 ms, against 23 ms for the Go one.
+compiler is 188,001 bytes (2026-10-03). On an idle starship (Ryzen 7
+8745HS) it built `prog/` in 20 ms, against 21 ms for the Go one.
 
 ## Tests
 

@@ -4,9 +4,7 @@ import ovid/io
 import ovid/mem
 
 // E writes the program tree as compact JSON in the shape of `ovid dump`
-// (internal/ir Marshal). Every id it writes is recorded in m.locs as
-// (offset of the id text in b, its length, *File, source offset) so
-// diagnostics can map an id back to file:line:col.
+// (internal/ir Marshal).
 type E struct {
   io *ovid/io.Cap
   b *ovid/mem.Buf
@@ -15,7 +13,6 @@ type E struct {
   pkgn i64
   fnp i64
   fnn i64
-  file *File
 }
 
 func WL(e *E, s i64, n i64) i64 {
@@ -72,40 +69,10 @@ func WS(e *E, p i64, n i64) i64 {
   return WStr(e.io, e.b, p, n)
 }
 
-// Rec records that the id text at b[start:b.len] names source offset off.
-func Rec(e *E, start i64, off i64) i64 {
-  var m *Mod = e.m
-  if m.nloc >= m.capl {
-    var nc i64 = m.capl * 2
-    if nc < 1024 {
-      nc = 1024
-    }
-    var nl i64 = ovid/io.Alloc(e.io, nc * 32)
-    ovid/mem.Copy(nl, m.locs, m.nloc * 32)
-    m.locs = nl
-    m.capl = nc
-  }
-  var r i64 = m.locs + (m.nloc * 32)
-  store64(r, start)
-  store64(r + 8, e.b.len - start)
-  store64(r + 16, e.file as i64)
-  store64(r + 24, off)
-  m.nloc = m.nloc + 1
-  return 0
-}
-
-// IdOpen writes `"id":"` plus a prefix; IdClose closes it and records it.
+// IdOpen writes `"id":"` plus a prefix.
 func IdOpen(e *E, pre i64, pren i64) i64 {
   WL(e, strptr("\"id\":\""), 6)
-  var start i64 = e.b.len
-  WL(e, pre, pren)
-  return start
-}
-
-func IdClose(e *E, start i64, off i64) i64 {
-  Rec(e, start, off)
-  WC(e, 34)
-  return 0
+  return WL(e, pre, pren)
 }
 
 func WOp(e *E, op i64) i64 {
@@ -264,18 +231,17 @@ func EList(e *E, key i64, kn i64, n *Node) i64 {
 
 func ENode(e *E, n *Node) i64 {
   WC(e, 123)
-  var st i64 = 0
   if n.op <= OP_EXPR {
-    st = IdOpen(e, strptr("st:"), 3)
+    IdOpen(e, strptr("st:"), 3)
   } else {
-    st = IdOpen(e, strptr("ex:"), 3)
+    IdOpen(e, strptr("ex:"), 3)
   }
   WL(e, e.pkgp, e.pkgn)
   WC(e, 46)
   WL(e, e.fnp, e.fnn)
   WC(e, 58)
   WInt(e.io, e.b, n.num)
-  IdClose(e, st, n.off)
+  WC(e, 34)
   WL(e, strptr(",\"op\":\""), 7)
   WOp(e, n.op)
   WC(e, 34)
@@ -325,12 +291,11 @@ func ENode(e *E, n *Node) i64 {
 
 // EDeclId writes "id":"<pre><pkg>.<name>" for decl d.
 func EDeclId(e *E, pre i64, pren i64, d *Decl) i64 {
-  var st i64 = IdOpen(e, pre, pren)
+  IdOpen(e, pre, pren)
   WL(e, e.pkgp, e.pkgn)
   WC(e, 46)
   WL(e, d.namep, d.namen)
-  e.file = d.file
-  IdClose(e, st, d.off)
+  WC(e, 34)
   WL(e, strptr(",\"name\":"), 8)
   WS(e, d.namep, d.namen)
   return 0
@@ -339,11 +304,10 @@ func EDeclId(e *E, pre i64, pren i64, d *Decl) i64 {
 func EPkg(e *E, k *Pkg) i64 {
   e.pkgp = k.pathp
   e.pkgn = k.pathn
-  e.file = k.file
   WC(e, 123)
-  var st i64 = IdOpen(e, strptr("pkg:"), 4)
+  IdOpen(e, strptr("pkg:"), 4)
   WL(e, k.pathp, k.pathn)
-  IdClose(e, st, k.off)
+  WC(e, 34)
   WL(e, strptr(",\"path\":"), 8)
   WS(e, k.pathp, k.pathn)
   var d *Decl = k.ims
@@ -351,12 +315,11 @@ func EPkg(e *E, k *Pkg) i64 {
     WL(e, strptr(",\"imports\":["), 12)
     while d != 0 as *Decl {
       WC(e, 123)
-      e.file = d.file
-      var is i64 = IdOpen(e, strptr("im:"), 3)
+      IdOpen(e, strptr("im:"), 3)
       WL(e, k.pathp, k.pathn)
       WC(e, 58)
       WL(e, d.namep, d.namen)
-      IdClose(e, is, d.off)
+      WC(e, 34)
       WL(e, strptr(",\"path\":"), 8)
       WS(e, d.namep, d.namen)
       WC(e, 125)
@@ -397,13 +360,13 @@ func EPkg(e *E, k *Pkg) i64 {
         WC(e, 91)
         while f != 0 as *Decl {
           WC(e, 123)
-          var fs i64 = IdOpen(e, strptr("fld:"), 4)
+          IdOpen(e, strptr("fld:"), 4)
           WL(e, k.pathp, k.pathn)
           WC(e, 46)
           WL(e, d.namep, d.namen)
           WC(e, 46)
           WL(e, f.namep, f.namen)
-          IdClose(e, fs, f.off)
+          WC(e, 34)
           WL(e, strptr(",\"name\":"), 8)
           WS(e, f.namep, f.namen)
           WL(e, strptr(",\"type\":"), 8)
@@ -435,13 +398,13 @@ func EPkg(e *E, k *Pkg) i64 {
         WL(e, strptr(",\"params\":["), 11)
         while pa != 0 as *Decl {
           WC(e, 123)
-          var ps i64 = IdOpen(e, strptr("pa:"), 3)
+          IdOpen(e, strptr("pa:"), 3)
           WL(e, k.pathp, k.pathn)
           WC(e, 46)
           WL(e, d.namep, d.namen)
           WC(e, 46)
           WL(e, pa.namep, pa.namen)
-          IdClose(e, ps, pa.off)
+          WC(e, 34)
           WL(e, strptr(",\"name\":"), 8)
           WS(e, pa.namep, pa.namen)
           WL(e, strptr(",\"type\":"), 8)
@@ -471,7 +434,7 @@ func EPkg(e *E, k *Pkg) i64 {
   return 0
 }
 
-// Emit writes the whole program to m.json and indexes the ids.
+// Emit writes the whole program to m.json.
 func Emit(m *Mod) i64 {
   var e *E = ovid/io.Alloc(m.io, sizeof(E)) as *E
   e.io = m.io
@@ -500,71 +463,6 @@ func Emit(m *Mod) i64 {
     WC(e, 93)
   }
   WL(e, strptr("}\n"), 2)
-  Index(m)
-  return 0
-}
-
-func HashBytes(p i64, n i64) i64 {
-  var h i64 = 5381
-  var i i64 = 0
-  while i < n {
-    h = ((h << 5) + h) + load8(p + i)
-    i = i + 1
-  }
-  return h
-}
-
-// Index builds an open-addressing table over the recorded ids. Slots hold
-// record index + 1. Duplicate ids keep their first record.
-func Index(m *Mod) i64 {
-  var sz i64 = 1024
-  while sz < m.nloc * 2 {
-    sz = sz * 2
-  }
-  m.tab = ovid/io.Alloc(m.io, sz * 8)
-  m.tabmask = sz - 1
-  var i i64 = 0
-  while i < m.nloc {
-    var r i64 = m.locs + (i * 32)
-    var p i64 = m.json.data + load64(r)
-    var n i64 = load64(r + 8)
-    var h i64 = HashBytes(p, n) & m.tabmask
-    var placed bool = false
-    while !placed {
-      var slot i64 = load64(m.tab + (h * 8))
-      if slot == 0 {
-        store64(m.tab + (h * 8), i + 1)
-        placed = true
-      } else {
-        var o i64 = m.locs + ((slot - 1) * 32)
-        if ovid/mem.Eq(m.json.data + load64(o), load64(o + 8), p, n) {
-          placed = true
-        }
-        h = (h + 1) & m.tabmask
-      }
-    }
-    i = i + 1
-  }
-  return 0
-}
-
-// Find returns the location record for id p[0:n], or 0.
-func Find(m *Mod, p i64, n i64) i64 {
-  if m.tab == 0 || n == 0 {
-    return 0
-  }
-  var h i64 = HashBytes(p, n) & m.tabmask
-  while true {
-    var slot i64 = load64(m.tab + (h * 8))
-    if slot == 0 {
-      return 0
-    }
-    var o i64 = m.locs + ((slot - 1) * 32)
-    if ovid/mem.Eq(m.json.data + load64(o), load64(o + 8), p, n) {
-      return o
-    }
-    h = (h + 1) & m.tabmask
-  }
   return 0
 }
 
@@ -593,16 +491,4 @@ func WPos(io *ovid/io.Cap, b *ovid/mem.Buf, f *File, off i64) i64 {
   ovid/mem.WBytes(io, b, strptr(",\"source\":"), 10)
   WStr(io, b, f.src + ls, le - ls)
   return 0
-}
-
-// WLoc appends the source position of id p[0:n] to b, if the id is known.
-func WLoc(io *ovid/io.Cap, b *ovid/mem.Buf, m *Mod, p i64, n i64) i64 {
-  if m == 0 as *Mod {
-    return 0
-  }
-  var r i64 = Find(m, p, n)
-  if r == 0 {
-    return 0
-  }
-  return WPos(io, b, load64(r + 16) as *File, load64(r + 24))
 }
