@@ -174,6 +174,31 @@ cannot supply that package (`reserved_path`), and `ovid.mod` cannot name
 another standard library, so the system calls a checked program can make are
 those of the shipped `ovid/io`.
 
+## Paging
+
+`outline`, `refs`, and `grep` print one page of their records: at most 200
+unless `--limit N` says otherwise (`--limit 0` is all of them), starting
+after the first `--offset N`. Their last line carries
+
+```json
+{"ok":true,"count":N,"total":N,"offset":N,"has_more":BOOL,"next_offset":N,"revision":REV}
+```
+
+`count` is the number of records printed and `total` the number there are.
+`next_offset` is present when `has_more` is true: pass it as `--offset` for
+the next page. Pages follow one another without overlap, so following
+`next_offset` until `has_more` is false visits every record once, in the
+order of an unpaged run. `revision` is the module's: if it differs between
+two pages, the module changed in between and the offsets no longer line up.
+
+`refs` also gives `files`, `by_pkg`, and `external` in its last line; these
+describe every use, on the page or not.
+
+`dump` is a single JSON document and is not paged. `--pkg P` limits it to
+one package. `-o <file>` writes it to that file (written in place, so it
+may be a device) and prints `{"ok":true,"output":PATH,"bytes":N,
+"revision":REV}` instead of the document.
+
 ## Paths
 
 A `file` in a record, and each entry of a receipt's `files`, is by default

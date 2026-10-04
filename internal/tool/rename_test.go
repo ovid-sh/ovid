@@ -145,7 +145,7 @@ func TestRenameTypeNotField(t *testing.T) {
 func TestRefsTypeNotField(t *testing.T) {
 	dir := mkmod(t, demo(treeSrc))
 	var b bytes.Buffer
-	if code := Refs(dir, "ty:demo.Node", &b); code != 0 {
+	if code := Refs(dir, "ty:demo.Node", Page{}, &b); code != 0 {
 		t.Fatal(b.String())
 	}
 	rs := lines(t, b.String())
@@ -159,7 +159,7 @@ func TestRefsTypeNotField(t *testing.T) {
 		}
 	}
 	b.Reset()
-	if code := Refs(dir, "fld:demo.Tree.Node", &b); code != 0 {
+	if code := Refs(dir, "fld:demo.Tree.Node", Page{}, &b); code != 0 {
 		t.Fatal(b.String())
 	}
 	rs = lines(t, b.String())
@@ -283,7 +283,7 @@ func main(io *ovid/io.Cap) i64 {
 }
 `))
 	var b bytes.Buffer
-	Refs(dir, "st:demo.main:3", &b)
+	Refs(dir, "st:demo.main:3", Page{}, &b)
 	if s := last(t, b.String()); s["count"] != float64(1) {
 		t.Fatalf("refs of the first x: %s", b.String())
 	}

@@ -1102,13 +1102,13 @@ func TestNil(io *ovid/io.Cap) i64 {
 func TestRefsAndOutline(t *testing.T) {
 	dir := mkmod(t, demo(addSrc))
 	var b bytes.Buffer
-	Refs(dir, "Add", &b)
+	Refs(dir, "Add", Page{}, &b)
 	rs := lines(t, b.String())
 	if len(rs) != 2 || rs[0]["kind"] != "call" || rs[0]["line"] != float64(10) {
 		t.Fatalf("refs %v", rs)
 	}
 	b.Reset()
-	Outline(dir, "demo", false, false, &b)
+	Outline(dir, "demo", false, false, Page{}, &b)
 	if rs := lines(t, b.String()); len(rs) != 3 || rs[0]["sig"] != "func Add(a i64, b i64) i64" {
 		t.Fatalf("outline %v", rs)
 	}
@@ -1116,7 +1116,7 @@ func TestRefsAndOutline(t *testing.T) {
 		t.Fatalf("refs summary %v", s)
 	}
 	b.Reset()
-	Outline(dir, "demo", false, true, &b)
+	Outline(dir, "demo", false, true, Page{}, &b)
 	if rs := lines(t, b.String()); rs[0]["used_by"].(map[string]any)["demo"] != float64(1) {
 		t.Fatalf("outline --uses %v", rs)
 	}
@@ -1507,7 +1507,7 @@ func TestSelfHost(t *testing.T) {
 	lit := mkmod(t, demo("package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  return load8(strptr(\"\\xb8\\n\") + 1) + strlen(\"é\")\n}\n"))
 	for _, dir := range []string{prog, lit} {
 		b.Reset()
-		Dump(dir, &b)
+		Dump(dir, "", "", &b)
 		out, code := run(t, s1, "dump", dir, "--std", stdDir)
 		var g, o any
 		if !utf8.ValidString(out) || json.Unmarshal(b.Bytes(), &g) != nil || json.Unmarshal([]byte(out), &o) != nil || code != 0 {
@@ -1517,7 +1517,7 @@ func TestSelfHost(t *testing.T) {
 			t.Fatalf("dumps of %s differ", dir)
 		}
 	}
-	if b.Reset(); Dump(lit, &b) != 0 || !strings.Contains(b.String(), `"value_hex": "b80a"`) || !strings.Contains(b.String(), `"value": "é"`) {
+	if b.Reset(); Dump(lit, "", "", &b) != 0 || !strings.Contains(b.String(), `"value_hex": "b80a"`) || !strings.Contains(b.String(), `"value": "é"`) {
 		t.Fatalf("dump of literals: %s", b.String())
 	}
 	// A source line that is not UTF-8 is still valid JSON in a diagnostic.

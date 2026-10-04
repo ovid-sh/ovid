@@ -35,6 +35,7 @@ Start here:
 
 Read without opening whole files:
   ovid outline [--pkg P]       packages, or one package's decls with hashes
+                               (outline, refs, grep print 200 records a page)
   ovid show <id|name>... [--plain] [--json] [--exprs]
                                source of a decl or node, lines tagged with ids
   ovid refs <id|name>          every use of a func/type/field/const/param/var
@@ -187,12 +188,13 @@ ovid test [--run substr] [--list]
   "fault_addr"; a hung test reads "signal":"timeout".
   A test the kernel refused memory reads "error":"out_of_memory", exit 71.
   --list prints the tests without running them.
-ovid outline [--pkg P] [--all] [--uses]
+ovid outline [--pkg P] [--all] [--uses] [--offset N] [--limit N]
   Per decl: id, kind, sig, file, line, end_line, hash, and when present
   doc (its doc comment: the // lines directly above it, with no blank line
   between), size (struct bytes), test. --uses adds used_by: {package:
   refs}, so {} is dead code and a decl used by only one other package is a
-  candidate to move there.
+  candidate to move there. Paged like grep: at most 200 records, and the
+  last line says where the next page starts.
 ovid show <id|name>... [--plain] [--json] [--exprs]
   Text: "// kind id file:a-b hash=H in=decl type=T" then the source, with
   "  // @id" after each line where a statement starts (--plain omits them).
@@ -204,14 +206,20 @@ ovid show <id|name>... [--plain] [--json] [--exprs]
   line is the decl's own first line) for a decl with a doc comment, and
   "exprs":[{id,line,col,text,hash,type}]. Replace one by id to change part
   of a statement.
-ovid refs <id|name>          {id,kind,in,file,line,col,source} per use, in
+ovid refs <id|name> [--offset N] [--limit N]
+  {id,kind,in,file,line,col,source} per use, in
   source order: the names the checker resolved to it, so a field or local
   spelled like a type, func, or const is not a use of it; last:
-  {"ok":true,target,count,files,by_pkg:{package: n},external}
+  {"ok":true,target,files,by_pkg:{package: n},external} for all the uses,
+  and the paging fields for the ones printed.
 ovid grep <regexp> [--pkg P] [--std] [--offset N] [--limit N]
-  {file,line,col,match,source,decl,stmt} per match (RE2 syntax), at most
-  200 unless --limit (0: all); last: {"ok",count,total,offset,has_more,
-  next_offset}. A match in a doc comment is in that comment's decl.
+  {file,line,col,match,source,decl,stmt} per match (RE2 syntax).
+  A match in a doc comment is in that comment's decl.
+  Paging, for outline, refs, and grep: at most 200 records unless --limit
+  (0: all), starting after --offset; last: {"ok",count,total,offset,
+  has_more,next_offset,revision}. count is what was printed, total all there
+  is; pass next_offset as --offset for the next page, and if revision has
+  changed between pages, start again.
 ovid edit <file|-> [--rev REV] [--dry-run] [--require-clean|--allow-broken] [--show]
   [--force]   see: ovid help edit
 ovid replace <id> | insert --after <id> | insert --before <id> | append <id>
@@ -236,8 +244,11 @@ ovid move <id|name>... <pkg> [--file pkg/x.ov] [--dry-run]
   Refuses changes that add check errors. Several names move in order, all or
   none: on a failure every file is put back.
 ovid init <dir> [--name N]   writes ovid.mod, <N>/main.ov, <N>/main_test.ov
-ovid dump                    the whole program as JSON; a string literal
-                             that is not UTF-8 is "value_hex", not "value"
+ovid dump [--pkg P] [-o file]
+  the program as one JSON document, not paged and large (megabytes for a
+  few thousand lines): for tools, not for reading. --pkg keeps one package;
+  -o writes it to a file and prints {"ok",output,bytes,revision} instead.
+  A string literal that is not UTF-8 is "value_hex", not "value".
 ovid version                 {commit, dirty, binary (hash of the executable), path}
 ovid help [topic]
 `

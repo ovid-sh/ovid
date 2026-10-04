@@ -78,6 +78,22 @@ func parse(cmd string, argv []string, valued, boolean []string) args {
 	return a
 }
 
+// pageArg reads --offset and --limit: the default page is the first
+// tool.PageLimit records, and --limit 0 asks for all of them.
+func pageArg(cmd string, a args) tool.Page {
+	pg := tool.Page{Limit: tool.PageLimit}
+	for k, p := range map[string]*int{"offset": &pg.Offset, "limit": &pg.Limit} {
+		if v, ok := a.vals[k]; ok {
+			n, err := strconv.Atoi(v)
+			if err != nil || n < 0 {
+				usageErr(cmd, "--"+k+" takes a count, got "+strconv.Quote(v))
+			}
+			*p = n
+		}
+	}
+	return pg
+}
+
 func main() {
 	argv := os.Args[1:]
 	dir := ""
@@ -150,11 +166,11 @@ func main() {
 		a := parse(cmd, argv, []string{"C", "run"}, []string{"list"})
 		os.Exit(tool.Test(dirArg(a, 0), a.vals["run"], a.bools["list"], w))
 	case "dump":
-		a := parse(cmd, argv, []string{"C"}, nil)
-		os.Exit(tool.Dump(dirArg(a, 0), w))
+		a := parse(cmd, argv, []string{"C", "pkg", "o"}, nil)
+		os.Exit(tool.Dump(dirArg(a, 0), a.vals["pkg"], a.vals["o"], w))
 	case "outline":
-		a := parse(cmd, argv, []string{"C", "pkg"}, []string{"all", "uses"})
-		os.Exit(tool.Outline(dirArg(a, 0), a.vals["pkg"], a.bools["all"], a.bools["uses"], w))
+		a := parse(cmd, argv, []string{"C", "pkg", "offset", "limit"}, []string{"all", "uses"})
+		os.Exit(tool.Outline(dirArg(a, 0), a.vals["pkg"], a.bools["all"], a.bools["uses"], pageArg(cmd, a), w))
 	case "show":
 		a := parse(cmd, argv, []string{"C"}, []string{"ids", "plain", "json", "exprs"})
 		if len(a.pos) == 0 {
@@ -162,27 +178,18 @@ func main() {
 		}
 		os.Exit(tool.Show(dirArg(a, 1<<30), a.pos, !a.bools["plain"], a.bools["json"], a.bools["exprs"], w))
 	case "refs":
-		a := parse(cmd, argv, []string{"C"}, nil)
+		a := parse(cmd, argv, []string{"C", "offset", "limit"}, nil)
 		if len(a.pos) != 1 {
-			usageErr(cmd, "usage: ovid refs <id|name>")
+			usageErr(cmd, "usage: ovid refs <id|name> [--offset N] [--limit N]")
 		}
-		os.Exit(tool.Refs(dirArg(a, 1), a.pos[0], w))
+		os.Exit(tool.Refs(dirArg(a, 1), a.pos[0], pageArg(cmd, a), w))
 	case "grep":
 		a := parse(cmd, argv, []string{"C", "pkg", "offset", "limit"}, []string{"std"})
 		if len(a.pos) != 1 {
 			usageErr(cmd, "usage: ovid grep <regexp> [--pkg P] [--std] [--offset N] [--limit N]")
 		}
-		offset, limit := 0, tool.GrepLimit
-		for k, p := range map[string]*int{"offset": &offset, "limit": &limit} {
-			if v, ok := a.vals[k]; ok {
-				n, err := strconv.Atoi(v)
-				if err != nil || n < 0 {
-					usageErr(cmd, "--"+k+" takes a count, got "+strconv.Quote(v))
-				}
-				*p = n
-			}
-		}
-		os.Exit(tool.Grep(dirArg(a, 1), a.pos[0], a.vals["pkg"], a.bools["std"], offset, limit, w))
+		pg := pageArg(cmd, a)
+		os.Exit(tool.Grep(dirArg(a, 1), a.pos[0], a.vals["pkg"], a.bools["std"], pg.Offset, pg.Limit, w))
 	case "edit":
 		a := parse(cmd, argv, []string{"C", "rev"}, []string{"dry-run", "require-clean", "allow-broken", "show", "force"})
 		if len(a.pos) != 1 {
