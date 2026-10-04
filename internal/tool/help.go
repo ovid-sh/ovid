@@ -137,7 +137,9 @@ io is the capability for argv, heap, and syscalls. syscall(...) is only
 allowed inside ovid/io; everyone else calls ovid/io funcs.
 
 Tests: any func TestX(io *ovid/io.Cap) i64 in any module package; 0 passes,
-anything else fails (the value is reported as the exit code).
+anything else fails (the value is reported as the exit code). build and run
+leave out _test.ov files: an error there stops check and test, not them, and
+the program cannot call what they declare.
 `
 
 const helpCommands = `Commands. Each prints JSON lines; the last line has "ok".
@@ -146,7 +148,8 @@ ovid check [--facts]
   One {"fact":"error"} line per problem: code, message, id, file, line, col,
   end_line, end_col, source, and when known expected, got, hint. Summary
   last: {"fact":"summary","ok",errors,packages,funcs,revision,ms}.
-ovid build [-o out]          default out: <module>/bin/<module name>
+ovid build [-o out]          default out: <module>/bin/<module name>;
+                             _test.ov files are left out (so for run)
 ovid run [--] [args...]      program stdio and exit code pass through;
                              if the build fails: errors as JSON, exit 125.
   Killed by a signal: exit 128+N and one line on stderr,

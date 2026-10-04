@@ -41,7 +41,7 @@ Every command prints JSON lines and the last line has `"ok"`. Exit codes:
 |---|---|
 | `ovid init <dir>` | new module with a main and a test |
 | `ovid check [--facts]` | errors, then a summary with the module revision |
-| `ovid build [-o out]` / `ovid run [-- args]` | compile; run passes stdio and the exit code through and reports a death by signal on stderr, on Linux with the statement and call stack |
+| `ovid build [-o out]` / `ovid run [-- args]` | compile, leaving out `_test.ov` files; run passes stdio and the exit code through and reports a death by signal on stderr, on Linux with the statement and call stack |
 | `ovid test [--run substr] [--list]` | each `TestX(io *ovid/io.Cap) i64` in its own process; 0 passes; a failure names the `return` that produced it, a crash its signal (on Linux, the statement and call stack) |
 | `ovid outline [--pkg P]` | packages, or a package's decls with signature, doc, struct size, lines, hash |
 | `ovid show <id\|name>... [--plain] [--exprs]` | source of a node, each statement line tagged with its id; a statement's expressions listed with ids and hashes |

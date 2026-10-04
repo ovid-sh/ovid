@@ -128,7 +128,7 @@ func LoadArgs(io *ovid/io.Cap, a *Args, build bool) *ovid/parse.Mod {
   while dn > 1 && load8((a.dir + dn) - 1) == 47 {
     dn = dn - 1
   }
-  var m *ovid/parse.Mod = ovid/parse.Load(io, a.dir, dn, a.std, stdn)
+  var m *ovid/parse.Mod = ovid/parse.Load(io, a.dir, dn, a.std, stdn, build)
   if m.nerr != 0 {
     LoadFailed(io, m, build)
     return 0 as *ovid/parse.Mod
