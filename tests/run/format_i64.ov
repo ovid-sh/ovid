@@ -1,0 +1,27 @@
+// mem.FormatI64 at the edges: zero, one digit each way, and the extremes,
+// including the most negative i64, which has no positive counterpart (#59).
+// stdout: "0\n7\n-7\n-10\n9223372036854775807\n-9223372036854775807\n"
+// stdout: "-9223372036854775808\n"
+package demo
+
+import ovid/io
+import ovid/mem
+
+func show(io *ovid/io.Cap, d i64, v i64) i64 {
+  var n i64 = ovid/mem.FormatI64(d, v)
+  ovid/io.Stdout(d, n)
+  ovid/io.Print(strptr("\n"))
+  return 0
+}
+
+func main(io *ovid/io.Cap) i64 {
+  var d i64 = ovid/io.Alloc(io, 52)
+  show(io, d, 0)
+  show(io, d, 7)
+  show(io, d, 0 - 7)
+  show(io, d, 0 - 10)
+  show(io, d, (1 << 63) - 1)
+  show(io, d, (1 << 63) + 1)
+  show(io, d, 1 << 63)
+  return 0
+}

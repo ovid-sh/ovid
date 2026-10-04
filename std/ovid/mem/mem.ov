@@ -106,22 +106,21 @@ func FormatI64(dst i64, v i64) i64 {
     store8(dst, 48)
     return 1
   }
-  var neg bool = false
+  // The digits come from negative remainders, so the most negative i64,
+  // which has no positive counterpart, works too.
   var x i64 = v
-  if v < 0 {
-    neg = true
+  if v > 0 {
     x = 0 - v
   }
   var tmp i64 = dst + 32
   var n i64 = 0
-  while x > 0 {
-    var d i64 = x % 10
-    store8(tmp + n, 48 + d)
+  while x != 0 {
+    store8(tmp + n, 48 - (x % 10))
     n = n + 1
     x = x / 10
   }
   var o i64 = 0
-  if neg {
+  if v < 0 {
     store8(dst, 45)
     o = 1
   }
