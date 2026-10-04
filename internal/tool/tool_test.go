@@ -373,9 +373,11 @@ func TestBuildSkipsTests(t *testing.T) {
 	if code := Build(dir, filepath.Join(t.TempDir(), "x"), &b); code != 0 {
 		t.Fatalf("build: %d %s", code, b.String())
 	}
-	b.Reset()
-	if code := Run(dir, nil, &b); code != 3 {
-		t.Fatalf("run: %d %s", code, b.String())
+	if canExec {
+		b.Reset()
+		if code := Run(dir, nil, &b); code != 3 {
+			t.Fatalf("run: %d %s", code, b.String())
+		}
 	}
 	b.Reset()
 	if code := Check(dir, false, &b); code != ExitFail {
