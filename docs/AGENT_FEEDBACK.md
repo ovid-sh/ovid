@@ -10,9 +10,12 @@ Each run's raw records are in `docs/agent-runs/`.
 One model, `claude-opus-5-5`, passes all ten tasks, 30 of 30 runs, at a
 median of 1 to 10 tool calls and $0.01 to $0.08 per task. The tasks are a
 floor, not a measure: at this level they do not tell a better toolchain
-from a worse one, and only a weaker model or harder tasks would. Two of
-them pass because the agent was careful, not because the toolchain was
-right:
+from a worse one, and only a weaker model or harder tasks would. In that
+run two of them passed because the agent was careful, not because the
+toolchain was right. Both bugs are fixed since (#47, #65, #66; main
+d0638b1): the reference solutions of `05-rename-type` and `07-replay` now
+meet their goals and are no longer marked `xfail`, and no model has been
+run against the fixed toolchain yet.
 
 - **#21**: in all three runs of `05-rename-type`, `ovid rename` reported
   `ok:true, check_ok:true` and changed what the program prints (7 to 9). Each
@@ -20,8 +23,9 @@ right:
   line by hand.
 - **#22**: in `07-replay` no agent sent the lost delete again; each looked
   first. Sending it again would have deleted the surviving statement too,
-  as the deterministic test shows. And in `06-stale-hash` one agent edited
-  a function with no hash at all, which a decl id permits.
+  as the deterministic test showed before #65. And in `06-stale-hash` one
+  agent edited a function with no hash at all, which a decl id then
+  permitted.
 
 ## 2026-10-04, d28570f
 
