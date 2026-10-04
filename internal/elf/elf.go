@@ -1,14 +1,16 @@
 // Package elf writes a static x86-64 executable with no section headers:
-// one read+execute segment for the headers and code, and one read-only
-// segment for rodata. Nothing is ever writable and executable at once.
-// The image is loaded at 0x400000 and is not dynamically linked.
+// one read+execute segment for the headers and code, one read-only
+// segment for rodata, and a PT_GNU_STACK header that asks for a
+// read+write, non-executable stack. Nothing is ever writable and
+// executable at once. The image is loaded at 0x400000 and is not
+// dynamically linked.
 package elf
 
 import "encoding/binary"
 
 const (
 	LoadAddr   = 0x400000
-	HeaderSize = 64 + 2*56 // ELF header + two program headers
+	HeaderSize = 64 + 3*56 // ELF header + three program headers
 	pageSize   = 0x1000
 )
 
@@ -39,7 +41,7 @@ func Link(code, rodata []byte, entryOff int) []byte {
 	le.PutUint64(out[32:], 64) // e_phoff
 	le.PutUint16(out[52:], 64) // e_ehsize
 	le.PutUint16(out[54:], 56) // e_phentsize
-	le.PutUint16(out[56:], 2)  // e_phnum
+	le.PutUint16(out[56:], 3)  // e_phnum
 	phdr := func(ph []byte, flags uint32, off, vaddr, size uint64) {
 		le.PutUint32(ph[0:], 1) // PT_LOAD
 		le.PutUint32(ph[4:], flags)
@@ -50,9 +52,13 @@ func Link(code, rodata []byte, entryOff int) []byte {
 		le.PutUint64(ph[40:], size)
 		le.PutUint64(ph[48:], pageSize)
 	}
-	const pfX, pfR = 1, 4
+	const pfX, pfW, pfR = 1, 2, 4
 	phdr(out[64:], pfR|pfX, 0, LoadAddr, uint64(textsz))
 	phdr(out[64+56:], pfR, uint64(textsz), RodataVAddr(len(code)), uint64(len(rodata)))
+	// PT_GNU_STACK: only the flags count; without it the kernel's default
+	// decides whether the stack is executable.
+	le.PutUint32(out[64+2*56:], 0x6474e551)
+	le.PutUint32(out[64+2*56+4:], pfR|pfW)
 	copy(out[HeaderSize:], code)
 	copy(out[textsz:], rodata)
 	return out
