@@ -644,9 +644,7 @@ func Four() i64 {
 // TestRunCrash: a program that faults under ovid run gets its exit code
 // passed through, and stderr names the statement and the calls that led to it.
 func TestRunCrash(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("crash sites need ptrace")
-	}
+	needExec(t) // and ptrace, which linux has
 	dir := mkmod(t, demo(`package demo
 
 import ovid/io
@@ -687,9 +685,7 @@ func main(io *ovid/io.Cap) i64 {
 // TestRunStoreLiteral: a store into a strptr literal faults, since rodata
 // is read-only, and the hint says so; a store into a copy works.
 func TestRunStoreLiteral(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("fault addresses need ptrace")
-	}
+	needExec(t) // and ptrace, which linux has
 	src := `package demo
 
 import ovid/io
