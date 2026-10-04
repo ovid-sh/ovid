@@ -29,8 +29,14 @@ ovid.mod              module <name> / entry <pkg> / optional std <dir>
 ```
 
 The package path is the directory path. `ovid/io`, `ovid/mem`, and `ovid/test` (`Eq`, `True`: a failing check prints got/want) ship with
-the toolchain (`std/`, embedded in the binary) and are used unless the module
-has its own copy or names a `std` directory.
+the toolchain (`std/`, embedded in the binary). A module package may not take
+the path of a std package (`reserved_path`); other `ovid/...` paths are open,
+and `prog/` uses them. A `std` line makes imports resolve from that directory
+instead, but grants nothing: only the toolchain's own `ovid/io` may call
+`syscall`, so an `ovid/io` from a `std` line that does is rejected
+(`syscall_forbidden`). Which std is the toolchain's is decided by how the
+compiler is invoked, never by the module: the embedded one for the Go
+binary, the `--std` directory for the self-hosted one.
 
 ## Commands
 
@@ -83,7 +89,7 @@ precedence; `>>` is arithmetic. String literals exist only as `strptr("…")`
 and `strlen("…")`. Memory is `load8/32/64`, `store8/64`, and
 `ovid/io.Alloc`. `main` is `func main(io *ovid/io.Cap) i64`; `io` is the
 capability for argv, the heap, and syscalls, and `syscall` is only allowed in
-`ovid/io`. Other packages' funcs and consts spell the import path:
+the toolchain's own `ovid/io`. Other packages' funcs and consts spell the import path:
 `ovid/mem.Copy(d, s, n)`, `ovid/io.O_RDONLY`; a one-segment import may be
 written `util.F()`.
 
