@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"ovid/internal/module"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -91,8 +92,23 @@ func last(t *testing.T, out string) map[string]any {
 	return rs[len(rs)-1]
 }
 
+// canExec is whether this host can execute the linux/amd64 binaries the
+// compiler emits.
+var canExec = runtime.GOOS == "linux" && runtime.GOARCH == "amd64"
+
+// needExec skips the rest of a test on a host that cannot execute emitted
+// binaries. What the test did before the call (build, check, edit) still ran.
+func needExec(t *testing.T) {
+	t.Helper()
+	if !canExec {
+		t.Skipf("%s/%s cannot execute linux/amd64 binaries", runtime.GOOS, runtime.GOARCH)
+	}
+}
+
+// run executes an emitted binary.
 func run(t *testing.T, bin string, args ...string) (string, int) {
 	t.Helper()
+	needExec(t)
 	out, err := exec.Command(bin, args...).CombinedOutput()
 	if ee, ok := err.(*exec.ExitError); ok {
 		return string(out), ee.ExitCode()
@@ -118,6 +134,7 @@ func demo(src string) map[string]string {
 	return map[string]string{"demo/main.ov": src}
 }
 
+// TestMemWords: Eq and Copy work a word at a time; check every length around
 // the word size, a difference in each byte, and an overlapping copy.
 func TestMemWords(t *testing.T) {
 	src := demo(`package demo
@@ -554,6 +571,7 @@ func TestNil(io *ovid/io.Cap) i64 {
 `,
 	})
 	var b bytes.Buffer
+	needExec(t)
 	if code := Test(dir, "", false, &b); code != ExitFail {
 		t.Fatalf("code %d %s", code, b.String())
 	}
@@ -619,6 +637,7 @@ func TestInit(t *testing.T) {
 		t.Fatal(b.String())
 	}
 	b.Reset()
+	needExec(t)
 	if code := Test(dir, "", false, &b); code != 0 {
 		t.Fatal(b.String())
 	}
@@ -647,6 +666,7 @@ func TestProgChecks(t *testing.T) {
 // TestProgTests runs the self-hosted compiler's own Ovid tests.
 func TestProgTests(t *testing.T) {
 	var b bytes.Buffer
+	needExec(t)
 	if code := Test(filepath.Join(repo(t), "prog"), "", false, &b); code != 0 {
 		t.Fatalf("prog tests fail:\n%s", b.String())
 	}
