@@ -1,4 +1,4 @@
 package demo
 func F() i64 {
-  return (1 + // error: syntax
+  return (1 + // error: syntax 14
 }
