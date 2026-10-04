@@ -19,12 +19,15 @@ const helpOverview = `ovid: a small compiled language and its toolchain, built f
 Source is plain .ov text. A module is a directory with ovid.mod; each
 subdirectory holding .ov files is one package, and its path is the package
 name. Every command prints JSON lines; the last line always has "ok".
-Exit codes: 0 ok, 1 errors, 2 stale edit, 64 usage, 125 run: build failed.
+Exit codes: 0 ok, 1 errors, 2 stale edit, 64 usage, 124 run: timeout,
+125 run: build failed.
 
 Start here:
   ovid init <dir>              new module with a hello-world entry and a test
   ovid check                   errors with file:line:col, expected/got, hint
   ovid run [-- args]           build to a temp file and run it
+  ovid run --json [--timeout 5s]
+                               the same, with exit, signal, and output as JSON
   ovid test [--run Name]       run Test* funcs, one process each
 
 Read without opening whole files:
@@ -161,6 +164,13 @@ ovid run [--] [args...]      program stdio and exit code pass through;
   Killed by a signal: exit 128+N and one line on stderr,
   {"ok":false,"error":"killed",signal,exit,at,stack,fault_addr,hint}, with
   at/stack (the statement and its callers) for a fault on Linux.
+  --timeout D (5s, 500ms) ends the program: "signal":"timeout", exit 124.
+ovid run --json [--timeout D] [--max-output N] [--] [args...]
+  captures the output; one last line, and ovid exits 0 if the program ran:
+  {"ok":true,"exit":N,"ms",stdout,stderr}; a signal or timeout gives
+  "signal" (with at/stack) in place of "exit". Each stream keeps N bytes
+  (65536); past that "truncated":true and stdout_bytes/stderr_bytes.
+  A build that fails ends {"ok":false,"errors":N}, exit 125.
 ovid test [--run substr] [--list]
   {"fact":"test",id,ok,exit,ms,output} per test; a failure that returned a
   value adds "returned_by": the return statements that can produce it;

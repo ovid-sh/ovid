@@ -7,7 +7,7 @@ toolchain (`cmd/ovid`); the self-hosted compiler in `prog/` implements only
 
 ## Output
 
-Every command except `run`, `help`, and `show` without `--json` writes JSON
+Every command except `run` without `--json`, `help`, and `show` without `--json` writes JSON
 lines to stdout, one object per line, and nothing else. `show` prints the
 source with an id comment on each line; its failures are JSON like any
 other. The **last line**
@@ -40,6 +40,36 @@ literal's bytes are its `"value"`, or, when they are not valid UTF-8 (a
 byte. Any other JSON string, such as a diagnostic's `source`, has each
 byte that is not UTF-8 replaced by U+FFFD.
 
+### `run --json`
+
+With `--json`, `run` captures the program's output instead of passing it
+through, and ends with one record on stdout:
+
+```json
+{"ok":true,"exit":3,"ms":12,"stdout":TEXT,"stderr":TEXT}
+```
+
+`ok` says the program was built and started, whatever became of it, and
+ovid then exits 0: the record, not the exit code, says how the program
+ended. A program killed by a signal has `"signal"` in place of `"exit"`,
+with `at`, `stack`, `fault_addr`, and `hint` as above. One ended by
+`--timeout <duration>` (`5s`, `500ms`; no limit without it) has
+`"signal":"timeout"`.
+
+Each of `stdout` and `stderr` keeps its first 65,536 bytes, or
+`--max-output <bytes>`. Past that the record has `"truncated":true` and
+`"stdout_bytes"` or `"stderr_bytes"`, the full size; the rest is discarded
+as it is written. Bytes that are not UTF-8 are replaced, so the line is
+always valid JSON.
+
+A module that does not build ends as without `--json`: the diagnostics,
+then `{"ok":false,"errors":N}`, exit 125. So does a program that could not
+be placed or started: `{"ok":false,"error":"run",...}`, exit 125.
+
+Without `--json`, `--timeout` still ends the program: `run` writes
+`{"ok":false,"error":"killed","signal":"timeout","exit":124,...}` to stderr
+and exits 124.
+
 ## Exit codes
 
 | code | meaning |
@@ -48,6 +78,7 @@ byte that is not UTF-8 replaced by U+FFFD.
 | 1 | the program has errors, or the request failed (see `error`) |
 | 2 | stale: an edit's `expect` hash or `revision` no longer matches; nothing was written |
 | 64 | bad command line (`"error":"usage"`) |
+| 124 | `run --timeout` ended the program (without `--json`) |
 | 125 | `run` could not build the program, or could not place or start it |
 
 `run` otherwise exits with the program's own code, or 128 + the signal
