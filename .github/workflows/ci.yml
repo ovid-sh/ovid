@@ -29,6 +29,12 @@ jobs:
             GOOS=${t%/*} GOARCH=${t#*/} go vet ./... || exit 1
           done
       - run: go test -count=1 ./...
+      # Build time and size of the self-hosted compiler, kept with the run
+      # (#11). A shared runner is noisy, so this is a record, not a check;
+      # TestSelfHostSize is the check.
+      - run: |
+          go test ./internal/tool -run '^$' -bench 'Prog$' -benchtime 50x -count 3 | tee bench.txt
+          { echo '```'; grep -E '^(cpu|Benchmark)' bench.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
   # Everything that does not execute an emitted binary must pass on a Mac too (#9).
   macos:

@@ -105,10 +105,14 @@ cmp /tmp/s1 /tmp/s2                        # byte-identical
 
 The two compilers emit byte-identical binaries for the same source, and
 `go test ./internal/tool -run TestSelfHost` checks it. The self-hosted
-compiler is about 200 KB. On an idle starship (Ryzen 7 8745HS, 2026-10-03)
-it built `prog/` in 13 ms, against 21 ms for the Go one, and a
-generated program of 100,000 funcs (1.9 million lines) in 3.6 s against
-9.7 s.
+compiler is about 99 KB, and `TestSelfHostSize` fails if it outgrows its
+budget. On starship (Ryzen 7 8745HS, 2026-10-04) it built `prog/` in 9 ms,
+against 27 ms for the Go one, and a generated program of 100,000 funcs
+(300,000 lines) in 0.57 s against 2.25 s. One command measures all of it:
+
+```sh
+go test ./internal/tool -run '^$' -bench .
+```
 
 ## Tests
 
