@@ -184,11 +184,11 @@ func main() {
 		}
 		os.Exit(tool.Grep(dirArg(a, 1), a.pos[0], a.vals["pkg"], a.bools["std"], offset, limit, w))
 	case "edit":
-		a := parse(cmd, argv, []string{"C"}, []string{"dry-run", "require-clean", "allow-broken", "show", "force"})
+		a := parse(cmd, argv, []string{"C", "rev"}, []string{"dry-run", "require-clean", "allow-broken", "show", "force"})
 		if len(a.pos) != 1 {
-			usageErr(cmd, "usage: ovid edit <file|-> [--dry-run] [--require-clean|--allow-broken] [--show]; see ovid help edit")
+			usageErr(cmd, "usage: ovid edit <file|-> [--rev REV] [--dry-run] [--require-clean|--allow-broken] [--show] [--force]; see ovid help edit")
 		}
-		os.Exit(tool.Edit(dirArg(a, 1), a.pos[0], tool.EditOpts{DryRun: a.bools["dry-run"], RequireClean: a.bools["require-clean"], AllowBroken: a.bools["allow-broken"], Show: a.bools["show"], Force: a.bools["force"]}, w))
+		os.Exit(tool.Edit(dirArg(a, 1), a.pos[0], tool.EditOpts{DryRun: a.bools["dry-run"], RequireClean: a.bools["require-clean"], AllowBroken: a.bools["allow-broken"], Show: a.bools["show"], Force: a.bools["force"], Revision: a.vals["rev"]}, w))
 	case "rename":
 		a := parse(cmd, argv, []string{"C"}, []string{"dry-run"})
 		if len(a.pos) != 2 {
@@ -205,7 +205,7 @@ func main() {
 	case "replace", "insert", "append", "delete":
 		// One edit op with its text on stdin (or --text-file), so a shell
 		// heredoc carries code without JSON escaping.
-		a := parse(cmd, argv, []string{"C", "expect", "before", "after", "file", "text-file"}, []string{"dry-run", "require-clean", "allow-broken", "show", "force"})
+		a := parse(cmd, argv, []string{"C", "expect", "rev", "before", "after", "file", "text-file"}, []string{"dry-run", "require-clean", "allow-broken", "show", "force"})
 		op := tool.EditOp{Op: cmd, Expect: a.vals["expect"], File: a.vals["file"]}
 		from := a.vals["text-file"]
 		if from == "" && cmd != "delete" {
@@ -215,20 +215,20 @@ func main() {
 		case "insert":
 			op.Before, op.After = a.vals["before"], a.vals["after"]
 			if len(a.pos) != 0 || (op.Before == "") == (op.After == "") {
-				usageErr(cmd, "usage: ovid insert --after <id> | --before <id> [--expect H] <<'EOF' ... EOF")
+				usageErr(cmd, "usage: ovid insert --after <id> | --before <id> --expect H|--rev REV|--force <<'EOF' ... EOF")
 			}
 		case "append":
 			if len(a.pos) != 1 {
-				usageErr(cmd, "usage: ovid append <fn-or-pkg id> [--file pkg/x.ov] <<'EOF' ... EOF")
+				usageErr(cmd, "usage: ovid append <fn-or-pkg id> [--file pkg/x.ov] [--expect H|--rev REV|--force] <<'EOF' ... EOF")
 			}
 			op.Into = a.pos[0]
 		default:
 			if len(a.pos) != 1 {
-				usageErr(cmd, "usage: ovid "+cmd+" <id> [--expect H]"+map[bool]string{true: "", false: " <<'EOF' ... EOF"}[cmd == "delete"])
+				usageErr(cmd, "usage: ovid "+cmd+" <id> --expect H|--rev REV|--force"+map[bool]string{true: "", false: " <<'EOF' ... EOF"}[cmd == "delete"])
 			}
 			op.ID = a.pos[0]
 		}
-		os.Exit(tool.EditOne(dirArg(a, 1<<30), op, from, tool.EditOpts{DryRun: a.bools["dry-run"], RequireClean: a.bools["require-clean"], AllowBroken: a.bools["allow-broken"], Show: a.bools["show"], Force: a.bools["force"]}, w))
+		os.Exit(tool.EditOne(dirArg(a, 1<<30), op, from, tool.EditOpts{DryRun: a.bools["dry-run"], RequireClean: a.bools["require-clean"], AllowBroken: a.bools["allow-broken"], Show: a.bools["show"], Force: a.bools["force"], Revision: a.vals["rev"]}, w))
 	default:
 		usageErr("", "unknown command "+cmd+"; commands: init check build run test outline show refs grep edit replace insert append delete rename move dump version help")
 	}

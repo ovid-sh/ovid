@@ -1,11 +1,13 @@
 package tool
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -67,37 +69,132 @@ type editErr struct {
 	exit            int
 }
 
-func parseEditReq(raw []byte) (*EditReq, error) {
-	var req EditReq
-	trim := strings.TrimSpace(string(raw))
-	switch {
-	case strings.HasPrefix(trim, "["):
-		if err := json.Unmarshal(raw, &req.Ops); err != nil {
-			return nil, err
+// The keys an edit request and an op may carry. Anything else is refused,
+// not ignored: a misspelled "expect" must not become an unguarded write.
+var (
+	reqKeys = []string{"ops", "revision"}
+	opKeys  = []string{"op", "id", "before", "after", "into", "file", "text", "expect"}
+)
+
+// parseEditReq decodes an edit request strictly: an unknown key, a repeated
+// key, or trailing data fails. op is the index of the op at fault, or -1.
+func parseEditReq(raw []byte) (req *EditReq, op int, err error) {
+	var probe any
+	if err := json.Unmarshal(raw, &probe); err != nil {
+		return nil, -1, err
+	}
+	req = &EditReq{}
+	var ops []json.RawMessage
+	single := false
+	switch probe.(type) {
+	case []any:
+		if err := json.Unmarshal(raw, &ops); err != nil {
+			return nil, -1, err
 		}
-	default:
-		if err := json.Unmarshal(raw, &req); err != nil {
-			return nil, err
+	case map[string]any:
+		keys, vals, err := members(raw)
+		if err != nil {
+			return nil, -1, fmt.Errorf("request: %v", err)
 		}
-		if len(req.Ops) == 0 {
-			var one EditOp
-			if json.Unmarshal(raw, &one) == nil && one.Op != "" {
-				req.Ops = []EditOp{one}
+		if _, isOp := vals["op"]; isOp && vals["ops"] == nil {
+			// One op on its own, which may carry the request's revision.
+			single = true
+			ops = []json.RawMessage{raw}
+		} else {
+			if k := unknownKey(keys, reqKeys); k != "" {
+				return nil, -1, fmt.Errorf("request: unknown key %q; a request has %s", k, strings.Join(reqKeys, ", "))
+			}
+			if v, ok := vals["ops"]; ok {
+				if err := json.Unmarshal(v, &ops); err != nil {
+					return nil, -1, fmt.Errorf("request: ops: %v", err)
+				}
 			}
 		}
+		if v, ok := vals["revision"]; ok {
+			if err := json.Unmarshal(v, &req.Revision); err != nil {
+				return nil, -1, fmt.Errorf("request: revision: %v", err)
+			}
+		}
+	default:
+		return nil, -1, fmt.Errorf("want an object or a list of ops")
 	}
-	if len(req.Ops) == 0 {
-		return nil, fmt.Errorf("no ops")
+	if len(ops) == 0 {
+		return nil, -1, fmt.Errorf("no ops")
 	}
-	return &req, nil
+	allowed := opKeys
+	if single {
+		allowed = append(slices.Clip(opKeys), "revision")
+	}
+	for i, o := range ops {
+		keys, _, err := members(o)
+		if err != nil {
+			return nil, i, fmt.Errorf("op %d: %v", i, err)
+		}
+		if k := unknownKey(keys, allowed); k != "" {
+			return nil, i, fmt.Errorf("op %d: unknown key %q; an op has %s", i, k, strings.Join(opKeys, ", "))
+		}
+		var one EditOp
+		if err := json.Unmarshal(o, &one); err != nil {
+			return nil, i, fmt.Errorf("op %d: %v", i, err)
+		}
+		req.Ops = append(req.Ops, one)
+	}
+	return req, -1, nil
+}
+
+// members reads a JSON object's keys in order and its values by key,
+// refusing a key that appears twice. Keys match exactly: encoding/json
+// alone would take "Expect" for "expect" and keep the last of two "text"s.
+func members(raw []byte) ([]string, map[string]json.RawMessage, error) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	t, err := dec.Token()
+	if err != nil {
+		return nil, nil, err
+	}
+	if d, ok := t.(json.Delim); !ok || d != '{' {
+		return nil, nil, fmt.Errorf("want an object, got %s", bytes.TrimSpace(raw))
+	}
+	var keys []string
+	vals := map[string]json.RawMessage{}
+	for dec.More() {
+		t, err := dec.Token()
+		if err != nil {
+			return nil, nil, err
+		}
+		k, _ := t.(string)
+		var v json.RawMessage
+		if err := dec.Decode(&v); err != nil {
+			return nil, nil, err
+		}
+		if _, dup := vals[k]; dup {
+			return nil, nil, fmt.Errorf("key %q appears twice", k)
+		}
+		keys = append(keys, k)
+		vals[k] = v
+	}
+	if _, err := dec.Token(); err != nil {
+		return nil, nil, err
+	}
+	return keys, vals, nil
+}
+
+func unknownKey(keys, allowed []string) string {
+	for _, k := range keys {
+		if !slices.Contains(allowed, k) {
+			return k
+		}
+	}
+	return ""
 }
 
 // EditOpts are edit's flags. By default an edit that adds check errors is
 // refused; RequireClean also refuses one that leaves any, and AllowBroken
 // writes it anyway (a step in a multi-edit change). Show adds each changed
-// decl's new source to the result.
+// decl's new source to the result. Revision (--rev) is the request's
+// revision guard given on the command line. Force skips every guard.
 type EditOpts struct {
 	DryRun, RequireClean, AllowBroken, Show, Force bool
+	Revision                                       string
 }
 
 // Edit applies a batch of ops atomically: all of them or none.
@@ -112,9 +209,15 @@ func Edit(dir, src string, o EditOpts, w io.Writer) int {
 	if err != nil {
 		return fail(w, "read", err.Error(), "pass a file path, or - to read the edit from stdin")
 	}
-	req, err := parseEditReq(raw)
+	req, op, err := parseEditReq(raw)
 	if err != nil {
-		return fail(w, "bad_edit", err.Error(), `want {"ops":[{"op":"replace","id":"...","text":"..."}]}; see ovid help edit`)
+		r := map[string]any{"ok": false, "error": "bad_edit", "message": err.Error() + "; nothing was written",
+			"hint": `want {"ops":[{"op":"replace","id":"...","expect":"...","text":"..."}]}; see ovid help edit`}
+		if op >= 0 {
+			r["op"] = op
+		}
+		emit(w, r)
+		return ExitFail
 	}
 	return runEdit(dir, req, o, w)
 }
@@ -148,14 +251,20 @@ func runEdit(dir string, req *EditReq, o EditOpts, w io.Writer) int {
 	if err != nil {
 		return fail(w, "load", err.Error(), "")
 	}
-	if req.Revision != "" && req.Revision != m.Revision() {
+	if o.Revision != "" {
+		if req.Revision != "" && req.Revision != o.Revision {
+			return fail(w, "bad_edit", "--rev "+o.Revision+" and the request's revision "+req.Revision+" disagree; nothing was written", "give the revision once")
+		}
+		req.Revision = o.Revision
+	}
+	if req.Revision != "" && req.Revision != m.Revision() && !o.Force {
 		emit(w, map[string]any{"ok": false, "error": "stale", "message": "module revision changed", "revision": m.Revision(),
 			"hint": "drop revision and use per-op expect hashes so unrelated edits do not conflict"})
 		return ExitStale
 	}
 	var sps []*splice
 	for i, op := range req.Ops {
-		s, e := planOp(m, i, op, o.Force)
+		s, e := planOp(m, i, op, o.Force, req.Revision != "")
 		if e != nil {
 			r := map[string]any{"ok": false, "error": e.code, "message": e.msg, "op": i}
 			if e.hint != "" {
@@ -344,15 +453,23 @@ func declOfID(id string) string {
 	return rest
 }
 
-// checkExpect guards an op on l with the hash the caller read.
-func checkExpect(m *module.Module, l *module.Loc, expect string, force bool) *editErr {
+// checkExpect guards an op on l with the hash the caller read. Every op
+// needs a guard: its own expect, the request's revision (rev, already
+// checked by the caller), or force. A decl id is a name, but two agents
+// replacing the same func would otherwise both get ok, the second
+// silently undoing the first.
+func checkExpect(m *module.Module, l *module.Loc, expect string, force, rev bool) *editErr {
 	positional := l.Kind == "stmt" || l.Kind == "expr"
-	if force || (expect == "" && !positional) {
+	if force || (expect == "" && rev) {
 		return nil
 	}
 	if expect == "" {
-		return &editErr{code: "expect_required", msg: l.ID + " is a position, so an edit to it needs --expect: the hash of " + l.Decl + " (in the header `ovid show` printed) or of the node",
-			hint: "ids after an insert are renumbered; the hash proves the id still means what you read. --force skips the check"}
+		if positional {
+			return &editErr{code: "expect_required", msg: l.ID + " is a position, so an edit to it needs --expect: the hash of " + l.Decl + " (in the header `ovid show` printed) or of the node",
+				hint: "ids after an insert are renumbered; the hash proves the id still means what you read. --rev REV guards with the whole module instead; --force skips the check"}
+		}
+		return &editErr{code: "expect_required", msg: "an edit to " + l.ID + " needs a guard: --expect with its hash, from `ovid outline`, `ovid show`, or the last edit's receipt",
+			hint: "without one, a second agent's edit would silently replace the first. --rev REV guards with the whole module instead; --force skips the check"}
 	}
 	if expect == m.Hash(l.ID) || (positional && expect == m.Hash(l.Decl)) {
 		return nil
@@ -360,14 +477,18 @@ func checkExpect(m *module.Module, l *module.Loc, expect string, force bool) *ed
 	extra := map[string]any{"id": l.ID, "hash": m.Hash(l.ID), "text": m.Text(l.Span)}
 	if positional {
 		extra["decl"], extra["decl_hash"] = l.Decl, m.Hash(l.Decl)
-		// A hash of a neighbour means the id moved, not that the code did.
+		// A statement's hash is bound to its decl as it is now, so this is
+		// an id and a hash read together but passed apart, not a move.
 		for _, id := range m.Order {
 			if o := m.Index[id]; o.Decl == l.Decl && o.ID != l.ID && m.Hash(id) == expect {
 				return &editErr{code: "stale", exit: ExitStale, extra: extra,
-					msg:  "that hash belongs to " + id + ", not " + l.ID + "; statement ids are renumbered when statements are added or removed",
+					msg:  "that hash belongs to " + id + ", not " + l.ID,
 					hint: "edit " + id + " if that is the node you read, or re-read with `ovid show " + l.Decl + "`"}
 			}
 		}
+		return &editErr{code: "stale", exit: ExitStale, extra: extra,
+			msg:  l.Decl + " changed since you read " + l.ID + "; a statement's hash covers its whole decl, and st:/ex: ids are renumbered by edits above them",
+			hint: "re-read with `ovid show " + l.Decl + "` and use the ids and hashes it prints now; text and hash here are " + l.ID + "'s current ones"}
 	}
 	return &editErr{code: "stale", msg: l.ID + " changed since you read it", exit: ExitStale, extra: extra,
 		hint: "re-read with `ovid show`; text has the current source"}
@@ -439,7 +560,7 @@ func newIDs(m *module.Module, sps []*splice, nops int, show bool) []map[string]a
 	return out
 }
 
-func planOp(m *module.Module, i int, op EditOp, force bool) ([]*splice, *editErr) {
+func planOp(m *module.Module, i int, op EditOp, force, rev bool) ([]*splice, *editErr) {
 	target := op.ID
 	switch op.Op {
 	case "insert":
@@ -462,7 +583,7 @@ func planOp(m *module.Module, i int, op EditOp, force bool) ([]*splice, *editErr
 	}
 	if op.Op == "append" {
 		if p := findPkg(m, target); p != nil {
-			return appendDecl(m, i, p, op)
+			return appendDecl(m, i, p, op, force)
 		}
 	}
 	l := m.Index[target]
@@ -480,7 +601,7 @@ func planOp(m *module.Module, i int, op EditOp, force bool) ([]*splice, *editErr
 	if m.IsStd(l.Span.File) {
 		return nil, &editErr{code: "std", msg: target + " is in a shipped package", hint: "copy the package into the module to change it"}
 	}
-	if e := checkExpect(m, l, op.Expect, force); e != nil {
+	if e := checkExpect(m, l, op.Expect, force, rev); e != nil {
 		return nil, e
 	}
 	f := m.Files[l.Span.File]
@@ -560,9 +681,18 @@ func findPkg(m *module.Module, q string) *ir.Package {
 	return nil
 }
 
-func appendDecl(m *module.Module, i int, p *ir.Package, op EditOp) ([]*splice, *editErr) {
+func appendDecl(m *module.Module, i int, p *ir.Package, op EditOp, force bool) ([]*splice, *editErr) {
 	if m.Std[p.Path] {
 		return nil, &editErr{code: "std", msg: p.Path + " is a shipped package", hint: "copy it into the module to change it"}
+	}
+	// The one op that needs no guard: it names no existing node and
+	// overwrites no code, and replaying it, or racing another writer that
+	// added the same name, is refused by the checker (duplicate_name). A
+	// package path has no hash, so an expect here would be ignored; refuse
+	// it rather than let the caller think it guarded anything.
+	if op.Expect != "" && !force {
+		return nil, &editErr{code: "bad_edit", msg: "append into package " + p.Path + " names no node, so it takes no expect",
+			hint: "drop expect; to guard against any change to the module, give the request a revision (--rev REV)"}
 	}
 	text := strings.TrimRight(reindent(op.Text, "", true), "\n")
 	if op.File != "" {

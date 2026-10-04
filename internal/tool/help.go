@@ -40,7 +40,8 @@ Read without opening whole files:
   ovid grep <regexp>           text matches, each with its decl and stmt id
 
 Change code (or edit the .ov files directly; both are fine):
-  ovid replace <id> <<'EOF'    one edit, code from stdin (no JSON escaping);
+  ovid replace <id> --expect H <<'EOF'
+                               one edit, code from stdin (no JSON escaping);
                                also insert --after/--before <id>, append <id>,
                                delete <id>
   ovid edit <file|->           id-addressed batch edit, all or nothing
@@ -205,19 +206,24 @@ ovid grep <regexp> [--pkg P] [--std] [--offset N] [--limit N]
   {file,line,col,match,source,decl,stmt} per match (RE2 syntax), at most
   200 unless --limit (0: all); last: {"ok",count,total,offset,has_more,
   next_offset}.
-ovid edit <file|-> [--dry-run] [--require-clean|--allow-broken] [--show] [--force]   see: ovid help edit
+ovid edit <file|-> [--rev REV] [--dry-run] [--require-clean|--allow-broken] [--show]
+  [--force]   see: ovid help edit
 ovid replace <id> | insert --after <id> | insert --before <id> | append <id>
-  | delete <id>   [--expect H] [--text-file F] [--dry-run] [--require-clean|--allow-broken]
-  [--show] [--force]
+  | delete <id>   --expect H | --rev REV | --force   [--text-file F] [--dry-run]
+  [--require-clean|--allow-broken] [--show]
   One edit op; the text is read from stdin (or F), so a heredoc works:
     ovid replace st:app.main:3 --expect 1f0c9a2b7d4e <<'EOF'
     ovid/io.Stdout(strptr("a \"quoted\" line\n"), strlen("a \"quoted\" line\n"))
     EOF
-  Same checks and result as ovid edit.
+  Same checks and result as ovid edit. Every op needs a guard: --expect
+  (the hash of the node it names), --rev (the module revision), or --force;
+  only append <pkg> goes without.
 ovid rename <id|name> <new> [--dry-run]
   Rewrites the declaration's name and each use refs lists, nothing else (a
   field, local, comment, or string spelled the same is left alone); refuses
-  collisions and changes that add check errors.
+  collisions and changes that add check errors. Like move it takes no
+  --expect: it carries no code, is planned from the module as it is, and a
+  replay is refused.
 ovid move <id|name>... <pkg> [--file pkg/x.ov] [--dry-run]
   Moves funcs, types, or consts (with doc comments) to pkg, creating it if
   needed; requalifies every use and adds the imports files now need.
@@ -241,13 +247,24 @@ Input (a file, or - for stdin) is {"ops":[...]} or a bare list of ops:
   {"op":"insert","before":ID,"text":SRC}      or "after":ID
   {"op":"append","into":FUNC_OR_IF_OR_WHILE_ID,"text":STMTS}
   {"op":"append","into":"pkg/path","text":DECLS[,"file":"pkg/path/x.ov"]}
-Any op may carry "expect":HASH (from outline/show); if that node's text has
-changed the edit is refused with exit 2 and the current hash and text.
-A top-level "revision" (from check/outline) guards the whole module instead.
-An op on a st:/ex: id must carry one: those ids are positions, renumbered
-by any insert above them. The node's own hash or its decl's (the one in
-the header ovid show prints) both work; a hash that now belongs to another
-node of the decl is refused and names that node. --force skips expect.
+Keys are exact: one that is not listed here, or one given twice, fails
+with bad_edit and names it; nothing is written.
+Every op needs a guard, or it is refused (expect_required, nothing
+written): "expect":HASH, the hash of the node it names (from outline, show,
+or a receipt); or a top-level "revision" (from check, outline, or a
+receipt; --rev on the command line), which guards the whole module; or
+--force. If the node changed since it was read the edit is refused with
+exit 2 and its current hash and text. The one exception is append into a
+package path: it names no node and overwrites nothing, and a replay is
+refused as a duplicate name, so it needs no guard (and takes no expect).
+A st:/ex: id is a position, renumbered by any insert above it. Its own hash
+or its decl's (the one in the header ovid show prints) both work, and both
+are bound to the decl as it was read: after any change to that decl the
+edit is stale, so a retried or late edit never lands on the statement that
+took its id, not even an identical twin. Edits to different decls do not
+disturb each other. Re-read with ovid show (or use the decl hash in the
+last receipt). A current hash passed with the wrong id is refused and names
+its node. --force skips every guard.
 
 ID may be a full id or a decl name (Sum, util.Sum). Text is plain Ovid; its
 indentation is normalised to the target's. insert anchors on statements and
@@ -289,7 +306,9 @@ Commands that take an id also take a name: Sum, util.Sum (a trailing part of
 the package path), app/util.Sum, Pair.next (a field), Sum.n (a param).
 A hash is a short digest of a node's source text: edits use it to refuse
 writing over text that changed since it was read. A st:/ex: id is a
-position, so an edit to one must carry the hash (see ovid help edit).
+position, so its hash also covers the whole decl it is in: any change to
+that decl, anywhere in it, makes every statement hash read before it stale,
+while a change to another decl leaves them alone (see ovid help edit).
 `
 
 // Help prints a help topic as plain text.
