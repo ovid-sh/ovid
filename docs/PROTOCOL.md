@@ -63,6 +63,7 @@ below. Codes:
 | `usage` | bad flags or arguments (exit 64) | |
 | `load` | no `ovid.mod` above the directory, or a module or std dir unreadable | |
 | `read` | an edit file or a module file could not be read | |
+| `lock_timeout` | another command held the module lock (see Concurrency) for the whole wait; nothing was written | `file` (the locked `ovid.mod`), `waited_ms` |
 | `write` | writing failed | edit: `written_files`, the files already renamed into place |
 | `syntax` | the module does not parse; refs, rename, and move need a parsed module | edit: `op`, `file`, `line`, `col` of the op whose text broke it |
 | `check` | an edit would add check errors (or leave any, with `--require-clean`); nothing was written | `errors`, `errors_before`; the new diagnostics precede it |
@@ -140,7 +141,12 @@ it wrote and the new hashes of the decls it touched, so a follow-up edit can
 ## Concurrency
 
 Every command that writes takes an exclusive lock on `ovid.mod` (flock, on
-Unix) for the whole read-plan-check-write, so writers are serialized. Files
+Unix) for the whole read-plan-check-write, so writers are serialized. A
+writer that finds the lock held prints one
+`{"fact":"waiting","for":"lock","file":PATH,"timeout_ms":N,"message":TEXT}`
+line and keeps trying for up to 10 s (`OVID_LOCK_TIMEOUT`, a Go duration
+such as `30s`, `500ms`, or `0` for no wait, changes it; a value that does
+not parse is a `usage` error), then fails with `lock_timeout`. Files
 are written to temp files, fsynced, and renamed into place. A write still
 starts from what the command read: an agent that read a node before another
 agent changed it is caught by `expect` (exit 2), not by the lock.

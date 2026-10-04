@@ -139,9 +139,9 @@ func EditOne(dir string, op EditOp, textFrom string, o EditOpts, w io.Writer) in
 }
 
 func runEdit(dir string, req *EditReq, o EditOpts, w io.Writer) int {
-	unlock, err := lockModule(dir)
-	if err != nil {
-		return fail(w, "load", err.Error(), "")
+	unlock, code := lockModule(dir, w)
+	if unlock == nil {
+		return code
 	}
 	defer unlock()
 	m, err := load(dir)

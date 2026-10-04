@@ -5,6 +5,7 @@ package tool
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -55,12 +56,35 @@ type checked struct {
 	diags []module.Diag
 }
 
-// lockModule takes the module's write lock; see module.Lock.
-func lockModule(dir string) (func(), error) {
+// lockModule takes the module's write lock (see module.LockWait), waiting
+// at most module.LockTimeout. While it waits it writes one "waiting" fact,
+// so a command blocked by another writer does not look hung. If the lock
+// cannot be had it reports why and returns a nil unlock and the exit code.
+func lockModule(dir string, w io.Writer) (unlock func(), code int) {
 	if dir == "" {
 		dir = "."
 	}
-	return module.Lock(dir)
+	timeout, err := module.LockTimeout()
+	if err != nil {
+		fail(w, "usage", err.Error(), "unset it to wait the default "+module.DefaultLockTimeout.String())
+		return nil, ExitUsage
+	}
+	unlock, err = module.LockWait(dir, timeout, func(path string) {
+		emit(w, map[string]any{"fact": "waiting", "for": "lock", "file": path, "timeout_ms": timeout.Milliseconds(),
+			"message": "another ovid command is writing this module; waiting up to " + timeout.String() + " for its lock"})
+	})
+	var te *module.LockTimeoutError
+	switch {
+	case errors.As(err, &te):
+		emit(w, map[string]any{"ok": false, "error": "lock_timeout", "message": te.Error() + "; nothing was written",
+			"file": te.Path, "waited_ms": te.Waited.Milliseconds(),
+			"hint": "run the command again; if no other ovid is running, find the holder of the lock (lsof " + te.Path + "). " +
+				module.LockTimeoutEnv + "=30s waits longer"})
+		return nil, ExitFail
+	case err != nil:
+		return nil, fail(w, "load", err.Error(), "")
+	}
+	return unlock, ExitOK
 }
 
 func load(dir string) (*module.Module, error) {

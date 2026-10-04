@@ -43,7 +43,7 @@ The Go pipeline, one package per stage under `internal/`:
 .ov text → syntax (parse) → ir (tree, ids + spans) → check (types) → compile (x86-64 via asm) → elf (link)
 ```
 
-- `module` sits in front: finds `ovid.mod`, loads one directory per package, resolves shipped packages from the embedded `std/` (`std/std.go`), indexes every node by id to file:line:col, computes hashes and the module `revision`, and owns durable writes (`write.go`: temp file, fsync, rename) and the `ovid.mod` flock (`lock_unix.go`).
+- `module` sits in front: finds `ovid.mod`, loads one directory per package, resolves shipped packages from the embedded `std/` (`std/std.go`), indexes every node by id to file:line:col, computes hashes and the module `revision`, and owns durable writes (`write.go`: temp file, fsync, rename) and the `ovid.mod` flock (`lock_unix.go`: non-blocking, retried until `OVID_LOCK_TIMEOUT`, default 10s, then `lock_timeout`).
 - `ir` is the program tree. `.ov` text is the source of truth; the JSON form (`ovid dump`) is a derived view.
 - `tool` implements the commands; `cmd/ovid/main.go` is flag parsing and dispatch, plus `version`, which it implements itself. Each command function takes a dir and an `io.Writer` and returns the exit code, which is how `tool_test.go` drives them in-process.
 - `tool/help.go` holds the `ovid help` texts, including the language reference.

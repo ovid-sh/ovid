@@ -246,6 +246,10 @@ An edit that adds check errors is refused and nothing is written;
 writes it anyway (one step of a change that spans several edits).
 --dry-run applies in memory and reports, without writing; it fails
 (ok:false, exit 1) if the change would add errors.
+Writers (edit, rename, move) take a lock on ovid.mod. If another holds it,
+one {"fact":"waiting","for":"lock"} line is printed, and after 10s
+(OVID_LOCK_TIMEOUT=30s, 500ms, 0 changes it) the command fails with
+lock_timeout, writing nothing.
 `
 
 const helpIDs = `Ids name every declaration and node. They are derived from source order,
