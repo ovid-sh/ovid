@@ -112,25 +112,31 @@ func (b *Buf) MovRegImm(reg int, imm int64) {
 	b.MovRegImm64(reg, imm)
 }
 
-// AluRaxImm encodes op rax, imm for the group-1 operation with /digit n
+// AluRegImm encodes op reg, imm for the group-1 operation with /digit n
 // (0 add, 1 or, 4 and, 5 sub, 6 xor, 7 cmp); the imm is sign-extended.
-func (b *Buf) AluRaxImm(n int, imm int32) {
+func (b *Buf) AluRegImm(n, reg int, imm int32) {
+	b.emit(rex(true, false, false, reg >= 8))
 	if imm >= -128 && imm <= 127 {
-		b.emit(0x48, 0x83, modrm(3, byte(n), RAX), byte(int8(imm)))
+		b.emit(0x83, modrm(3, byte(n), byte(reg&7)), byte(int8(imm)))
 		return
 	}
-	b.emit(0x48, 0x81, modrm(3, byte(n), RAX))
+	b.emit(0x81, modrm(3, byte(n), byte(reg&7)))
 	b.u32(uint32(imm))
 }
 
-// AluRaxMem encodes op rax, [rbp+disp].
-func (b *Buf) AluRaxMem(n int, disp int32) {
-	b.movMemRbp(byte(n*8+3), RAX, disp)
+// AluRegReg encodes op dst, src.
+func (b *Buf) AluRegReg(n, dst, src int) {
+	b.emit(rex(true, dst >= 8, false, src >= 8), byte(n*8+3), modrm(3, byte(dst&7), byte(src&7)))
 }
 
-// AluMemRax encodes op [rbp+disp], rax.
-func (b *Buf) AluMemRax(n int, disp int32) {
-	b.movMemRbp(byte(n*8+1), RAX, disp)
+// AluRegMem encodes op reg, [rbp+disp].
+func (b *Buf) AluRegMem(n, reg int, disp int32) {
+	b.movMemRbp(byte(n*8+3), reg, disp)
+}
+
+// AluMemReg encodes op [rbp+disp], reg.
+func (b *Buf) AluMemReg(n int, disp int32, reg int) {
+	b.movMemRbp(byte(n*8+1), reg, disp)
 }
 
 // AluMemImm encodes op qword [rbp+disp], imm.
@@ -160,6 +166,11 @@ func (b *Buf) ImulRaxImm(imm int32) {
 	b.u32(uint32(imm))
 }
 
+// ImulRaxReg encodes imul rax, reg.
+func (b *Buf) ImulRaxReg(reg int) {
+	b.emit(rex(true, false, false, reg >= 8), 0x0F, 0xAF, modrm(3, RAX, byte(reg&7)))
+}
+
 // ImulRaxMem encodes imul rax, [rbp+disp].
 func (b *Buf) ImulRaxMem(disp int32) {
 	b.emit(0x48, 0x0F, 0xAF)
@@ -175,42 +186,59 @@ func (b *Buf) ShiftRaxImm(sar bool, n byte) {
 	b.emit(0x48, 0xC1, 0xE0, n)
 }
 
-// LoadMem loads rax from width bits at [base+disp], zero-extended. base
-// must be RAX or RCX.
-func (b *Buf) LoadMem(width, base int, disp int32) {
-	switch width {
-	case 8:
-		b.emit(0x48, 0x0F, 0xB6)
-	case 32:
-		b.emit(0x8B)
-	default:
-		b.emit(0x48, 0x8B)
+// rexMem emits the REX prefix for an instruction with operands reg and
+// [base+index+disp] (index -1 for none), when one is needed or forced.
+func (b *Buf) rexMem(w bool, reg, base, index int, force bool) {
+	v := rex(w, reg >= 8, index >= 8, base >= 8)
+	if v != 0x40 || force {
+		b.emit(v)
 	}
-	b.memOperand(RAX, base, disp)
 }
 
-// StoreMemReg stores the low width bits (8 or 64) of src at [base+disp].
-// src and base must each be RAX or RCX.
-func (b *Buf) StoreMemReg(width, src, base int, disp int32) {
+// LoadMem loads rax from width bits at [base+index+disp], zero-extended.
+// index is -1 for none.
+func (b *Buf) LoadMem(width, base, index int, disp int32) {
+	switch width {
+	case 8:
+		b.rexMem(true, RAX, base, index, false)
+		b.emit(0x0F, 0xB6)
+	case 32:
+		b.rexMem(false, RAX, base, index, false)
+		b.emit(0x8B)
+	default:
+		b.rexMem(true, RAX, base, index, false)
+		b.emit(0x8B)
+	}
+	b.memOperand(RAX, base, index, disp)
+}
+
+// StoreMemReg stores the low width bits (8 or 64) of src at
+// [base+index+disp].
+func (b *Buf) StoreMemReg(width, src, base, index int, disp int32) {
 	if width == 8 {
+		// sil and dil are only named with a REX prefix.
+		b.rexMem(false, src, base, index, src >= 4 && src < 8)
 		b.emit(0x88)
 	} else {
-		b.emit(0x48, 0x89)
+		b.rexMem(true, src, base, index, false)
+		b.emit(0x89)
 	}
-	b.memOperand(src, base, disp)
+	b.memOperand(src, base, index, disp)
 }
 
 // StoreMemImm stores imm, as a byte or sign-extended to 64 bits, at
-// [base+disp]. base must be RAX or RCX.
-func (b *Buf) StoreMemImm(width, base int, disp int32, imm int32) {
+// [base+index+disp].
+func (b *Buf) StoreMemImm(width, base, index int, disp int32, imm int32) {
 	if width == 8 {
+		b.rexMem(false, 0, base, index, false)
 		b.emit(0xC6)
-		b.memOperand(0, base, disp)
+		b.memOperand(0, base, index, disp)
 		b.emit(byte(imm))
 		return
 	}
-	b.emit(0x48, 0xC7)
-	b.memOperand(0, base, disp)
+	b.rexMem(true, 0, base, index, false)
+	b.emit(0xC7)
+	b.memOperand(0, base, index, disp)
 	b.u32(uint32(imm))
 }
 
@@ -352,26 +380,40 @@ func (b *Buf) MovMemRegDispRax(base int, disp int32) {
 func (b *Buf) memReg(op byte, reg, base int, disp int32, wide bool) {
 	b.emit(rex(wide, reg >= 8, false, base >= 8))
 	b.emit(op)
-	b.memOperand(reg, base, disp)
+	b.memOperand(reg, base, -1, disp)
 }
 
-// memOperand encodes the ModRM bytes for reg, [base+disp].
-func (b *Buf) memOperand(reg, base int, disp int32) {
+// memOperand encodes the ModRM, SIB, and displacement bytes for reg,
+// [base+index+disp]; index is -1 for none and is never rsp.
+func (b *Buf) memOperand(reg, base, index int, disp int32) {
 	rb := byte(base & 7)
 	rg := byte(reg & 7)
-	if disp == 0 && rb != RBP && rb != RSP {
-		b.emit(modrm(0, rg, rb))
-		return
+	// rsp and r12 as a base, and any index, need a SIB byte.
+	sib := index >= 0 || rb == RSP
+	rm := rb
+	if sib {
+		rm = 4
 	}
-	if disp >= -128 && disp <= 127 {
-		b.emit(modrm(1, rg, rb))
+	// rbp and r13 as a base have no form without a displacement.
+	mod := byte(2)
+	if disp == 0 && rb != RBP {
+		mod = 0
+	} else if disp >= -128 && disp <= 127 {
+		mod = 1
+	}
+	b.emit(modrm(mod, rg, rm))
+	if sib {
+		x := byte(4)
+		if index >= 0 {
+			x = byte(index & 7)
+		}
+		b.emit(x<<3 | rb)
+	}
+	if mod == 1 {
 		b.emit(byte(int8(disp)))
-		return
+	} else if mod == 2 {
+		b.u32(uint32(disp))
 	}
-	b.emit(modrm(2, rg, rb))
-	var buf [4]byte
-	binary.LittleEndian.PutUint32(buf[:], uint32(disp))
-	b.emit(buf[:]...)
 }
 
 func (b *Buf) SubRspImm(n int32) {

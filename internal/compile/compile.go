@@ -105,7 +105,10 @@ type cg struct {
 	consts     map[string]int64
 	localBytes int32
 	epi        int
-	last       *ir.Node // the func's final statement when it is a return
+	last       *ir.Node       // the func's final statement when it is a return
+	regs       map[string]int // locals that live in a register
+	saved      []int          // callee-saved registers the func uses
+	saveBase   int32          // their save slots lie below this displacement
 	pkg        *ir.Package
 	fn         *ir.Func
 	marks      []Mark
@@ -257,9 +260,11 @@ func (c *cg) emitFunc(pkg *ir.Package, fn *ir.Func) error {
 		c.consts[cn.Name] = cn.Value
 	}
 	off := int32(8)
+	var order []string
 	for _, pa := range fn.Params {
 		c.locals[pa.Name] = -off
 		off += 8
+		order = append(order, pa.Name)
 	}
 	var vars []named
 	collectVars(fn.Body, &vars)
@@ -270,6 +275,7 @@ func (c *cg) emitFunc(pkg *ir.Package, fn *ir.Func) error {
 		}
 		c.locals[v.name] = -off
 		off += 8
+		order = append(order, v.name)
 	}
 	c.localBytes = off - 8
 	peak := stmtsMax(fn.Body)
@@ -277,7 +283,9 @@ func (c *cg) emitFunc(pkg *ir.Package, fn *ir.Func) error {
 	if peak >= 0 {
 		tempBytes = int32((peak + 1) * 8)
 	}
-	frame := c.localBytes + tempBytes
+	c.allocRegs(fn, order)
+	c.saveBase = -(c.localBytes + tempBytes)
+	frame := c.localBytes + tempBytes + int32(8*len(c.saved))
 	if frame%16 != 0 {
 		frame += 8
 	}
@@ -290,9 +298,15 @@ func (c *cg) emitFunc(pkg *ir.Package, fn *ir.Func) error {
 	// The frame is not cleared: the checker lets no local be read before
 	// its declaration has run, and a temp is written before it is read.
 	c.b.SubRspImm(frame)
-	argRegs := []int{asm.RDI, asm.RSI, asm.RDX, asm.RCX, asm.R8, asm.R9}
+	for i, r := range c.saved {
+		c.b.MovMemRbpReg(r, c.saveBase-int32(8*(i+1)))
+	}
 	for i, pa := range fn.Params {
-		c.b.MovMemRbpReg(argRegs[i], c.locals[pa.Name])
+		if r, ok := c.regs[pa.Name]; !ok {
+			c.b.MovMemRbpReg(argRegs[i], c.locals[pa.Name])
+		} else if r != argRegs[i] {
+			c.b.MovRegReg(r, argRegs[i])
+		}
 	}
 	c.last = nil
 	for _, s := range fn.Body {
@@ -311,12 +325,143 @@ func (c *cg) emitFunc(pkg *ir.Package, fn *ir.Func) error {
 		c.b.XorRaxRax()
 	}
 	c.b.Mark(c.epi)
+	for i, r := range c.saved {
+		c.b.MovRegMemRbp(r, c.saveBase-int32(8*(i+1)))
+	}
 	c.b.Leave()
 	c.b.Ret()
 	return nil
 }
 
 type named struct{ name string }
+
+// argRegs are the registers a call's arguments arrive in.
+var argRegs = []int{asm.RDI, asm.RSI, asm.RDX, asm.RCX, asm.R8, asm.R9}
+
+// allocRegs decides which locals live in registers; order lists the
+// locals, params first. A func that calls nothing keeps its params where
+// they arrive (rdi, rsi, r8, r9; rdx and rcx are needed as scratch) and may
+// use the other registers a call would clobber, which cost nothing to
+// take. After those come the callee-saved registers, which must be saved
+// and restored, so only a local used at least three times gets one. The
+// most used locals choose first; a use inside a loop counts four times one
+// outside it.
+func (c *cg) allocRegs(fn *ir.Func, order []string) {
+	c.regs = map[string]int{}
+	c.saved = nil
+	weight := map[string]int{}
+	weighStmts(fn.Body, 0, weight)
+	var free []int
+	if !stmtsCall(fn.Body) {
+		for i, r := range argRegs {
+			if r == asm.RDX || r == asm.RCX {
+				continue
+			}
+			if i < len(fn.Params) {
+				c.regs[order[i]] = r
+			} else {
+				free = append(free, r)
+			}
+		}
+		free = append(free, asm.R10, asm.R11)
+	}
+	callee := []int{asm.RBX, asm.R12, asm.R13, asm.R14, asm.R15}
+	for {
+		// The heaviest local without a register; the first of equals.
+		best := -1
+		for i, name := range order {
+			if _, ok := c.regs[name]; ok || weight[name] == 0 {
+				continue
+			}
+			if best < 0 || weight[name] > weight[order[best]] {
+				best = i
+			}
+		}
+		if best < 0 {
+			return
+		}
+		if len(free) > 0 {
+			c.regs[order[best]] = free[0]
+			free = free[1:]
+		} else if len(callee) > 0 && weight[order[best]] >= 3 {
+			c.regs[order[best]] = callee[0]
+			c.saved = append(c.saved, callee[0])
+			callee = callee[1:]
+		} else {
+			return
+		}
+	}
+}
+
+// weighStmts adds, for each name used or assigned in stmts, 4^depth to its
+// weight, depth being the number of loops around the use (at most 5).
+func weighStmts(stmts []*ir.Node, depth int, w map[string]int) {
+	for _, s := range stmts {
+		if s == nil {
+			continue
+		}
+		if s.Op == "var" || s.Op == "assign" {
+			w[s.Name] += 1 << (2 * depth)
+		}
+		weighExpr(s.Val, depth, w)
+		weighExpr(s.Base, depth, w)
+		weighExpr(s.Addr, depth, w)
+		weighStmts(s.Then, depth, w)
+		weighStmts(s.Else, depth, w)
+		if s.Op == "while" {
+			inner := depth
+			if inner < 5 {
+				inner++
+			}
+			weighExpr(s.Cond, inner, w)
+			weighStmts(s.Body, inner, w)
+		} else {
+			weighExpr(s.Cond, depth, w)
+		}
+	}
+}
+
+func weighExpr(n *ir.Node, depth int, w map[string]int) {
+	if n == nil {
+		return
+	}
+	if n.Op == "name" && n.Pkg == "" {
+		w[n.Name] += 1 << (2 * depth)
+	}
+	weighExpr(n.Left, depth, w)
+	weighExpr(n.Right, depth, w)
+	weighExpr(n.Arg, depth, w)
+	weighExpr(n.Base, depth, w)
+	for _, a := range n.Args {
+		weighExpr(a, depth, w)
+	}
+}
+
+// stmtsCall reports whether stmts contain a call or a syscall.
+func stmtsCall(stmts []*ir.Node) bool {
+	for _, s := range stmts {
+		if s == nil {
+			continue
+		}
+		if exprCalls(s.Val) || exprCalls(s.Base) || exprCalls(s.Addr) || exprCalls(s.Cond) {
+			return true
+		}
+		if stmtsCall(s.Then) || stmtsCall(s.Else) || stmtsCall(s.Body) {
+			return true
+		}
+	}
+	return false
+}
+
+func exprCalls(n *ir.Node) bool {
+	if n == nil {
+		return false
+	}
+	if n.Op == "call" || n.Op == "syscall" {
+		return true
+	}
+	return exprCalls(n.Left) || exprCalls(n.Right) || exprCalls(n.Arg) || exprCalls(n.Base)
+}
 
 func collectVars(stmts []*ir.Node, out *[]named) {
 	for _, s := range stmts {
@@ -439,11 +584,10 @@ func (c *cg) emitStmt(s *ir.Node) error {
 		if s.Val == nil && s.Op == "var" {
 			return nil
 		}
-		disp, ok := c.locals[s.Name]
-		if !ok {
+		if _, ok := c.locals[s.Name]; !ok {
 			return fmt.Errorf("%s %s", s.Op, s.Name)
 		}
-		return c.emitAssign(disp, s.Name, s.Val)
+		return c.emitAssign(s.Name, s.Val)
 	case "setfield":
 		off, err := c.fieldOff(s.Base, s.Name)
 		if err != nil {
@@ -509,11 +653,13 @@ func (c *cg) emitStmt(s *ir.Node) error {
 
 // An operand is a value that needs no code of its own: an instruction can
 // name it. kImm is a constant that fits a signed 32-bit immediate; kMem is
-// a local, by its rbp displacement.
+// a local in the frame, by its rbp displacement; kReg is a local in a
+// register, by the register's number.
 const (
 	kNone = iota
 	kImm
 	kMem
+	kReg
 )
 
 // The x86 group-1 operations, by their /digit.
@@ -562,6 +708,8 @@ func (c *cg) operand(n *ir.Node) (int, int64) {
 				return kNone, 0
 			}
 			v = pv
+		} else if r, ok := c.regs[n.Name]; ok {
+			return kReg, int64(r)
 		} else if disp, ok := c.locals[n.Name]; ok {
 			return kMem, int64(disp)
 		} else if cv, ok := c.consts[n.Name]; ok {
@@ -580,10 +728,27 @@ func (c *cg) operand(n *ir.Node) (int, int64) {
 
 // loadOpnd moves an operand into reg.
 func (c *cg) loadOpnd(reg, k int, v int64) {
-	if k == kImm {
+	switch k {
+	case kImm:
 		c.b.MovRegImm(reg, v)
-	} else {
+	case kMem:
 		c.b.MovRegMemRbp(reg, int32(v))
+	default:
+		if reg != int(v) {
+			c.b.MovRegReg(reg, int(v))
+		}
+	}
+}
+
+// aluOpnd emits op reg, operand for the group-1 operation n.
+func (c *cg) aluOpnd(n, reg, k int, v int64) {
+	switch k {
+	case kImm:
+		c.b.AluRegImm(n, reg, int32(v))
+	case kMem:
+		c.b.AluRegMem(n, reg, int32(v))
+	default:
+		c.b.AluRegReg(n, reg, int(v))
 	}
 }
 
@@ -611,16 +776,15 @@ func commutes(op string) bool {
 func (c *cg) arithOpnd(op string, k int, v int64) {
 	switch op {
 	case "add", "sub", "and", "or", "xor":
-		if k == kImm {
-			c.b.AluRaxImm(aluOf(op), int32(v))
-		} else {
-			c.b.AluRaxMem(aluOf(op), int32(v))
-		}
+		c.aluOpnd(aluOf(op), asm.RAX, k, v)
 	case "mul":
-		if k == kImm {
+		switch k {
+		case kImm:
 			c.b.ImulRaxImm(int32(v))
-		} else {
+		case kMem:
 			c.b.ImulRaxMem(int32(v))
+		default:
+			c.b.ImulRaxReg(int(v))
 		}
 	case "shl", "shr":
 		if k == kImm {
@@ -732,25 +896,22 @@ func ccSwap(cc byte) byte {
 func (c *cg) emitCmp(n *ir.Node, lv int) (byte, error) {
 	cc := ccOf(n.Op)
 	if k, v := c.operand(n.Right); k != kNone {
+		// A local in a register is compared where it is.
+		if kl, vl := c.operand(n.Left); kl == kReg {
+			c.aluOpnd(aluCmp, int(vl), k, v)
+			return cc, nil
+		}
 		if err := c.emitExpr(n.Left, lv); err != nil {
 			return 0, err
 		}
-		if k == kImm {
-			c.b.AluRaxImm(aluCmp, int32(v))
-		} else {
-			c.b.AluRaxMem(aluCmp, int32(v))
-		}
+		c.aluOpnd(aluCmp, asm.RAX, k, v)
 		return cc, nil
 	}
 	if k, v := c.operand(n.Left); k != kNone {
 		if err := c.emitExpr(n.Right, lv); err != nil {
 			return 0, err
 		}
-		if k == kImm {
-			c.b.AluRaxImm(aluCmp, int32(v))
-		} else {
-			c.b.AluRaxMem(aluCmp, int32(v))
-		}
+		c.aluOpnd(aluCmp, asm.RAX, k, v)
 		return ccSwap(cc), nil
 	}
 	if err := c.emitExpr(n.Left, lv); err != nil {
@@ -760,7 +921,7 @@ func (c *cg) emitCmp(n *ir.Node, lv int) (byte, error) {
 	if err := c.emitExpr(n.Right, lv+1); err != nil {
 		return 0, err
 	}
-	c.b.AluMemRax(aluCmp, c.tempDisp(lv))
+	c.b.AluMemReg(aluCmp, c.tempDisp(lv), asm.RAX)
 	return cc, nil
 }
 
@@ -827,12 +988,31 @@ func (c *cg) emitJump(n *ir.Node, lv int, lab int, when bool) error {
 	return nil
 }
 
-// emitAddr evaluates an address into rax, less the constant terms added to
-// it or subtracted from it, which it returns for the instruction to carry
-// as a displacement.
-func (c *cg) emitAddr(n *ir.Node, lv int) (int32, error) {
+// emitAddr makes an address usable as a memory operand and returns its
+// base register, index register (-1 for none), and displacement. Locals
+// in registers serve as they are; anything else is evaluated into rax.
+func (c *cg) emitAddr(n *ir.Node, lv int) (int, int, int32, error) {
 	n, d := c.splitAddr(n)
-	return d, c.emitExpr(n, lv)
+	if base, index, ok := c.addrMode(n); ok {
+		return base, index, d, nil
+	}
+	return asm.RAX, -1, d, c.emitExpr(n, lv)
+}
+
+// addrMode reports whether n, an address with its constant terms taken
+// off, is a local in a register or the sum of two.
+func (c *cg) addrMode(n *ir.Node) (int, int, bool) {
+	if k, v := c.operand(n); k == kReg {
+		return int(v), -1, true
+	}
+	if n != nil && n.Op == "add" {
+		kl, vl := c.operand(n.Left)
+		kr, vr := c.operand(n.Right)
+		if kl == kReg && kr == kReg {
+			return int(vl), int(vr), true
+		}
+	}
+	return 0, -1, false
 }
 
 // splitAddr peels the constant terms off an address expression.
@@ -859,28 +1039,38 @@ func (c *cg) splitAddr(n *ir.Node) (*ir.Node, int32) {
 // emitStore stores val, width bits of it, at addr + off.
 func (c *cg) emitStore(addr, val *ir.Node, width int, off int32) error {
 	if k, v := c.operand(val); k != kNone {
-		d, err := c.emitAddr(addr, 0)
+		base, index, d, err := c.emitAddr(addr, 0)
 		if err != nil {
 			return err
 		}
-		if k == kImm {
-			c.b.StoreMemImm(width, asm.RAX, off+d, int32(v))
-			return nil
+		switch k {
+		case kImm:
+			c.b.StoreMemImm(width, base, index, off+d, int32(v))
+		case kReg:
+			c.b.StoreMemReg(width, int(v), base, index, off+d)
+		default:
+			c.b.MovRcxMemRbp(int32(v))
+			c.b.StoreMemReg(width, asm.RCX, base, index, off+d)
 		}
-		c.loadOpnd(asm.RCX, k, v)
-		c.b.StoreMemReg(width, asm.RCX, asm.RAX, off+d)
 		return nil
 	}
-	base, d := c.splitAddr(addr)
-	if k, v := c.operand(base); k == kMem {
+	n, d := c.splitAddr(addr)
+	if base, index, ok := c.addrMode(n); ok {
+		if err := c.emitExpr(val, 0); err != nil {
+			return err
+		}
+		c.b.StoreMemReg(width, asm.RAX, base, index, off+d)
+		return nil
+	}
+	if k, v := c.operand(n); k == kMem {
 		if err := c.emitExpr(val, 0); err != nil {
 			return err
 		}
 		c.b.MovRcxMemRbp(int32(v))
-		c.b.StoreMemReg(width, asm.RAX, asm.RCX, off+d)
+		c.b.StoreMemReg(width, asm.RAX, asm.RCX, -1, off+d)
 		return nil
 	}
-	if err := c.emitExpr(base, 0); err != nil {
+	if err := c.emitExpr(n, 0); err != nil {
 		return err
 	}
 	c.storeTemp(0)
@@ -888,25 +1078,42 @@ func (c *cg) emitStore(addr, val *ir.Node, width int, off int32) error {
 		return err
 	}
 	c.loadTempRcx(0)
-	c.b.StoreMemReg(width, asm.RAX, asm.RCX, off+d)
+	c.b.StoreMemReg(width, asm.RAX, asm.RCX, -1, off+d)
 	return nil
 }
 
-// emitAssign sets the local name, at disp, to val.
-func (c *cg) emitAssign(disp int32, name string, val *ir.Node) error {
-	if k, v := c.operand(val); k == kImm {
+// emitAssign sets the local name to val.
+func (c *cg) emitAssign(name string, val *ir.Node) error {
+	reg, inReg := c.regs[name]
+	disp := c.locals[name]
+	k, v := c.operand(val)
+	if inReg && k != kNone {
+		c.loadOpnd(reg, k, v)
+		return nil
+	}
+	if k == kImm {
 		c.b.MovMemRbpImm(disp, int32(v))
 		return nil
 	}
-	// x = x op operand works on the slot in place.
+	if k == kReg {
+		c.b.MovMemRbpReg(int(v), disp)
+		return nil
+	}
+	// x = x op operand works on x in place.
 	if n := uncast(val); n != nil && aluOf(n.Op) >= 0 {
 		if l := uncast(n.Left); l != nil && l.Op == "name" && l.Pkg == "" && l.Name == name {
-			if k, v := c.operand(n.Right); k == kImm {
-				c.b.AluMemImm(aluOf(n.Op), disp, int32(v))
-				return nil
-			} else if k == kMem {
-				c.b.MovRaxMemRbp(int32(v))
-				c.b.AluMemRax(aluOf(n.Op), disp)
+			if k, v := c.operand(n.Right); k != kNone {
+				switch {
+				case inReg:
+					c.aluOpnd(aluOf(n.Op), reg, k, v)
+				case k == kImm:
+					c.b.AluMemImm(aluOf(n.Op), disp, int32(v))
+				case k == kReg:
+					c.b.AluMemReg(aluOf(n.Op), disp, int(v))
+				default:
+					c.b.MovRaxMemRbp(int32(v))
+					c.b.AluMemReg(aluOf(n.Op), disp, asm.RAX)
+				}
 				return nil
 			}
 		}
@@ -914,7 +1121,11 @@ func (c *cg) emitAssign(disp int32, name string, val *ir.Node) error {
 	if err := c.emitExpr(val, 0); err != nil {
 		return err
 	}
-	c.b.MovMemRbpRax(disp)
+	if inReg {
+		c.b.MovRegReg(reg, asm.RAX)
+	} else {
+		c.b.MovMemRbpRax(disp)
+	}
 	return nil
 }
 
@@ -997,6 +1208,10 @@ func (c *cg) emitExpr(n *ir.Node, lv int) error {
 			c.b.MovRegImm(asm.RAX, v)
 			return nil
 		}
+		if r, ok := c.regs[n.Name]; ok {
+			c.b.MovRegReg(asm.RAX, r)
+			return nil
+		}
 		if disp, ok := c.locals[n.Name]; ok {
 			c.b.MovRaxMemRbp(disp)
 			return nil
@@ -1071,18 +1286,18 @@ func (c *cg) emitExpr(n *ir.Node, lv int) error {
 		if err != nil {
 			return err
 		}
-		d, err := c.emitAddr(n.Base, lv)
+		base, index, d, err := c.emitAddr(n.Base, lv)
 		if err != nil {
 			return err
 		}
-		c.b.LoadMem(64, asm.RAX, off+d)
+		c.b.LoadMem(64, base, index, off+d)
 		return nil
 	case "load8", "load32", "load64":
-		d, err := c.emitAddr(n.Arg, lv)
+		base, index, d, err := c.emitAddr(n.Arg, lv)
 		if err != nil {
 			return err
 		}
-		c.b.LoadMem(map[string]int{"load8": 8, "load32": 32, "load64": 64}[n.Op], asm.RAX, d)
+		c.b.LoadMem(map[string]int{"load8": 8, "load32": 32, "load64": 64}[n.Op], base, index, d)
 		return nil
 	case "call":
 		path := n.Pkg
@@ -1096,7 +1311,7 @@ func (c *cg) emitExpr(n *ir.Node, lv int) error {
 		if len(n.Args) > 6 {
 			return fmt.Errorf("arity %s", n.Func)
 		}
-		if err := c.emitArgs(n.Args, []int{asm.RDI, asm.RSI, asm.RDX, asm.RCX, asm.R8, asm.R9}, lv); err != nil {
+		if err := c.emitArgs(n.Args, argRegs, lv); err != nil {
 			return err
 		}
 		c.b.Call(lab)

@@ -9,6 +9,12 @@ import ovid/parse
 const HEAP i64 = 128 << 20
 const MAXLOC i64 = 1024
 
+// A local's record in C.locs: name (address, length), rbp displacement,
+// type (address, length), weight, and register (-1 for none).
+const LOCSIZE i64 = 56
+const LOC_WEIGHT i64 = 40
+const LOC_REG i64 = 48
+
 // C is the code generator's state. pkg/pathp/fn are the func being
 // emitted; locs holds its params and vars.
 type C struct {
@@ -33,6 +39,12 @@ type C struct {
   opv i64
   addrd i64
   last *ovid/parse.Node
+  amBase i64
+  amIndex i64
+  saved i64
+  nsaved i64
+  saveBase i64
+  free i64
 }
 
 func Fail(c *C, code i64) i64 {
@@ -95,7 +107,9 @@ func IndexProg(c *C) i64 {
   if k == 0 as *ovid/parse.Pkg {
     return Fail(c, 1)
   }
-  c.locs = ovid/io.Alloc(c.io, MAXLOC * 40)
+  c.locs = ovid/io.Alloc(c.io, MAXLOC * LOCSIZE)
+  c.saved = ovid/io.Alloc(c.io, 64)
+  c.free = ovid/io.Alloc(c.io, 64)
   while k != 0 as *ovid/parse.Pkg {
     var f *ovid/parse.Decl = k.fs
     while f != 0 as *ovid/parse.Decl {
@@ -110,7 +124,7 @@ func IndexProg(c *C) i64 {
 func FindLoc(c *C, np i64, nn i64) i64 {
   var i i64 = 0
   while i < c.nloc {
-    var rec i64 = c.locs + (i * 40)
+    var rec i64 = c.locs + (i * LOCSIZE)
     if ovid/mem.Eq(load64(rec + 0), load64(rec + 8), np, nn) {
       return rec
     }
@@ -129,12 +143,14 @@ func AddLoc(c *C, np i64, nn i64, tp i64, tn i64) i64 {
   if c.nloc >= MAXLOC {
     return Fail(c, 6)
   }
-  rec = c.locs + (c.nloc * 40)
+  rec = c.locs + (c.nloc * LOCSIZE)
   store64(rec + 0, np)
   store64(rec + 8, nn)
   store64(rec + 16, 0 - ((c.nloc + 1) * 8))
   store64(rec + 24, tp)
   store64(rec + 32, tn)
+  store64(rec + LOC_WEIGHT, 0)
+  store64(rec + LOC_REG, -1)
   c.nloc = c.nloc + 1
   return 0
 }
@@ -443,10 +459,160 @@ func SysReg(i i64) i64 {
 
 // An operand is a value that needs no code of its own: an instruction can
 // name it. KIMM is a constant that fits a signed 32-bit immediate; KMEM is
-// a local, by its rbp displacement.
+// a local in the frame, by its rbp displacement; KREG is a local in a
+// register, by the register's number.
 const KNONE i64 = 0
 const KIMM i64 = 1
 const KMEM i64 = 2
+const KREG i64 = 3
+
+// WeighStmts adds, for each local used or assigned in the statement list
+// s, 4^depth to its weight, depth being the number of loops around the use
+// (at most 5).
+func WeighStmts(c *C, s *ovid/parse.Node, depth i64) i64 {
+  while s != 0 as *ovid/parse.Node {
+    if s.op == ovid/parse.OP_VAR || s.op == ovid/parse.OP_ASSIGN {
+      Weigh(c, s.namep, s.namen, depth)
+    }
+    WeighExpr(c, s.val, depth)
+    WeighExpr(c, s.base, depth)
+    WeighExpr(c, s.addr, depth)
+    WeighStmts(c, s.then, depth)
+    WeighStmts(c, s.els, depth)
+    if s.op == ovid/parse.OP_WHILE {
+      var inner i64 = depth
+      if inner < 5 {
+        inner = inner + 1
+      }
+      WeighExpr(c, s.cond, inner)
+      WeighStmts(c, s.body, inner)
+    } else {
+      WeighExpr(c, s.cond, depth)
+    }
+    s = s.next
+  }
+  return 0
+}
+
+func Weigh(c *C, np i64, nn i64, depth i64) i64 {
+  var rec i64 = FindLoc(c, np, nn)
+  if rec != 0 {
+    store64(rec + LOC_WEIGHT, load64(rec + LOC_WEIGHT) + (1 << (2 * depth)))
+  }
+  return 0
+}
+
+func WeighExpr(c *C, n *ovid/parse.Node, depth i64) i64 {
+  if n == 0 as *ovid/parse.Node {
+    return 0
+  }
+  if n.op == ovid/parse.OP_NAME && n.pkgn == 0 {
+    Weigh(c, n.namep, n.namen, depth)
+  }
+  WeighExpr(c, n.left, depth)
+  WeighExpr(c, n.right, depth)
+  WeighExpr(c, n.arg, depth)
+  WeighExpr(c, n.base, depth)
+  var a *ovid/parse.Node = n.args
+  while a != 0 as *ovid/parse.Node {
+    WeighExpr(c, a, depth)
+    a = a.next
+  }
+  return 0
+}
+
+// StmtsCall reports whether the statement list s contains a call or a
+// syscall.
+func StmtsCall(s *ovid/parse.Node) bool {
+  while s != 0 as *ovid/parse.Node {
+    if ExprCalls(s.val) || ExprCalls(s.base) || ExprCalls(s.addr) || ExprCalls(s.cond) {
+      return true
+    }
+    if StmtsCall(s.then) || StmtsCall(s.els) || StmtsCall(s.body) {
+      return true
+    }
+    s = s.next
+  }
+  return false
+}
+
+func ExprCalls(n *ovid/parse.Node) bool {
+  if n == 0 as *ovid/parse.Node {
+    return false
+  }
+  if n.op == ovid/parse.OP_CALL || n.op == ovid/parse.OP_SYSCALL {
+    return true
+  }
+  return ExprCalls(n.left) || ExprCalls(n.right) || ExprCalls(n.arg) || ExprCalls(n.base)
+}
+
+// CalleeReg is the j-th callee-saved register: rbx, r12, r13, r14, r15.
+func CalleeReg(j i64) i64 {
+  if j == 0 {
+    return 3
+  }
+  return 11 + j
+}
+
+// AllocRegs decides which locals live in registers. A func that calls
+// nothing keeps its params where they arrive (rdi, rsi, r8, r9; rdx and rcx
+// are needed as scratch) and may use the other registers a call would
+// clobber, which cost nothing to take. After those come the callee-saved
+// registers, which must be saved and restored, so only a local used at
+// least three times gets one. The most used locals choose first; a use
+// inside a loop counts four times one outside it.
+func AllocRegs(c *C, body *ovid/parse.Node, nparams i64) i64 {
+  c.nsaved = 0
+  WeighStmts(c, body, 0)
+  var nfree i64 = 0
+  var head i64 = 0
+  var i i64 = 0
+  if !StmtsCall(body) {
+    while i < 6 {
+      var r i64 = ArgReg(i)
+      if r != 2 && r != 1 {
+        if i < nparams {
+          store64((c.locs + (i * LOCSIZE)) + LOC_REG, r)
+        } else {
+          store64(c.free + (nfree * 8), r)
+          nfree = nfree + 1
+        }
+      }
+      i = i + 1
+    }
+    store64(c.free + (nfree * 8), 10)
+    store64((c.free + (nfree * 8)) + 8, 11)
+    nfree = nfree + 2
+  }
+  var more bool = true
+  while more {
+    // The heaviest local without a register; the first of equals.
+    var best i64 = 0
+    var bestw i64 = 0
+    i = 0
+    while i < c.nloc {
+      var rec i64 = c.locs + (i * LOCSIZE)
+      if load64(rec + LOC_REG) < 0 && load64(rec + LOC_WEIGHT) > bestw {
+        best = rec
+        bestw = load64(rec + LOC_WEIGHT)
+      }
+      i = i + 1
+    }
+    if bestw == 0 {
+      more = false
+    } else if head < nfree {
+      store64(best + LOC_REG, load64(c.free + (head * 8)))
+      head = head + 1
+    } else if c.nsaved < 5 && bestw >= 3 {
+      store64(best + LOC_REG, CalleeReg(c.nsaved))
+      store64(c.saved + (c.nsaved * 8), CalleeReg(c.nsaved))
+      c.nsaved = c.nsaved + 1
+    } else {
+      more = false
+    }
+  }
+  return 0
+}
 
 // The x86 group-1 operations, by their /digit.
 const ALU_ADD i64 = 0
@@ -495,6 +661,10 @@ func Operand(c *C, n *ovid/parse.Node) i64 {
     } else {
       var loc i64 = FindLoc(c, n.namep, n.namen)
       if loc != 0 {
+        c.opv = load64(loc + LOC_REG)
+        if c.opv >= 0 {
+          return KREG
+        }
         c.opv = load64(loc + 16)
         return KMEM
       }
@@ -519,7 +689,24 @@ func LoadOpnd(c *C, reg i64, k i64, v i64) i64 {
   if k == KIMM {
     return ovid/asm.MovRegImm(c.code, reg, v)
   }
-  return ovid/asm.MovRegMemRbp(c.code, reg, v)
+  if k == KMEM {
+    return ovid/asm.MovRegMemRbp(c.code, reg, v)
+  }
+  if reg != v {
+    ovid/asm.MovRegReg(c.code, reg, v)
+  }
+  return 0
+}
+
+// AluOpnd emits op reg, operand for the group-1 operation n.
+func AluOpnd(c *C, n i64, reg i64, k i64, v i64) i64 {
+  if k == KIMM {
+    return ovid/asm.AluRegImm(c.code, n, reg, v)
+  }
+  if k == KMEM {
+    return ovid/asm.AluRegMem(c.code, n, reg, v)
+  }
+  return ovid/asm.AluRegReg(c.code, n, reg, v)
 }
 
 func AluOf(op i64) i64 {
@@ -545,24 +732,19 @@ func Commutes(op i64) bool {
   return op == ovid/parse.OP_ADD || op == ovid/parse.OP_MUL || op == ovid/parse.OP_AND || op == ovid/parse.OP_OR || op == ovid/parse.OP_XOR
 }
 
-// AluOpnd emits op rax, operand for the group-1 operation n.
-func AluOpnd(c *C, n i64, k i64, v i64) i64 {
-  if k == KIMM {
-    return ovid/asm.AluRaxImm(c.code, n, v)
-  }
-  return ovid/asm.AluRaxMem(c.code, n, v)
-}
-
 // ArithOpnd emits rax = rax op operand.
 func ArithOpnd(c *C, op i64, k i64, v i64) i64 {
   if AluOf(op) >= 0 {
-    return AluOpnd(c, AluOf(op), k, v)
+    return AluOpnd(c, AluOf(op), 0, k, v)
   }
   if op == ovid/parse.OP_MUL {
     if k == KIMM {
       return ovid/asm.ImulRaxImm(c.code, v)
     }
-    return ovid/asm.ImulRaxMem(c.code, v)
+    if k == KMEM {
+      return ovid/asm.ImulRaxMem(c.code, v)
+    }
+    return ovid/asm.ImulRaxReg(c.code, v)
   }
   if k == KIMM && (op == ovid/parse.OP_SHL || op == ovid/parse.OP_SHR) {
     // The same count the cl form would use: the low six bits.
@@ -706,10 +888,15 @@ func EmitCmp(c *C, n *ovid/parse.Node, lv i64) i64 {
   var k i64 = Operand(c, n.right)
   var v i64 = c.opv
   if k != KNONE {
+    // A local in a register is compared where it is.
+    if Operand(c, n.left) == KREG {
+      AluOpnd(c, ALU_CMP, c.opv, k, v)
+      return cc
+    }
     if EmitExpr(c, n.left, lv) != 0 {
       return -1
     }
-    AluOpnd(c, ALU_CMP, k, v)
+    AluOpnd(c, ALU_CMP, 0, k, v)
     return cc
   }
   k = Operand(c, n.left)
@@ -718,7 +905,7 @@ func EmitCmp(c *C, n *ovid/parse.Node, lv i64) i64 {
     if EmitExpr(c, n.right, lv) != 0 {
       return -1
     }
-    AluOpnd(c, ALU_CMP, k, v)
+    AluOpnd(c, ALU_CMP, 0, k, v)
     return CcSwap(cc)
   }
   if EmitExpr(c, n.left, lv) != 0 {
@@ -728,7 +915,7 @@ func EmitCmp(c *C, n *ovid/parse.Node, lv i64) i64 {
   if EmitExpr(c, n.right, lv + 1) != 0 {
     return -1
   }
-  ovid/asm.AluMemRax(c.code, ALU_CMP, TempDisp(c, lv))
+  ovid/asm.AluMemReg(c.code, ALU_CMP, TempDisp(c, lv), 0)
   return cc
 }
 
@@ -821,14 +1008,44 @@ func SplitAddr(c *C, n *ovid/parse.Node) *ovid/parse.Node {
   return n
 }
 
-// EmitAddr evaluates an address into rax, less its constant terms, which
-// it returns; -1 << 62 on an error.
+// AddrMode reports whether n, an address with its constant terms taken
+// off, is a local in a register or the sum of two; c.amBase and c.amIndex
+// (-1 for none) then name them.
+func AddrMode(c *C, n *ovid/parse.Node) bool {
+  c.amIndex = -1
+  if Operand(c, n) == KREG {
+    c.amBase = c.opv
+    return true
+  }
+  if n != 0 as *ovid/parse.Node && n.op == ovid/parse.OP_ADD {
+    if Operand(c, n.left) == KREG {
+      var l i64 = c.opv
+      if Operand(c, n.right) == KREG {
+        c.amBase = l
+        c.amIndex = c.opv
+        return true
+      }
+    }
+  }
+  return false
+}
+
+// EmitAddr makes an address usable as a memory operand: c.amBase is its
+// base register, c.amIndex its index register (-1 for none), and the
+// result its displacement, or ADDRERR. Locals in registers serve as they
+// are; anything else is evaluated into rax. Read the three before emitting
+// anything else.
 func EmitAddr(c *C, n *ovid/parse.Node, lv i64) i64 {
   n = SplitAddr(c, n)
   var d i64 = c.addrd
+  if AddrMode(c, n) {
+    return d
+  }
   if EmitExpr(c, n, lv) != 0 {
     return ADDRERR
   }
+  c.amBase = 0
+  c.amIndex = -1
   return d
 }
 
@@ -844,22 +1061,33 @@ func EmitStore(c *C, addr *ovid/parse.Node, val *ovid/parse.Node, width i64, off
       return c.err
     }
     if k == KIMM {
-      return ovid/asm.StoreMemImm(c.code, width, 0, off + d, v)
+      return ovid/asm.StoreMemImm(c.code, width, c.amBase, c.amIndex, off + d, v)
     }
-    LoadOpnd(c, 1, k, v)
-    return ovid/asm.StoreMemReg(c.code, width, 1, 0, off + d)
+    if k == KREG {
+      return ovid/asm.StoreMemReg(c.code, width, v, c.amBase, c.amIndex, off + d)
+    }
+    ovid/asm.MovRcxMemRbp(c.code, v)
+    return ovid/asm.StoreMemReg(c.code, width, 1, c.amBase, c.amIndex, off + d)
   }
-  var base *ovid/parse.Node = SplitAddr(c, addr)
+  var n *ovid/parse.Node = SplitAddr(c, addr)
   var bd i64 = c.addrd
-  if Operand(c, base) == KMEM {
+  if AddrMode(c, n) {
+    var base i64 = c.amBase
+    var index i64 = c.amIndex
+    if EmitExpr(c, val, 0) != 0 {
+      return c.err
+    }
+    return ovid/asm.StoreMemReg(c.code, width, 0, base, index, off + bd)
+  }
+  if Operand(c, n) == KMEM {
     var slot i64 = c.opv
     if EmitExpr(c, val, 0) != 0 {
       return c.err
     }
     ovid/asm.MovRcxMemRbp(c.code, slot)
-    return ovid/asm.StoreMemReg(c.code, width, 0, 1, off + bd)
+    return ovid/asm.StoreMemReg(c.code, width, 0, 1, -1, off + bd)
   }
-  if EmitExpr(c, base, 0) != 0 {
+  if EmitExpr(c, n, 0) != 0 {
     return c.err
   }
   StoreTemp(c, 0)
@@ -867,34 +1095,51 @@ func EmitStore(c *C, addr *ovid/parse.Node, val *ovid/parse.Node, width i64, off
     return c.err
   }
   ovid/asm.MovRcxMemRbp(c.code, TempDisp(c, 0))
-  return ovid/asm.StoreMemReg(c.code, width, 0, 1, off + bd)
+  return ovid/asm.StoreMemReg(c.code, width, 0, 1, -1, off + bd)
 }
 
-// EmitAssign sets the local s names, at disp, to s.val.
-func EmitAssign(c *C, s *ovid/parse.Node, disp i64) i64 {
+// EmitAssign sets the local s names, whose record is loc, to s.val.
+func EmitAssign(c *C, s *ovid/parse.Node, loc i64) i64 {
+  var reg i64 = load64(loc + LOC_REG)
+  var disp i64 = load64(loc + 16)
   var k i64 = Operand(c, s.val)
   var v i64 = c.opv
+  if reg >= 0 && k != KNONE {
+    return LoadOpnd(c, reg, k, v)
+  }
   if k == KIMM {
     return ovid/asm.MovMemRbpImm(c.code, disp, v)
   }
-  // x = x op operand works on the slot in place.
+  if k == KREG {
+    return ovid/asm.MovMemRbpReg(c.code, v, disp)
+  }
+  // x = x op operand works on x in place.
   var n *ovid/parse.Node = Uncast(s.val)
   if n != 0 as *ovid/parse.Node && AluOf(n.op) >= 0 {
     var l *ovid/parse.Node = Uncast(n.left)
     if l != 0 as *ovid/parse.Node && l.op == ovid/parse.OP_NAME && l.pkgn == 0 && ovid/mem.Eq(l.namep, l.namen, s.namep, s.namen) {
       k = Operand(c, n.right)
       v = c.opv
-      if k == KIMM {
-        return ovid/asm.AluMemImm(c.code, AluOf(n.op), disp, v)
-      }
-      if k == KMEM {
+      if k != KNONE {
+        if reg >= 0 {
+          return AluOpnd(c, AluOf(n.op), reg, k, v)
+        }
+        if k == KIMM {
+          return ovid/asm.AluMemImm(c.code, AluOf(n.op), disp, v)
+        }
+        if k == KREG {
+          return ovid/asm.AluMemReg(c.code, AluOf(n.op), disp, v)
+        }
         ovid/asm.MovRaxMemRbp(c.code, v)
-        return ovid/asm.AluMemRax(c.code, AluOf(n.op), disp)
+        return ovid/asm.AluMemReg(c.code, AluOf(n.op), disp, 0)
       }
     }
   }
   if EmitExpr(c, s.val, 0) != 0 {
     return c.err
+  }
+  if reg >= 0 {
+    return ovid/asm.MovRegReg(c.code, reg, 0)
   }
   return ovid/asm.MovMemRbpRax(c.code, disp)
 }
@@ -1034,7 +1279,11 @@ func EmitExpr(c *C, n *ovid/parse.Node, lv i64) i64 {
     }
     var loc i64 = FindLoc(c, n.namep, n.namen)
     if loc != 0 {
-      ovid/asm.MovRaxMemRbp(c.code, load64(loc + 16))
+      if load64(loc + LOC_REG) >= 0 {
+        ovid/asm.MovRegReg(c.code, 0, load64(loc + LOC_REG))
+      } else {
+        ovid/asm.MovRaxMemRbp(c.code, load64(loc + 16))
+      }
       return 0
     }
     var con *ovid/parse.Decl = ovid/parse.FindDecl(c.pkg.cs, n.namep, n.namen)
@@ -1098,7 +1347,7 @@ func EmitExpr(c *C, n *ovid/parse.Node, lv i64) i64 {
     if fd == ADDRERR {
       return c.err
     }
-    ovid/asm.LoadMem(c.code, 64, 0, foff + fd)
+    ovid/asm.LoadMem(c.code, 64, c.amBase, c.amIndex, foff + fd)
     return 0
   }
   if op == ovid/parse.OP_CALL {
@@ -1118,7 +1367,7 @@ func EmitExpr(c *C, n *ovid/parse.Node, lv i64) i64 {
     } else if op == ovid/parse.OP_LOAD32 {
       width = 32
     }
-    ovid/asm.LoadMem(c.code, width, 0, ld)
+    ovid/asm.LoadMem(c.code, width, c.amBase, c.amIndex, ld)
     return 0
   }
   if !UnaryOp(op) {
@@ -1167,7 +1416,7 @@ func EmitStmt(c *C, s *ovid/parse.Node) i64 {
     if loc == 0 {
       return Fail(c, 2)
     }
-    return EmitAssign(c, s, load64(loc + 16))
+    return EmitAssign(c, s, loc)
   }
   if op == ovid/parse.OP_SETFIELD {
     var off i64 = FieldOff(c, s.base, s.namep, s.namen)
@@ -1260,7 +1509,9 @@ func EmitFunc(c *C, fn *ovid/parse.Decl) i64 {
   if c.peak >= 0 {
     tempBytes = (c.peak + 1) * 8
   }
-  var frame i64 = c.localBytes + tempBytes
+  AllocRegs(c, body, ovid/parse.CountDecls(c.fn.sub))
+  c.saveBase = 0 - (c.localBytes + tempBytes)
+  var frame i64 = (c.localBytes + tempBytes) + (c.nsaved * 8)
   if (frame % 16) != 0 {
     frame = frame + 8
   }
@@ -1272,13 +1523,23 @@ func EmitFunc(c *C, fn *ovid/parse.Decl) i64 {
   // its declaration has run, and a temp is written before it is read.
   ovid/asm.SubRsp(c.code, frame)
   var i i64 = 0
+  while i < c.nsaved {
+    ovid/asm.MovMemRbpReg(c.code, load64(c.saved + (i * 8)), c.saveBase - ((i + 1) * 8))
+    i = i + 1
+  }
+  i = 0
   pa = c.fn.sub
   while pa != 0 as *ovid/parse.Decl {
     var loc i64 = FindLoc(c, pa.namep, pa.namen)
     if loc == 0 {
       return Fail(c, 2)
     }
-    ovid/asm.MovMemRbpReg(c.code, ArgReg(i), load64(loc + 16))
+    var r i64 = load64(loc + LOC_REG)
+    if r < 0 {
+      ovid/asm.MovMemRbpReg(c.code, ArgReg(i), load64(loc + 16))
+    } else if r != ArgReg(i) {
+      ovid/asm.MovRegReg(c.code, r, ArgReg(i))
+    }
     i = i + 1
     pa = pa.next
   }
@@ -1297,6 +1558,11 @@ func EmitFunc(c *C, fn *ovid/parse.Decl) i64 {
     ovid/asm.XorRaxRax(c.code)
   }
   ovid/asm.Mark(c.code, c.epi)
+  i = 0
+  while i < c.nsaved {
+    ovid/asm.MovRegMemRbp(c.code, load64(c.saved + (i * 8)), c.saveBase - ((i + 1) * 8))
+    i = i + 1
+  }
   ovid/asm.Leave(c.code)
   ovid/asm.Ret(c.code)
   return 0
