@@ -1,5 +1,6 @@
 set -e
-ovid replace fn:calc.Mid <<'EOF'
+h=$(ovid show fn:calc.Mid | sed -n '1s/.*hash=//p')
+ovid replace fn:calc.Mid --expect "$h" <<'EOF'
 func Mid(lo i64, hi i64) i64 {
   return lo + (hi - lo) / 2
 }

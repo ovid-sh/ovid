@@ -1,5 +1,6 @@
 set -e
-ovid insert --after fn:shop.Total <<'EOF'
+h=$(ovid show fn:shop.Total | sed -n '1s/.*hash=//p')
+ovid insert --after fn:shop.Total --expect "$h" <<'EOF'
 // Discount takes 10% off a total of 100 or more.
 func Discount(total i64) i64 {
   if total >= 100 {
