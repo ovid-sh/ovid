@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"runtime/debug"
+	"strconv"
 	"strings"
 
 	"ovid/internal/tool"
@@ -147,11 +148,21 @@ func main() {
 		}
 		os.Exit(tool.Refs(dirArg(a, 1), a.pos[0], w))
 	case "grep":
-		a := parse(cmd, argv, []string{"C", "pkg"}, []string{"std"})
+		a := parse(cmd, argv, []string{"C", "pkg", "offset", "limit"}, []string{"std"})
 		if len(a.pos) != 1 {
-			usageErr(cmd, "usage: ovid grep <regexp> [--pkg P] [--std]")
+			usageErr(cmd, "usage: ovid grep <regexp> [--pkg P] [--std] [--offset N] [--limit N]")
 		}
-		os.Exit(tool.Grep(dirArg(a, 1), a.pos[0], a.vals["pkg"], a.bools["std"], w))
+		offset, limit := 0, tool.GrepLimit
+		for k, p := range map[string]*int{"offset": &offset, "limit": &limit} {
+			if v, ok := a.vals[k]; ok {
+				n, err := strconv.Atoi(v)
+				if err != nil || n < 0 {
+					usageErr(cmd, "--"+k+" takes a count, got "+strconv.Quote(v))
+				}
+				*p = n
+			}
+		}
+		os.Exit(tool.Grep(dirArg(a, 1), a.pos[0], a.vals["pkg"], a.bools["std"], offset, limit, w))
 	case "edit":
 		a := parse(cmd, argv, []string{"C"}, []string{"dry-run", "require-clean", "allow-broken", "show", "force"})
 		if len(a.pos) != 1 {

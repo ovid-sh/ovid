@@ -166,8 +166,10 @@ ovid show <id|name>... [--plain] [--json]
   "  // @id" after each line where a statement starts (--plain omits them).
 ovid refs <id|name>          {id,kind,in,file,line,col,source} per use; last:
   {"ok":true,target,count,files,by_pkg:{package: n},external}
-ovid grep <regexp> [--pkg P] [--std]
-  {file,line,col,match,source,decl,stmt} per match (RE2 syntax).
+ovid grep <regexp> [--pkg P] [--std] [--offset N] [--limit N]
+  {file,line,col,match,source,decl,stmt} per match (RE2 syntax), at most
+  200 unless --limit (0: all); last: {"ok",count,total,offset,has_more,
+  next_offset}.
 ovid edit <file|-> [--dry-run] [--require-clean|--allow-broken] [--show] [--force]   see: ovid help edit
 ovid replace <id> | insert --after <id> | insert --before <id> | append <id>
   | delete <id>   [--expect H] [--text-file F] [--dry-run] [--require-clean|--allow-broken]

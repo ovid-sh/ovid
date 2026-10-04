@@ -353,6 +353,25 @@ func editJSON(t *testing.T, dir string, req any, flags ...string) (map[string]an
 	return last(t, b.String()), code
 }
 
+func TestGrepPages(t *testing.T) {
+	dir := mkmod(t, demo("package demo\n\nimport ovid/io\n\nfunc main(io *ovid/io.Cap) i64 {\n  var x i64 = 1\n  x = x + 1\n  return x\n}\n"))
+	var b bytes.Buffer
+	Grep(dir, `\bx\b`, "", false, 1, 2, &b)
+	lines := strings.Split(strings.TrimSpace(b.String()), "\n")
+	end := last(t, b.String())
+	if len(lines) != 3 || end["total"] != 4.0 || end["count"] != 2.0 || end["has_more"] != true || end["next_offset"] != 3.0 {
+		t.Fatalf("page: %s", b.String())
+	}
+	if !strings.Contains(lines[0], `"stmt":"st:demo.main:2"`) || !strings.Contains(lines[0], `"decl":"fn:demo.main"`) {
+		t.Fatalf("enclosing nodes: %s", lines[0])
+	}
+	b.Reset()
+	Grep(dir, `\bx\b`, "", false, 3, 0, &b)
+	if end := last(t, b.String()); end["count"] != 1.0 || end["has_more"] != false {
+		t.Fatalf("last page: %s", b.String())
+	}
+}
+
 // hashOf is the hash `ovid show` would print for id now.
 func hashOf(t *testing.T, dir, id string) string {
 	t.Helper()
