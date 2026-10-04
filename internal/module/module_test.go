@@ -51,4 +51,14 @@ func TestHashTellsTwinsApart(t *testing.T) {
 	if a == "" || a == b {
 		t.Fatalf("identical statements share hash %q", a)
 	}
+	// The printed forms are the leading digits of full digests.
+	if d := m.Digest("st:m.main:2"); len(a) != 12 || len(d) != 64 || d[:12] != a {
+		t.Fatalf("hash %q, digest %q", a, d)
+	}
+	if r, d := m.Revision(), m.RevisionDigest(); len(r) != 16 || len(d) != 64 || d[:16] != r {
+		t.Fatalf("revision %q, digest %q", r, d)
+	}
+	if m.Digest("st:m.main:99") != "" || m.Hash("st:m.main:99") != "" {
+		t.Fatal("an unknown id has a hash")
+	}
 }

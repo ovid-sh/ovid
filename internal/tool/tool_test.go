@@ -947,6 +947,19 @@ func TestSelfHost(t *testing.T) {
 		t.Fatalf("%d %q", code, out)
 	}
 
+	// Both compilers compute one revision, over ovid.mod, the module, and
+	// the std they loaded: prog names a std directory, hello uses the
+	// built-in one on the Go side and the same files by --std here.
+	for _, dir := range []string{prog, hello} {
+		b.Reset()
+		Check(dir, false, &b)
+		want := last(t, b.String())["revision"]
+		out, _ := run(t, s1, "check", dir, "--std", stdDir)
+		if got := last(t, out)["revision"]; got != want || want == nil {
+			t.Fatalf("revision of %s: self-hosted %v, go %v", dir, got, want)
+		}
+	}
+
 	// The self-hosted checker names each error's node and source line, and
 	// reports a second decl of a name once, at that decl.
 	bad := mkmod(t, demo("package demo\nimport ovid/io\nfunc F() i64 {\n  return 1\n}\nfunc F() i64 {\n  return 2\n}\nfunc main(io *ovid/io.Cap) i64 {\n  var x i64 = true\n  return x\n}\n"))
@@ -1024,6 +1037,65 @@ func TestSelfHostLarge(t *testing.T) {
 	_, want := run(t, g)
 	if _, got := run(t, s); got != want {
 		t.Fatalf("exit %d, want %d", got, want)
+	}
+}
+
+// TestRevisionCoversBuild: the revision moves when ovid.mod or a loaded std
+// file changes, not only when a module file does.
+func TestRevisionCoversBuild(t *testing.T) {
+	stdDir := t.TempDir()
+	for _, rel := range []string{"ovid/io/io.ov", "ovid/mem/mem.ov"} {
+		src, err := os.ReadFile(filepath.Join(repo(t), "std", rel))
+		if err != nil {
+			t.Fatal(err)
+		}
+		os.MkdirAll(filepath.Dir(filepath.Join(stdDir, rel)), 0o755)
+		if err := os.WriteFile(filepath.Join(stdDir, rel), src, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	files := demo("package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  return 0\n}\n")
+	files["alt/main.ov"] = "package alt\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  return 2\n}\n"
+	files["ovid.mod"] = "module demo\nentry demo\nstd " + stdDir + "\n"
+	dir := mkmod(t, files)
+	rev := func() string {
+		t.Helper()
+		var b bytes.Buffer
+		if code := Check(dir, false, &b); code != 0 {
+			t.Fatalf("check: %s", b.String())
+		}
+		r, _ := last(t, b.String())["revision"].(string)
+		if len(r) != 16 {
+			t.Fatalf("revision %q", r)
+		}
+		return r
+	}
+	r0 := rev()
+	if rev() != r0 {
+		t.Fatal("the revision is not stable")
+	}
+	if err := os.WriteFile(filepath.Join(dir, "ovid.mod"), []byte("module demo\nentry alt\nstd "+stdDir+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r1 := rev()
+	if r1 == r0 {
+		t.Fatal("changing the entry in ovid.mod kept the revision")
+	}
+	io := filepath.Join(stdDir, "ovid/io/io.ov")
+	src, _ := os.ReadFile(io)
+	if err := os.WriteFile(io, append(src, []byte("\n// changed\n")...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if rev() == r1 {
+		t.Fatal("changing a loaded std file kept the revision")
+	}
+	// A std file that is not loaded does not count.
+	r2 := rev()
+	mem := filepath.Join(stdDir, "ovid/mem/mem.ov")
+	src, _ = os.ReadFile(mem)
+	os.WriteFile(mem, append(src, []byte("\n// changed\n")...), 0o644)
+	if rev() != r2 {
+		t.Fatal("changing a std file that is not loaded moved the revision")
 	}
 }
 
