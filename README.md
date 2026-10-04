@@ -45,11 +45,11 @@ Every command prints JSON lines and the last line has `"ok"`. Exit codes:
 | `ovid test [--run substr] [--list]` | each `TestX(io *ovid/io.Cap) i64` in its own process; 0 passes; a failure names the `return` that produced it, a crash its signal (on Linux, the statement and call stack) |
 | `ovid outline [--pkg P]` | packages, or a package's decls with signature, doc, struct size, lines, hash |
 | `ovid show <id\|name>... [--plain] [--exprs]` | source of a node, each statement line tagged with its id; a statement's expressions listed with ids and hashes |
-| `ovid refs <id\|name>` | every use of a func, type, field, const, param, or local |
+| `ovid refs <id\|name>` | every use the checker resolves to a func, type, field, const, param, or local |
 | `ovid grep <regexp>` | text matches, each tagged with its enclosing decl and statement id |
 | `ovid edit <file\|-> [--show]` | batch of replace/delete/insert/append ops, all or nothing; returns new ids and hashes |
 | `ovid replace <id>`, `insert --after <id>`, `append <id>`, `delete <id>` | one edit op with its code on stdin, so a heredoc needs no JSON escaping |
-| `ovid rename <id\|name> <new>` | token-precise rename; refuses collisions and new errors |
+| `ovid rename <id\|name> <new>` | rewrites the declaration and the uses the checker resolved to it, never a field or local spelled the same; refuses collisions and new errors |
 | `ovid move <id\|name>... <pkg>` | move decls to another (or a new) package, all or none; requalifies uses, adds imports |
 | `ovid dump` | the program tree as JSON |
 

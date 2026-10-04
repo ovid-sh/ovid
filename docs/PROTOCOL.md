@@ -161,6 +161,10 @@ afterwards (nonzero only with `--allow-broken`). Edit adds
 it wrote and the new hashes of the decls it touched, so a follow-up edit can
 `expect` them without reading again. Rename adds `from`, `id`, `to`, `refs`,
 `edits`; move adds `from`, `to` (the new id), `file`, `refs`, `edits`.
+`refs` counts the uses the checker resolved to the declaration, the same
+ones `ovid refs` lists; rename rewrites exactly their name tokens and the
+declaration's own, so a field, local, or declaration of the same spelling
+in another namespace is never touched.
 
 ## Concurrency
 

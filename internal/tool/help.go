@@ -183,7 +183,9 @@ ovid show <id|name>... [--plain] [--json] [--exprs]
   expression inside it follows: "//   ex:id line:col text  hash=H type=T",
   in source order, outer before inner. --json: "exprs":[{id,line,col,text,
   hash,type}]. Replace one by id to change part of a statement.
-ovid refs <id|name>          {id,kind,in,file,line,col,source} per use; last:
+ovid refs <id|name>          {id,kind,in,file,line,col,source} per use, in
+  source order: the names the checker resolved to it, so a field or local
+  spelled like a type, func, or const is not a use of it; last:
   {"ok":true,target,count,files,by_pkg:{package: n},external}
 ovid grep <regexp> [--pkg P] [--std] [--offset N] [--limit N]
   {file,line,col,match,source,decl,stmt} per match (RE2 syntax), at most
@@ -199,8 +201,9 @@ ovid replace <id> | insert --after <id> | insert --before <id> | append <id>
     EOF
   Same checks and result as ovid edit.
 ovid rename <id|name> <new> [--dry-run]
-  Rewrites only the tokens that name it; refuses collisions and changes that
-  add check errors.
+  Rewrites the declaration's name and each use refs lists, nothing else (a
+  field, local, comment, or string spelled the same is left alone); refuses
+  collisions and changes that add check errors.
 ovid move <id|name>... <pkg> [--file pkg/x.ov] [--dry-run]
   Moves funcs, types, or consts (with doc comments) to pkg, creating it if
   needed; requalifies every use and adds the imports files now need.
