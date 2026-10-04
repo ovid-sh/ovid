@@ -171,7 +171,7 @@ func MovRegImm64(c *Code, reg i64, imm i64) i64 {
 // MovRegImm encodes mov reg, imm in its shortest form: a 32-bit move that
 // zero-extends, a sign-extended imm32, or the full imm64.
 func MovRegImm(c *Code, reg i64, imm i64) i64 {
-  if imm >= 0 && imm <= 0x7fffffff {
+  if imm >= 0 && imm <= 0xffffffff {
     if reg >= 8 {
       E(c, 0x41)
     }

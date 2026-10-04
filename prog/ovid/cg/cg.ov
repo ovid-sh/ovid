@@ -1407,14 +1407,17 @@ func EmitStmt(c *C, s *ovid/parse.Node) i64 {
   }
   var op i64 = s.op
   if op == ovid/parse.OP_VAR || op == ovid/parse.OP_ASSIGN {
-    if s.val == 0 as *ovid/parse.Node {
-      if op == ovid/parse.OP_VAR {
-        return 0
-      }
-    }
     var loc i64 = FindLoc(c, s.namep, s.namen)
     if loc == 0 {
       return Fail(c, 2)
+    }
+    if s.val == 0 as *ovid/parse.Node && op == ovid/parse.OP_VAR {
+      // A declaration without a value makes the local zero, each time it
+      // runs: the frame is not cleared on entry.
+      if load64(loc + LOC_REG) >= 0 {
+        return ovid/asm.MovRegImm(c.code, load64(loc + LOC_REG), 0)
+      }
+      return ovid/asm.MovMemRbpImm(c.code, load64(loc + 16), 0)
     }
     return EmitAssign(c, s, loc)
   }
@@ -1520,7 +1523,8 @@ func EmitFunc(c *C, fn *ovid/parse.Decl) i64 {
   ovid/asm.PushReg(c.code, 5)
   ovid/asm.MovRegReg(c.code, 5, 4)
   // The frame is not cleared: the checker lets no local be read before
-  // its declaration has run, and a temp is written before it is read.
+  // its declaration has run, a declaration always writes its local (zero
+  // when it gives no value), and a temp is written before it is read.
   ovid/asm.SubRsp(c.code, frame)
   var i i64 = 0
   while i < c.nsaved {
