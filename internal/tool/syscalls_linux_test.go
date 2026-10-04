@@ -155,7 +155,8 @@ func TestOutOfMemoryAtStartup(t *testing.T) {
 }
 
 // TestTestReportsOutOfMemory: a test the runtime ended for want of memory
-// is reported as that, and no return statement of the test is blamed.
+// is reported as that, and no return statement of the test is blamed. A
+// test that prints the runtime's message and returns its code is not.
 func TestTestReportsOutOfMemory(t *testing.T) {
 	dir := mkmod(t, demo(`package demo
 import ovid/io
@@ -164,6 +165,7 @@ func TestHuge(io *ovid/io.Cap) i64 {
   return p & 1
 }
 func TestReturns71(io *ovid/io.Cap) i64 {
+  ovid/io.Eprint(strptr("out of memory\n"))
   return 71
 }
 func main(io *ovid/io.Cap) i64 {
@@ -182,7 +184,8 @@ func main(io *ovid/io.Cap) i64 {
 	if huge["id"] != "fn:demo.TestHuge" || huge["error"] != "out_of_memory" || huge["exit"] != float64(71) || huge["returned_by"] != nil || huge["ok"] != false {
 		t.Fatalf("TestHuge: %v", huge)
 	}
-	// The same code from a return statement is an ordinary failure.
+	// The same code from a return statement is an ordinary failure, even
+	// with the runtime's message in its output.
 	if plain["id"] != "fn:demo.TestReturns71" || plain["error"] != nil || plain["returned_by"] == nil {
 		t.Fatalf("TestReturns71: %v", plain)
 	}
