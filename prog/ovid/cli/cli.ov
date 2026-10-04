@@ -191,7 +191,7 @@ func CmdBuild(io *ovid/io.Cap) i64 {
     return Fail(io, strptr("compile"), strlen("compile"), tmp, en)
   }
   MkParent(io, out)
-  if ovid/io.WriteFile(io, out, ovid/io.CLen(out), b.data, b.len, 493) != 0 {
+  if ovid/io.WriteFileAtomic(io, out, ovid/io.CLen(out), b.data, b.len, 493) != 0 {
     return Fail(io, strptr("write"), strlen("write"), out, ovid/io.CLen(out))
   }
   var qb *ovid/mem.Buf = ovid/mem.New(io, 1024)

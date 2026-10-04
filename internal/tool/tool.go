@@ -143,7 +143,7 @@ func compileTo(m *module.Module, p *ir.Program, out string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	_, err = module.WriteFiles(map[string][]byte{out: bin}, 0o755)
+	err = module.ReplaceFile(out, bin, 0o755)
 	return len(bin), err
 }
 
@@ -195,7 +195,7 @@ func Run(dir string, args []string, w io.Writer) int {
 	bin := filepath.Join(tmpd, filepath.Base(m.Name))
 	exe, marks, err := compile.CompileMap(m.Prog)
 	if err == nil {
-		_, err = module.WriteFiles(map[string][]byte{bin: exe}, 0o755)
+		err = module.ReplaceFile(bin, exe, 0o755)
 	}
 	if err != nil {
 		fail(w, "compile", err.Error(), "")

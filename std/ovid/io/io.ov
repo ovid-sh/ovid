@@ -22,9 +22,16 @@ const AT_FDCWD i64 = -100
 const O_RDONLY i64 = 0
 const O_WRONLY i64 = 1
 const O_CREAT i64 = 64
+const O_EXCL i64 = 128
 const O_TRUNC i64 = 512
+const EEXIST i64 = -17
 const O_DIRECTORY i64 = 65536
 const SYS_GETDENTS64 i64 = 217
+const SYS_GETPID i64 = 39
+const SYS_FSYNC i64 = 74
+const SYS_RENAME i64 = 82
+const SYS_UNLINK i64 = 87
+const SYS_FCHMOD i64 = 91
 
 // Argc is the number of command-line arguments, the program name included.
 func Argc(io *Cap) i64 {
@@ -197,8 +204,194 @@ func WriteFile(io *Cap, path i64, pathn i64, data i64, datan i64, mode i64) i64 
     return -1
   }
   var w i64 = Write(fd, data, datan)
-  Close(fd)
+  var c i64 = Close(fd)
+  if w == 0 {
+    w = c
+  }
   return w
+}
+
+// Fsync waits until everything written to fd is on the disk. On a
+// directory's fd it makes the names in it (a create, rename, or unlink)
+// durable. It returns 0, or < 0 on error.
+func Fsync(fd i64) i64 {
+  return syscall(SYS_FSYNC, fd, 0, 0, 0, 0, 0)
+}
+
+// Rename moves the file at the NUL-terminated path from to the path to,
+// replacing what is there in one step: a reader sees the old file or the
+// new one, never a part of either.
+func Rename(from i64, to i64) i64 {
+  return syscall(SYS_RENAME, from, to, 0, 0, 0, 0)
+}
+
+// Unlink removes the name at the NUL-terminated path.
+func Unlink(path i64) i64 {
+  return syscall(SYS_UNLINK, path, 0, 0, 0, 0, 0)
+}
+
+// DirLen is the length of path's directory part, its last "/" included;
+// 0 when path has none.
+func DirLen(path i64, pathn i64) i64 {
+  while pathn > 0 && load8((path + pathn) - 1) != 47 {
+    pathn = pathn - 1
+  }
+  return pathn
+}
+
+// PutInt writes v (v >= 0) in decimal at dst, without a NUL, and returns
+// the address after the last digit.
+func PutInt(dst i64, v i64) i64 {
+  var div i64 = 1
+  while (v / div) >= 10 {
+    div = div * 10
+  }
+  while div > 0 {
+    store8(dst, 48 + ((v / div) % 10))
+    dst = dst + 1
+    div = div / 10
+  }
+  return dst
+}
+
+// Temp is a temp file that CreateTemp made: its open fd (< 0 if it could
+// not be made) and its NUL-terminated name.
+type Temp struct {
+  fd i64
+  name i64
+}
+
+// CreateTemp makes a new, empty file beside path (pathn bytes), named
+// <dir>/.<base>.<pid>.<n>.ovid-tmp, open for writing. The file is created
+// exclusively and private (0600), so a name someone else put there, a
+// symlink included, is never written through: the next n is tried. Check
+// fd on the result.
+func CreateTemp(io *Cap, path i64, pathn i64) *Temp {
+  var t *Temp = Alloc(io, sizeof(Temp)) as *Temp
+  var slash i64 = DirLen(path, pathn)
+  var tmp i64 = Alloc(io, pathn + 48)
+  var n i64 = 0
+  while n < slash {
+    store8(tmp + n, load8(path + n))
+    n = n + 1
+  }
+  store8(tmp + n, 46)
+  n = n + 1
+  var i i64 = slash
+  while i < pathn {
+    store8(tmp + n, load8(path + i))
+    n = n + 1
+    i = i + 1
+  }
+  store8(tmp + n, 46)
+  var tail i64 = PutInt((tmp + n) + 1, syscall(SYS_GETPID, 0, 0, 0, 0, 0, 0))
+  store8(tail, 46)
+  tail = tail + 1
+  t.name = tmp
+  t.fd = EEXIST
+  var try i64 = 0
+  while t.fd == EEXIST && try < 100 {
+    var end i64 = PutInt(tail, try)
+    var suffix i64 = strptr(".ovid-tmp")
+    i = 0
+    while i <= strlen(".ovid-tmp") {
+      store8(end + i, load8(suffix + i))
+      i = i + 1
+    }
+    t.fd = Open(tmp, (O_WRONLY + O_CREAT) + O_EXCL, 384)
+    try = try + 1
+  }
+  return t
+}
+
+// FillTemp writes datan bytes to the temp file t, gives it permission mode
+// (not masked by the umask) once the data is in, syncs it if sync, and
+// closes it. It returns 0, or < 0 on error, and then the file is removed.
+// An error that only close reports (a write the kernel had put off) counts.
+func FillTemp(t *Temp, data i64, datan i64, mode i64, sync bool) i64 {
+  var r i64 = Write(t.fd, data, datan)
+  if r == 0 {
+    r = syscall(SYS_FCHMOD, t.fd, mode, 0, 0, 0, 0)
+  }
+  if r == 0 && sync {
+    r = Fsync(t.fd)
+  }
+  var c i64 = Close(t.fd)
+  if r == 0 {
+    r = c
+  }
+  if r != 0 {
+    Unlink(t.name)
+  }
+  return r
+}
+
+// SyncPath syncs the file or directory at the NUL-terminated path (see
+// Fsync), which must be readable. It returns 0, or < 0 on error.
+func SyncPath(path i64) i64 {
+  var fd i64 = Open(path, O_RDONLY, 0)
+  if fd < 0 {
+    return fd
+  }
+  var r i64 = Fsync(fd)
+  var c i64 = Close(fd)
+  if r == 0 {
+    r = c
+  }
+  return r
+}
+
+// WriteFileAtomic replaces or creates path (pathn bytes) with datan bytes
+// and permission mode in one step: the data goes to a temp file in the
+// same directory (see CreateTemp), which is renamed over path. Another
+// process sees the old file or the new one, never a part, and a program
+// that is running from path can be replaced. Nothing is synced, so after a
+// power loss the file may be empty: use it for a file that can be made
+// again, WriteFileDurable for one that cannot. It returns 0, or < 0 on
+// error, and then path is untouched.
+func WriteFileAtomic(io *Cap, path i64, pathn i64, data i64, datan i64, mode i64) i64 {
+  var t *Temp = CreateTemp(io, path, pathn)
+  if t.fd < 0 {
+    return t.fd
+  }
+  var r i64 = FillTemp(t, data, datan, mode, false)
+  if r != 0 {
+    return r
+  }
+  r = Rename(t.name, CStr(io, path, pathn))
+  if r != 0 {
+    Unlink(t.name)
+  }
+  return r
+}
+
+// WriteFileDurable is WriteFileAtomic that also survives a crash: the
+// temp file is synced before the rename and the directory after it, so
+// once it returns 0 the new content is on the disk. The two syncs cost
+// milliseconds on a disk. It returns < 0 on error. If the temp file or the
+// rename failed, path is untouched; but the last step, syncing the
+// directory, comes after the rename, so when that is what failed path
+// already holds the new content and it is only not known to be durable.
+// A caller that must tell the two apart reads path back.
+func WriteFileDurable(io *Cap, path i64, pathn i64, data i64, datan i64, mode i64) i64 {
+  var t *Temp = CreateTemp(io, path, pathn)
+  if t.fd < 0 {
+    return t.fd
+  }
+  var r i64 = FillTemp(t, data, datan, mode, true)
+  if r != 0 {
+    return r
+  }
+  r = Rename(t.name, CStr(io, path, pathn))
+  if r != 0 {
+    Unlink(t.name)
+    return r
+  }
+  var n i64 = DirLen(path, pathn)
+  if n == 0 {
+    return SyncPath(strptr("."))
+  }
+  return SyncPath(CStr(io, path, n))
 }
 
 // Getdents reads directory entries from fd (opened with O_DIRECTORY) into
