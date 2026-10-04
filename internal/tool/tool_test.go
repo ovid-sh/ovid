@@ -10,11 +10,13 @@ import (
 	"os/exec"
 	"ovid/internal/module"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 // repo is the repository root, found from this package's directory.
@@ -1229,6 +1231,34 @@ func TestSelfHost(t *testing.T) {
 	out, code = run(t, s1, "check", broken, "--std", stdDir)
 	if d := last(t, out); code != 1 || d["fact"] != "summary" || d["ok"] != false || d["errors"] != float64(1) {
 		t.Fatalf("check of a syntax error %d: %s", code, out)
+	}
+
+	// Both dumps are valid JSON and say the same thing. A literal's bytes
+	// that are not UTF-8 (prog's asm tests have some) come out as
+	// value_hex, which loses nothing.
+	lit := mkmod(t, demo("package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  return load8(strptr(\"\\xb8\\n\") + 1) + strlen(\"é\")\n}\n"))
+	for _, dir := range []string{prog, lit} {
+		b.Reset()
+		Dump(dir, &b)
+		out, code := run(t, s1, "dump", dir, "--std", stdDir)
+		var g, o any
+		if !utf8.ValidString(out) || json.Unmarshal(b.Bytes(), &g) != nil || json.Unmarshal([]byte(out), &o) != nil || code != 0 {
+			t.Fatalf("dump of %s is not valid JSON (%d)", dir, code)
+		}
+		if !reflect.DeepEqual(g, o) {
+			t.Fatalf("dumps of %s differ", dir)
+		}
+	}
+	if b.Reset(); Dump(lit, &b) != 0 || !strings.Contains(b.String(), `"value_hex": "b80a"`) || !strings.Contains(b.String(), `"value": "é"`) {
+		t.Fatalf("dump of literals: %s", b.String())
+	}
+	// A source line that is not UTF-8 is still valid JSON in a diagnostic.
+	badSrc := mkmod(t, demo("package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  return true // \xff\xe2\x82\n}\n"))
+	b.Reset()
+	Check(badSrc, false, &b)
+	out, _ = run(t, s1, "check", badSrc, "--std", stdDir)
+	if !utf8.ValidString(out) || lines(t, out)[0]["source"] != lines(t, b.String())[0]["source"] {
+		t.Fatalf("diagnostic source: self-hosted %q, go %q", out, b.String())
 	}
 
 	// Its build leaves out _test.ov files too, so an error in one does not
