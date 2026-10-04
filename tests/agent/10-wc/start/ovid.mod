@@ -1,0 +1,2 @@
+module wc
+entry wc

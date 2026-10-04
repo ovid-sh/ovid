@@ -1,0 +1,16 @@
+package team
+
+import ovid/io
+
+// Scale is the weight of a reading x.
+func Scale(x i64) i64 {
+  return x * 3
+}
+
+func main(io *ovid/io.Cap) i64 {
+  ovid/io.PrintInt(io, Scale(5))
+  ovid/io.Print(strptr(" "))
+  ovid/io.PrintInt(io, Scale(-2))
+  ovid/io.Print(strptr("\n"))
+  return 0
+}

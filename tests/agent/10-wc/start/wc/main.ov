@@ -1,0 +1,7 @@
+package wc
+
+import ovid/io
+
+func main(io *ovid/io.Cap) i64 {
+  return 0
+}

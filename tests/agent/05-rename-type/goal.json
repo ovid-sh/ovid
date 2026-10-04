@@ -1,0 +1,12 @@
+{
+  "check": true,
+  "runs": [{"stdout": "7\n"}],
+  "contains": [
+    {"re": "^type Item struct"},
+    {"re": "^  Node \\*Item$", "count": 1},
+    {"re": "^  Item \\*Item$", "count": 1},
+    {"re": "t\\.Node\\b", "count": 3}
+  ],
+  "lacks": [{"re": "\\*Node\\b"}, {"re": "sizeof\\(Node\\)"}],
+  "xfail": "#21"
+}

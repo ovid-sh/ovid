@@ -1,0 +1,5 @@
+{
+  "check": true,
+  "runs": [{"stdout": "14 12\n"}],
+  "contains": [{"re": "^// Alpha is", "count": 1}, {"re": "^// Beta is", "count": 1}]
+}

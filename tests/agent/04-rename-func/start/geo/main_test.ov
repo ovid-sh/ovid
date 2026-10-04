@@ -1,0 +1,11 @@
+package geo
+
+import ovid/io
+import geo/shape
+
+func TestArea(io *ovid/io.Cap) i64 {
+  if geo/shape.Area(3, 4) != 12 {
+    return 1
+  }
+  return 0
+}
