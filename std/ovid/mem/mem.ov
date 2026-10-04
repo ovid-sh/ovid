@@ -77,9 +77,6 @@ func Grow(io *ovid/io.Cap, b *Buf, need i64) i64 {
     nc = nc * 2
   }
   var nd i64 = ovid/io.Alloc(io, nc)
-  if nd == 0 {
-    return -1
-  }
   Copy(nd, b.data, b.len)
   b.data = nd
   b.cap = nc

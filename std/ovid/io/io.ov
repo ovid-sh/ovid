@@ -37,8 +37,15 @@ func Arg(io *Cap, i i64) i64 {
   return load64(io.argv + (i * 8))
 }
 
-// Alloc returns n zeroed bytes (8-aligned) from the heap, or 0 when the
-// heap (128 MiB) is spent. Nothing is ever freed.
+// HEAPCHUNK is the size of each region Alloc takes from the kernel; the
+// runtime maps the first one before main runs.
+const HEAPCHUNK i64 = 128 << 20
+
+// Alloc returns n zeroed bytes (8-aligned) from the heap. Nothing is ever
+// freed. When the current region is spent it maps another, and a request
+// of more than half a region gets a mapping of its own, so the result is
+// never 0: if the kernel refuses, the program ends with exit code 125 and
+// "out of memory" on standard error.
 func Alloc(io *Cap, n i64) i64 {
   var align i64 = (n + 7) & ^7
   if align < 8 {
@@ -46,10 +53,26 @@ func Alloc(io *Cap, n i64) i64 {
   }
   var u i64 = io.used
   if (u + align) > io.size {
-    return 0
+    if align > HEAPCHUNK / 2 {
+      return Map(align)
+    }
+    io.heap = Map(HEAPCHUNK)
+    io.size = HEAPCHUNK
+    u = 0
   }
   var p i64 = io.heap + u
   io.used = u + align
+  return p
+}
+
+// Map returns n fresh zeroed bytes from the kernel (mmap, private and
+// anonymous), or ends the program when there is no memory.
+func Map(n i64) i64 {
+  var p i64 = syscall(SYS_MMAP, 0, n, 3, 34, -1, 0)
+  if p < 0 && p > -4096 {
+    Write(2, strptr("out of memory\n"), strlen("out of memory\n"))
+    syscall(SYS_EXIT, 125, 0, 0, 0, 0, 0)
+  }
   return p
 }
 
@@ -139,10 +162,6 @@ func ReadFile(io *Cap, path i64, pathn i64, outp i64, outn i64) i64 {
   }
   var sz i64 = load64(st + 48)
   var buf i64 = Alloc(io, sz + 1)
-  if buf == 0 {
-    Close(fd)
-    return -1
-  }
   var got i64 = 0
   while got < sz {
     var r i64 = Read(fd, buf + got, sz - got)
@@ -220,10 +239,8 @@ func PrintInt(io *Cap, v i64) i64 {
 // WriteInt writes v in decimal to fd.
 func WriteInt(io *Cap, fd i64, v i64) i64 {
   var mark i64 = io.used
+  var region i64 = io.heap
   var buf i64 = Alloc(io, 24)
-  if buf == 0 {
-    return -1
-  }
   // Digits go right to left; negatives are built from negative remainders
   // so the most negative i64 works too.
   var i i64 = 24
@@ -246,6 +263,8 @@ func WriteInt(io *Cap, fd i64, v i64) i64 {
     store8(buf + i, 0)
     i = i + 1
   }
-  io.used = mark
+  if io.heap == region {
+    io.used = mark
+  }
   return r
 }

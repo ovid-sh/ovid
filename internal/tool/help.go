@@ -102,7 +102,9 @@ NUL-terminated, so printing one needs only its address:
   ovid/io.Stdout(p, n)                 // n bytes at p, for non-literals
 
 Memory: no implicit allocation. ovid/io.Alloc(io, nbytes) returns an i64
-address from the heap the runtime maps; cast it: var p *Pair = raw as *Pair.
+address of zeroed bytes from the heap, which grows as needed and is never
+freed; it does not return 0 (out of memory ends the program, exit 125).
+Cast the address: var p *Pair = raw as *Pair.
 Each struct field takes 8 bytes, so a struct is 8 * fields bytes; never
 count them by hand, write sizeof(T) (T a struct; path.T for another
 package's), a compile-time i64:
