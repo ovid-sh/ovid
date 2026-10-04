@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"syscall"
 
 	"ovid/internal/module"
 )
@@ -28,7 +27,7 @@ func stage(exe []byte, dir, name string, fd int) (*staged, error) {
 	if dir != "" {
 		bin := filepath.Join(dir, name)
 		if err = module.ReplaceFile(bin, exe, 0o755); err == nil {
-			if err = syscall.Access(bin, 1); err == nil { // X_OK: fails on a noexec mount
+			if err = mayExec(bin); err == nil {
 				return &staged{path: bin, done: func() {}}, nil
 			}
 			err = fmt.Errorf("%s may not be executed: %v", bin, err)

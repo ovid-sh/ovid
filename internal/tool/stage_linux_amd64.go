@@ -36,3 +36,7 @@ func stageInMemory(exe []byte, name string, fd int) *staged {
 	}
 	return &staged{path: fmt.Sprintf("/proc/self/fd/%d", fd), extra: f, done: func() { f.Close() }}
 }
+
+// mayExec reports whether the file at path may be executed: X_OK fails on
+// a noexec mount, whatever the file's mode.
+func mayExec(path string) error { return syscall.Access(path, 1) }
