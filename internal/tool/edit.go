@@ -38,6 +38,10 @@ type EditOp struct {
 	File   string `json:"file,omitempty"`
 	Text   string `json:"text,omitempty"`
 	Expect string `json:"expect,omitempty"`
+	// Given names the fields the caller spelled out, even as "": the JSON
+	// keys of a request, or the flags of a single-op command. A field given
+	// empty is still one the op may not take.
+	Given []string `json:"-"`
 }
 
 type EditReq struct {
@@ -137,6 +141,7 @@ func parseEditReq(raw []byte) (req *EditReq, op int, err error) {
 		if err := json.Unmarshal(o, &one); err != nil {
 			return nil, i, fmt.Errorf("op %d: %v", i, err)
 		}
+		one.Given = keys
 		req.Ops = append(req.Ops, one)
 	}
 	return req, -1, nil
@@ -579,7 +584,7 @@ func strayField(op EditOp) *editErr {
 	}{{"id", op.ID != ""}, {"before", op.Before != ""}, {"after", op.After != ""},
 		{"into", op.Into != ""}, {"file", op.File != ""}, {"text", op.Text != ""}}
 	for _, f := range set {
-		if !f.on || slices.Contains(opFields[op.Op], f.k) {
+		if !(f.on || slices.Contains(op.Given, f.k)) || slices.Contains(opFields[op.Op], f.k) {
 			continue
 		}
 		hint := map[string]string{

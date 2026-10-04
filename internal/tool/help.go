@@ -255,7 +255,7 @@ Input (a file, or - for stdin) is {"ops":[...]} or a bare list of ops:
   {"op":"append","into":FUNC_OR_IF_OR_WHILE_ID,"text":STMTS}
   {"op":"append","into":"pkg/path","text":DECLS[,"file":"pkg/path/x.ov"]}
 Keys are exact: one that is not listed here, one given twice, or one
-another op takes (a replace with "before", a delete with "text"), fails
+that another op takes (a replace with "before", a delete with "text"), fails
 with bad_edit and names it; nothing is written. The same holds for the
 flags of ovid replace/insert/append/delete.
 Every op needs a guard, or it is refused (expect_required, nothing

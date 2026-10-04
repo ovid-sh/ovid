@@ -787,6 +787,10 @@ func TestEditStrayFields(t *testing.T) {
 		{EditOp{Op: "insert", ID: "st:demo.main:1", After: "st:demo.main:1", Text: "x = 2"}, `insert takes no "id"`},
 		{EditOp{Op: "insert", After: "st:demo.main:1", File: "demo/x.ov", Text: "x = 2"}, `insert takes no "file"`},
 		{EditOp{Op: "append", Into: "fn:demo.main", Before: "st:demo.main:2", Text: "x = 2"}, `append takes no "before"`},
+		// Given, even empty: "before":"" or --before= is still a field
+		// the op does not take.
+		{EditOp{Op: "replace", ID: "st:demo.main:2", Text: "return 0", Given: []string{"before"}}, `replace takes no "before"`},
+		{EditOp{Op: "delete", ID: "st:demo.main:1", Given: []string{"text"}}, `delete takes no "text"`},
 	} {
 		c.op.Expect = h
 		// Both forms: one op from the command line, and a JSON request.
@@ -796,7 +800,14 @@ func TestEditStrayFields(t *testing.T) {
 		if code != ExitFail || r["error"] != "bad_edit" || !strings.Contains(fmt.Sprint(r["message"]), c.key) || r["hint"] == nil {
 			t.Errorf("%s: %d %s", c.key, code, b.String())
 		}
-		r, code = editJSON(t, dir, c.op)
+		// In JSON a given field is a key, here spelled out empty.
+		raw, _ := json.Marshal(c.op)
+		var req map[string]any
+		json.Unmarshal(raw, &req)
+		for _, k := range c.op.Given {
+			req[k] = ""
+		}
+		r, code = editJSON(t, dir, req)
 		if code != ExitFail || r["error"] != "bad_edit" || !strings.Contains(fmt.Sprint(r["message"]), c.key) {
 			t.Errorf("%s (JSON): %d %v", c.key, code, r)
 		}
