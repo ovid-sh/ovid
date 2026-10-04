@@ -313,7 +313,7 @@ func Help(topic string, w io.Writer) int {
 
 // helpStd lists the shipped packages' declarations from their source.
 func helpStd(w io.Writer) {
-	fmt.Fprintln(w, "Shipped packages. Import them by path; they are used unless the module has its own copy.")
+	fmt.Fprintln(w, "Shipped packages. Import them by path; a module cannot have a package of the same path.")
 	var pkgs []string
 	fs.WalkDir(std.FS, ".", func(p string, d fs.DirEntry, err error) error {
 		if err == nil && !d.IsDir() && strings.HasSuffix(p, ".ov") {

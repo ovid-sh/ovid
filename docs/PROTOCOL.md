@@ -122,7 +122,7 @@ below. Codes:
 | code | when | extra fields |
 |---|---|---|
 | `usage` | bad flags or arguments (exit 64) | |
-| `load` | no `ovid.mod` above the directory, or a module or std dir unreadable | |
+| `load` | no `ovid.mod` above the directory, a module unreadable, or a bad `ovid.mod` (a `std` line is no longer accepted) | |
 | `read` | an edit file or a module file could not be read | |
 | `write` | writing failed | edit: `written_files`, the files already renamed into place |
 | `syntax` | the module does not parse; refs, rename, and move need a parsed module | edit: `op`, `file`, `line`, `col` of the op whose text broke it |
@@ -158,12 +158,20 @@ Only `fact`, `code`, and `message` are always present. Lines and columns are
 `{"fact":"truncated","more":N}` line replaces the rest.
 
 Codes from parsing and loading: `syntax`, `layout` (a file's package clause
-does not match its directory, or a file sits in the module root). From the checker: `type_mismatch`,
+does not match its directory, or a file sits in the module root),
+`reserved_path` (the module has a package with the path of one the toolchain
+ships, such as `ovid/io`). From the checker: `type_mismatch`,
 `unknown_name`, `unknown_field`, `unknown_package`, `missing_import`,
 `missing_return`, `missing_expr`, `arity`, `bad_type`, `bad_op`,
 `struct_value`, `duplicate_name`, `duplicate_id`, `duplicate_package`,
 `import_self`, `syscall_forbidden`, `bad_main`, `bad_abi`, `no_entry`,
 `bad_module`.
+
+`syscall_forbidden` is decided by where a package came from, not only by its
+name: `syscall` is valid in `ovid/io` as the toolchain ships it. A module
+cannot supply that package (`reserved_path`), and `ovid.mod` cannot name
+another standard library, so the system calls a checked program can make are
+those of the shipped `ovid/io`.
 
 ## Paths
 

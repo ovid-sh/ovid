@@ -102,11 +102,11 @@ func IsSpace(c i64) bool {
   return c == 32 || c == 9 || c == 13 || c == 11 || c == 12
 }
 
-// ReadMod parses ovid.mod: module, entry, std lines; // comments.
+// ReadMod parses ovid.mod: module and entry lines; // comments. The
+// standard library is the directory --std names (stdp/stdn), never the
+// module's choice.
 func ReadMod(m *Mod, src i64, n i64, stdp i64, stdn i64) i64 {
   var i i64 = 0
-  var sdp i64 = 0
-  var sdn i64 = 0
   while i < n {
     var ls i64 = i
     while i < n && load8(src + i) != 10 {
@@ -144,7 +144,7 @@ func ReadMod(m *Mod, src i64, n i64, stdp i64, stdn i64) i64 {
       if nf != 2 {
         var b *ovid/mem.Buf = Msg(m.io, strptr("ovid.mod: bad line "), 19)
         WStr(m.io, b, src + ls, le - ls)
-        ovid/mem.WBytes(m.io, b, strptr("; want `module <name>`, `entry <pkg>`, or `std <dir>`"), strlen("; want `module <name>`, `entry <pkg>`, or `std <dir>`"))
+        ovid/mem.WBytes(m.io, b, strptr("; want `module <name>` or `entry <pkg>`"), strlen("; want `module <name>` or `entry <pkg>`"))
         LoadErr(m, strptr("mod"), 3, 0 as *File, 0, b)
       } else if ovid/mem.Eq(f0, f0n, strptr("module"), 6) {
         m.namep = f1
@@ -153,8 +153,10 @@ func ReadMod(m *Mod, src i64, n i64, stdp i64, stdn i64) i64 {
         m.entryp = f1
         m.entryn = f1n
       } else if ovid/mem.Eq(f0, f0n, strptr("std"), 3) {
-        sdp = f1
-        sdn = f1n
+        // A module once could name its own standard library here, and with
+        // it take the right to call syscall.
+        var sb *ovid/mem.Buf = Msg(m.io, strptr("ovid.mod: the std line is no longer supported: a module always uses the standard library built into ovid; delete the line"), strlen("ovid.mod: the std line is no longer supported: a module always uses the standard library built into ovid; delete the line"))
+        LoadErr(m, strptr("mod"), 3, 0 as *File, 0, sb)
       } else {
         var u *ovid/mem.Buf = Msg(m.io, strptr("ovid.mod: unknown directive "), 28)
         WStr(m.io, u, f0, f0n)
@@ -162,19 +164,26 @@ func ReadMod(m *Mod, src i64, n i64, stdp i64, stdn i64) i64 {
       }
     }
   }
-  if stdn != 0 {
-    m.stdp = stdp
-    m.stdn = stdn
-  } else if sdn != 0 {
-    if load8(sdp) == 47 {
-      m.stdp = sdp
-      m.stdn = sdn
-    } else {
-      m.stdp = Path(m.io, m.dirp, m.dirn, sdp, sdn)
-      m.stdn = (m.dirn + 1) + sdn
-    }
-  }
+  m.stdp = stdp
+  m.stdn = stdn
   return 0
+}
+
+// StdHas reports whether the standard library holds a package of this
+// path: a directory there with a .ov file in it.
+func StdHas(m *Mod, pathp i64, pathn i64) bool {
+  if m.stdn == 0 {
+    return false
+  }
+  var dir i64 = Path(m.io, m.stdp, m.stdn, pathp, pathn)
+  var e *File = ListDir(m.io, dir)
+  while e != 0 as *File {
+    if !EntIsDir(m.io, dir, e) && HasOvSuffix(e.relp, e.reln) {
+      return true
+    }
+    e = e.next
+  }
+  return false
 }
 
 // ListDir returns the entries of a directory as a list of Files used as
@@ -352,6 +361,16 @@ func AddPackage(m *Mod, k *Pkg) i64 {
         ovid/mem.WByte(m.io, m.hint, 96)
         LoadErr(m, strptr("layout"), 6, f, one.off, lb)
       } else if k.ok == 0 {
+        if k.std == 0 && StdHas(m, k.pathp, k.pathn) {
+          // Once for the package, at its first file's package clause.
+          var rb *ovid/mem.Buf = Msg(m.io, strptr("package "), 8)
+          ovid/mem.WBytes(m.io, rb, k.pathp, k.pathn)
+          ovid/mem.WBytes(m.io, rb, strptr(" is one the toolchain ships; a module may not have its own"), strlen(" is one the toolchain ships; a module may not have its own"))
+          m.hint = Msg(m.io, strptr("move these files to a package path of the module's own, and import "), strlen("move these files to a package path of the module's own, and import "))
+          ovid/mem.WBytes(m.io, m.hint, k.pathp, k.pathn)
+          ovid/mem.WBytes(m.io, m.hint, strptr(" for the shipped one"), strlen(" for the shipped one"))
+          LoadErr(m, strptr("reserved_path"), 13, f, one.off, rb)
+        }
         k.ok = 1
         k.file = one.file
         k.off = one.off
@@ -476,7 +495,7 @@ func StdPass(m *Mod) i64 {
   if m.stdn == 0 {
     var b *ovid/mem.Buf = Msg(m.io, strptr("module imports "), 15)
     ovid/mem.WBytes(m.io, b, need.pathp, need.pathn)
-    ovid/mem.WBytes(m.io, b, strptr(" but has no `std <dir>` line in ovid.mod; add one or pass --std <dir> (the directory holding ovid/io and ovid/mem)"), strlen(" but has no `std <dir>` line in ovid.mod; add one or pass --std <dir> (the directory holding ovid/io and ovid/mem)"))
+    ovid/mem.WBytes(m.io, b, strptr(" and no standard library was given; pass --std <dir> (the directory holding ovid/io and ovid/mem)"), strlen(" and no standard library was given; pass --std <dir> (the directory holding ovid/io and ovid/mem)"))
     LoadErr(m, strptr("no_std"), 6, 0 as *File, 0, b)
     return 0
   }
@@ -606,7 +625,8 @@ func Revision(m *Mod) i64 {
   return m.rev
 }
 
-// Load reads and parses the module in dir (stdp/stdn: --std override, or 0).
+// Load reads and parses the module in dir (stdp/stdn: the --std directory,
+// or 0 for none).
 // notests leaves out _test.ov files, as build does. Check m.nerr; on 0,
 // m.pkgs holds the program. Emit writes it as JSON.
 func Load(io *ovid/io.Cap, dirp i64, dirn i64, stdp i64, stdn i64, notests bool) *Mod {

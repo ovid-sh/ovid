@@ -34,6 +34,9 @@ type Package struct {
 	Types   []TypeDecl `json:"types,omitempty"`
 	Funcs   []Func     `json:"funcs,omitempty"`
 	Span    Span       `json:"-"`
+	// Sys says the package may call syscall: it is the toolchain's own
+	// copy of a shipped package, not one a module or its std line supplied.
+	Sys bool `json:"-"`
 }
 
 type Import struct {

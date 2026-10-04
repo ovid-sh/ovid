@@ -143,14 +143,13 @@ func load(dir string, overlay map[string][]byte, noTests bool) (*Module, error) 
 		return nil, err
 	}
 	m.modSrc = modSrc
-	var stdDir string
 	for _, ln := range strings.Split(string(modSrc), "\n") {
 		f := strings.Fields(ln)
 		if len(f) == 0 || strings.HasPrefix(f[0], "//") {
 			continue
 		}
 		if len(f) != 2 {
-			return nil, fmt.Errorf("ovid.mod: bad line %q; want `module <name>`, `entry <pkg>`, or `std <dir>`", ln)
+			return nil, fmt.Errorf("ovid.mod: bad line %q; want `module <name>` or `entry <pkg>`", ln)
 		}
 		switch f[0] {
 		case "module":
@@ -158,16 +157,12 @@ func load(dir string, overlay map[string][]byte, noTests bool) (*Module, error) 
 		case "entry":
 			m.Entry = f[1]
 		case "std":
-			stdDir = f[1]
-			if !filepath.IsAbs(stdDir) {
-				stdDir = filepath.Join(root, stdDir)
-			}
+			// A module once could name its own standard library here, and
+			// with it take the right to call syscall.
+			return nil, fmt.Errorf("ovid.mod: the std line is no longer supported: a module always uses the standard library built into ovid; delete the line")
 		default:
 			return nil, fmt.Errorf("ovid.mod: unknown directive %q", f[0])
 		}
-	}
-	if st, err := os.Stat(stdDir); stdDir != "" && (err != nil || !st.IsDir()) {
-		return nil, fmt.Errorf("ovid.mod: std directory %s does not exist; fix the path, or delete the std line to use the standard library built into ovid", stdDir)
 	}
 	m.Prog = &ir.Program{Module: m.Name, Entry: m.Entry}
 
@@ -220,7 +215,7 @@ func load(dir string, overlay map[string][]byte, noTests bool) (*Module, error) 
 	sort.Strings(paths)
 	have := map[string]bool{}
 	for _, pk := range paths {
-		m.addPackage(pk, byPkg[pk])
+		m.addPackage(pk, byPkg[pk], fromModule)
 		have[pk] = true
 	}
 
@@ -240,12 +235,12 @@ func load(dir string, overlay map[string][]byte, noTests bool) (*Module, error) 
 		}
 		sort.Strings(need)
 		for _, pk := range need {
-			files := stdFiles(stdDir, pk)
+			files := stdFiles(pk)
 			if len(files) == 0 {
 				continue
 			}
 			m.Std[pk] = true
-			m.addPackage(pk, files)
+			m.addPackage(pk, files, fromToolchain)
 		}
 	}
 	sort.SliceStable(m.Prog.Packages, func(i, j int) bool { return m.Prog.Packages[i].Path < m.Prog.Packages[j].Path })
@@ -261,21 +256,9 @@ func exists(p string) bool {
 	return err == nil
 }
 
-func stdFiles(dir, pkg string) []*File {
+// stdFiles are the files of a package the toolchain ships, or none.
+func stdFiles(pkg string) []*File {
 	var out []*File
-	if dir != "" {
-		ents, _ := os.ReadDir(filepath.Join(dir, filepath.FromSlash(pkg)))
-		for _, e := range ents {
-			if !e.IsDir() && strings.HasSuffix(e.Name(), ".ov") {
-				p := filepath.Join(dir, filepath.FromSlash(pkg), e.Name())
-				src, err := os.ReadFile(p)
-				if err == nil {
-					out = append(out, &File{Path: "std:" + pkg + "/" + e.Name(), Abs: p, Src: src})
-				}
-			}
-		}
-		return out
-	}
 	ents, _ := fs.ReadDir(std.FS, pkg)
 	for _, e := range ents {
 		if !e.IsDir() && strings.HasSuffix(e.Name(), ".ov") {
@@ -288,7 +271,24 @@ func stdFiles(dir, pkg string) []*File {
 	return out
 }
 
-func (m *Module) addPackage(pkgPath string, files []*File) {
+// Where a package's files came from.
+const (
+	fromModule    = iota // the module's own directories
+	fromToolchain        // the standard library built into ovid
+)
+
+// shipped reports whether the toolchain ships a package of this path.
+func shipped(pkgPath string) bool {
+	ents, _ := fs.ReadDir(std.FS, pkgPath)
+	for _, e := range ents {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".ov") {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *Module) addPackage(pkgPath string, files []*File, from int) {
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	var merged *ir.Package
 	for _, f := range files {
@@ -316,6 +316,13 @@ func (m *Module) addPackage(pkgPath string, files []*File) {
 		}
 		if merged == nil {
 			merged = pkg
+			merged.Sys = from == fromToolchain
+			if from == fromModule && shipped(pkgPath) {
+				// Once for the package, at its first file's package clause.
+				m.Errors = append(m.Errors, m.diagAt(idx, pkg.Span.Off, pkg.Span.End, "reserved_path",
+					"package "+pkgPath+" is one the toolchain ships; a module may not have its own",
+					"move these files to a package path of the module's own, and import "+pkgPath+" for the shipped one"))
+			}
 			continue
 		}
 		seen := map[string]bool{}

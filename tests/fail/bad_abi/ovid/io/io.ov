@@ -1,7 +1,0 @@
-// The module's own ovid/io replaces the shipped one, and its Cap lacks the
-// fields the runtime fills.
-package ovid/io
-type Cap struct { // error: bad_abi 1 expected="argc, argv, heap, used, size (all i64, in order)"
-  argc i64
-  heap i64
-}

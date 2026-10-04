@@ -637,7 +637,9 @@ func CheckExpr(c *Ch, n *ovid/parse.Node) i64 {
     return SetTy(c, fn.typp, fn.typn)
   }
   if op == ovid/parse.OP_SYSCALL {
-    if !ovid/mem.Eq(c.pathp, c.pathn, strptr("ovid/io"), strlen("ovid/io")) {
+    // The path alone is not enough: the package must have come from the
+    // standard library, which a module cannot supply.
+    if !ovid/mem.Eq(c.pathp, c.pathn, strptr("ovid/io"), strlen("ovid/io")) || c.pkg.std == 0 {
       Err(c, strptr("syscall_forbidden"), strlen("syscall_forbidden"), strptr("only ovid/io"), strlen("only ovid/io"))
     }
     var a *ovid/parse.Node = n.args
