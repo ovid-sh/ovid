@@ -86,7 +86,8 @@ type Node struct {
 // Decl is an import (name = path), const, type, field, func, or param.
 // typ is the const/field/param type or the func result; sub holds fields or
 // params. A func also has its package (set by IndexFuncs) and, for the code
-// generator, its label and whether it is reachable from main.
+// generator, its label and whether it is reachable from main. The checker
+// sets dup on a func whose name was already declared in its package.
 type Decl struct {
   namep i64
   namen i64
@@ -102,6 +103,7 @@ type Decl struct {
   pkg *Pkg
   lab i64
   live i64
+  dup i64
 }
 
 // Pkg is one package: the merged result of its files.
