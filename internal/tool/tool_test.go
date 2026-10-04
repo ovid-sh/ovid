@@ -673,6 +673,14 @@ func TestProgChecks(t *testing.T) {
 	}
 }
 
+// TestProgTests runs the self-hosted compiler's own Ovid tests.
+func TestProgTests(t *testing.T) {
+	var b bytes.Buffer
+	if code := Test(filepath.Join(repo(t), "prog"), "", false, &b); code != 0 {
+		t.Fatalf("prog tests fail:\n%s", b.String())
+	}
+}
+
 func TestMove(t *testing.T) {
 	dir := mkmod(t, map[string]string{
 		"demo/main.ov": `package demo
