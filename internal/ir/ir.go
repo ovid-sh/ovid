@@ -1,12 +1,14 @@
 // Package ir is the Ovid program tree. The source of truth is .ov text; the
 // parser builds this tree with an id and a source span on every node. The JSON
-// form (ovid dump) is a derived view for tools and for the self-hosted CLI.
+// form (ovid dump) is a derived view for tools.
 package ir
 
 import (
 	"bytes"
+	"encoding/hex"
 	"encoding/json"
 	"strconv"
+	"unicode/utf8"
 )
 
 // Span is a byte range in one source file. File indexes Program.Files.
@@ -142,8 +144,13 @@ func (n *Node) MarshalJSON() ([]byte, error) {
 			b.WriteString("false")
 		}
 	case 3:
-		b.WriteString(`,"value":`)
-		writeJSONString(&b, n.Str)
+		if utf8.ValidString(n.Str) {
+			b.WriteString(`,"value":`)
+			writeJSONString(&b, n.Str)
+		} else {
+			// Bytes JSON cannot carry: hex, so nothing is lost.
+			b.WriteString(`,"value_hex":"` + hex.EncodeToString([]byte(n.Str)) + `"`)
+		}
 	}
 	writeNode(&b, "left", n.Left)
 	writeNode(&b, "right", n.Right)

@@ -204,7 +204,8 @@ ovid move <id|name>... <pkg> [--file pkg/x.ov] [--dry-run]
   Refuses changes that add check errors. Several names move in order, all or
   none: on a failure every file is put back.
 ovid init <dir> [--name N]   writes ovid.mod, <N>/main.ov, <N>/main_test.ov
-ovid dump                    the whole program as JSON
+ovid dump                    the whole program as JSON; a string literal
+                             that is not UTF-8 is "value_hex", not "value"
 ovid version                 {commit, dirty, binary (hash of the executable), path}
 ovid help [topic]
 `

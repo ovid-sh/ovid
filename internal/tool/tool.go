@@ -220,7 +220,8 @@ func Run(dir string, args []string, w io.Writer) int {
 	return 128 + int(pr.signal)
 }
 
-// Dump prints the program tree as JSON (the format the self-hosted CLI reads).
+// Dump prints the program tree as JSON. A string literal that is not valid
+// UTF-8 is written as value_hex, so the dump is valid JSON and loses nothing.
 func Dump(dir string, w io.Writer) int {
 	m, err := load(dir)
 	if err != nil {
