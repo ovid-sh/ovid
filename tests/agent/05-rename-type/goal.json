@@ -1,0 +1,18 @@
+{
+  "check": true,
+  "runs": [{"stdout": "7\n"}],
+  "contains": [
+    {"re": "^type Item struct"},
+    {"re": "^  Node \\*Item$", "count": 1},
+    {"re": "^  Item \\*Item$", "count": 1},
+    {"re": "t\\.Node\\b", "count": 3}
+  ],
+  "lacks": [{"re": "\\*Node\\b"}, {"re": "sizeof\\(Node\\)"}],
+  "xfail": {
+    "issue": "#21",
+    "problems": [
+      "\"t\\\\.Node\\\\b\" matches 2 times, want 3",
+      "run 0 []: stdout \"9\\n\", want \"7\\n\""
+    ]
+  }
+}

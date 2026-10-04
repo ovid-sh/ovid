@@ -1,0 +1,30 @@
+package tree
+
+import ovid/io
+
+type Node struct {
+  v i64
+}
+
+// Tree holds its root node and the item most recently looked up.
+type Tree struct {
+  Node *Node
+  Item *Node
+}
+
+// Root is the value at the tree's root.
+func Root(t *Tree) i64 {
+  var n *Node = t.Node
+  return n.v
+}
+
+func main(io *ovid/io.Cap) i64 {
+  var t *Tree = ovid/io.Alloc(io, sizeof(Tree)) as *Tree
+  t.Node = ovid/io.Alloc(io, sizeof(Node)) as *Node
+  t.Item = ovid/io.Alloc(io, sizeof(Node)) as *Node
+  t.Node.v = 7
+  t.Item.v = 9
+  ovid/io.PrintInt(io, Root(t))
+  ovid/io.Print(strptr("\n"))
+  return 0
+}

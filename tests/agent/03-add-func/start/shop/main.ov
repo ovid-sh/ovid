@@ -1,0 +1,14 @@
+package shop
+
+import ovid/io
+
+// Total is the sum of the prices of the order, in cents.
+func Total() i64 {
+  return 40 + 35 + 45
+}
+
+func main(io *ovid/io.Cap) i64 {
+  ovid/io.PrintInt(io, Total())
+  ovid/io.Print(strptr("\n"))
+  return 0
+}

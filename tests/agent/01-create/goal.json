@@ -1,0 +1,10 @@
+{
+  "root": "squares",
+  "check": true,
+  "tests": ["TestSquare"],
+  "inject": {
+    "squares/zz_goal_test.ov": "package squares\n\nimport ovid/io\n\nfunc TestGoalSquare(io *ovid/io.Cap) i64 {\n  if Square(0) != 0 || Square(-3) != 9 || Square(1000) != 1000000 {\n    return 1\n  }\n  return 0\n}\n"
+  },
+  "runs": [{"stdout": "144\n"}],
+  "contains": [{"re": "^func Square\\(n i64\\) i64"}]
+}

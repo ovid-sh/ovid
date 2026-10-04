@@ -1,0 +1,19 @@
+package price
+
+import ovid/io
+
+// Price is what n items cost, in cents. Ten or more cost 225 each.
+func Price(n i64) i64 {
+  if n >= 10 {
+    return n * 225
+  }
+  return n * 250
+}
+
+func main(io *ovid/io.Cap) i64 {
+  ovid/io.PrintInt(io, Price(3))
+  ovid/io.Print(strptr("\n"))
+  ovid/io.PrintInt(io, Price(12))
+  ovid/io.Print(strptr("\n"))
+  return 0
+}

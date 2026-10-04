@@ -1,0 +1,17 @@
+package tally
+
+import ovid/io
+
+// Count counts the events of a session. It counted each one twice; one
+// increment has to go.
+func Count() i64 {
+  var x i64 = 0
+  x = x + 1
+  return x
+}
+
+func main(io *ovid/io.Cap) i64 {
+  ovid/io.PrintInt(io, Count())
+  ovid/io.Print(strptr("\n"))
+  return 0
+}
