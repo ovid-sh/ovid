@@ -5,6 +5,7 @@ import (
 	"io"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"ovid/internal/check"
 	"ovid/internal/ir"
@@ -159,7 +160,9 @@ func sigOf(l *module.Loc) string {
 
 // Show prints the source of each id. Text mode is source with a header line;
 // ids adds a trailing `// @id` on lines where a statement starts.
-func Show(dir string, ids []string, withIDs, asJSON bool, w io.Writer) int {
+// Show prints the source of each node. exprs lists the expressions inside a
+// decl with their ids; they are always listed for a statement or expression.
+func Show(dir string, ids []string, withIDs, asJSON, exprs bool, w io.Writer) int {
 	m, err := load(dir)
 	if err != nil {
 		return fail(w, "load", err.Error(), "")
@@ -190,6 +193,18 @@ func Show(dir string, ids []string, withIDs, asJSON bool, w io.Writer) int {
 			if s := sigOf(l); s != "" {
 				r["sig"] = s
 			}
+			if exprs || l.Kind == "stmt" || l.Kind == "expr" {
+				es := []map[string]any{}
+				for _, e := range exprsIn(m, l) {
+					_, ea, _, _ := m.Where(e.Span)
+					x := map[string]any{"id": e.ID, "line": ea.Line, "col": ea.Col, "text": m.Text(e.Span), "hash": m.Hash(e.ID)}
+					if t := types[e.ID]; t != "" {
+						x["type"] = t
+					}
+					es = append(es, x)
+				}
+				r["exprs"] = es
+			}
 			emit(w, r)
 			continue
 		}
@@ -205,11 +220,65 @@ func Show(dir string, ids []string, withIDs, asJSON bool, w io.Writer) int {
 			text = annotate(m, l, start, text)
 		}
 		fmt.Fprintln(w, text)
+		if withIDs && (exprs || l.Kind == "stmt" || l.Kind == "expr") {
+			for _, e := range exprsIn(m, l) {
+				_, ea, _, _ := m.Where(e.Span)
+				line := fmt.Sprintf("//   %s %d:%d %s  hash=%s", e.ID, ea.Line, ea.Col, oneLine(m.Text(e.Span), 72), m.Hash(e.ID))
+				if t := types[e.ID]; t != "" {
+					line += " type=" + t
+				}
+				fmt.Fprintln(w, line)
+			}
+		}
 	}
 	if asJSON {
 		emit(w, map[string]any{"ok": true, "count": len(locs)})
 	}
 	return ExitOK
+}
+
+// exprsIn lists the expressions inside l in source order, outer before
+// inner, so each can be replaced by id.
+func exprsIn(m *module.Module, l *module.Loc) []*module.Loc {
+	var out []*module.Loc
+	visit := func(c *ir.Node) {
+		if e := m.Index[c.ID]; e != nil && e.Kind == "expr" {
+			out = append(out, e)
+		}
+	}
+	switch n := l.Node.(type) {
+	case *ir.Func:
+		for _, st := range n.Body {
+			st.Walk(visit)
+		}
+	case *ir.Node:
+		n.Walk(visit)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Span.Off != out[j].Span.Off {
+			return out[i].Span.Off < out[j].Span.Off
+		}
+		return out[i].Span.End > out[j].Span.End
+	})
+	return out
+}
+
+// oneLine is s on one line, cut to about n bytes at a character boundary.
+// Only line breaks and the indentation around them become one space; a
+// string literal cannot span lines, so its spacing is kept.
+func oneLine(s string, n int) string {
+	ls := strings.Split(s, "\n")
+	for i, l := range ls {
+		ls[i] = strings.Trim(l, " \t\r")
+	}
+	s = strings.Join(ls, " ")
+	if len(s) > n {
+		for n > 0 && !utf8.RuneStart(s[n]) {
+			n--
+		}
+		s = s[:n] + "…"
+	}
+	return s
 }
 
 func lineStart(src []byte, off int) int {

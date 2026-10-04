@@ -29,7 +29,7 @@ Start here:
 
 Read without opening whole files:
   ovid outline [--pkg P]       packages, or one package's decls with hashes
-  ovid show <id|name>... [--plain] [--json]
+  ovid show <id|name>... [--plain] [--json] [--exprs]
                                source of a decl or node, lines tagged with ids
   ovid refs <id|name>          every use of a func/type/field/const/param/var
   ovid grep <regexp>           text matches, each with its decl and stmt id
@@ -166,9 +166,13 @@ ovid outline [--pkg P] [--all] [--uses]
   doc (the // comment above it), size (struct bytes), test. --uses adds
   used_by: {package: refs}, so {} is dead code and a decl used by only one
   other package is a candidate to move there.
-ovid show <id|name>... [--plain] [--json]
+ovid show <id|name>... [--plain] [--json] [--exprs]
   Text: "// kind id file:a-b hash=H in=decl type=T" then the source, with
   "  // @id" after each line where a statement starts (--plain omits them).
+  For a statement or expression (a decl with --exprs), one line per
+  expression inside it follows: "//   ex:id line:col text  hash=H type=T",
+  in source order, outer before inner. --json: "exprs":[{id,line,col,text,
+  hash,type}]. Replace one by id to change part of a statement.
 ovid refs <id|name>          {id,kind,in,file,line,col,source} per use; last:
   {"ok":true,target,count,files,by_pkg:{package: n},external}
 ovid grep <regexp> [--pkg P] [--std] [--offset N] [--limit N]
@@ -219,7 +223,8 @@ node of the decl is refused and names that node. --force skips expect.
 
 ID may be a full id or a decl name (Sum, util.Sum). Text is plain Ovid; its
 indentation is normalised to the target's. insert anchors on statements and
-decls; to change part of an expression, replace the expression.
+decls; to change part of a statement, replace one of its expressions (ovid
+show <stmt> lists them with ids and hashes).
 
 After applying, the module is reparsed (a syntax error rejects everything
 and names the op) and checked. Result: {"ok":true,"written","files",

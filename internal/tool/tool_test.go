@@ -362,6 +362,76 @@ func TestGrepPages(t *testing.T) {
 	}
 }
 
+// TestShowExprs: showing a statement lists its expressions with ids and
+// hashes, and one of them can then be replaced on its own.
+func TestShowExprs(t *testing.T) {
+	dir := mkmod(t, demo("package demo\n\nimport ovid/io\n\ntype P struct {\n  v i64\n}\n\nfunc main(io *ovid/io.Cap) i64 {\n  var x i64 = 1 + 2 * 3\n  return x\n}\n"))
+	var b bytes.Buffer
+	Show(dir, []string{"st:demo.main:1"}, true, true, false, &b)
+	var exprs []any
+	for _, ln := range strings.Split(strings.TrimSpace(b.String()), "\n") {
+		var r map[string]any
+		if json.Unmarshal([]byte(ln), &r) == nil && r["exprs"] != nil {
+			exprs, _ = r["exprs"].([]any)
+		}
+	}
+	var mul map[string]any
+	var texts []string
+	for _, e := range exprs {
+		e := e.(map[string]any)
+		texts = append(texts, fmt.Sprint(e["text"]))
+		if e["text"] == "2 * 3" {
+			mul = e
+		}
+	}
+	// Source order, outer before inner.
+	if strings.Join(texts, "|") != "1 + 2 * 3|1|2 * 3|2|3" || mul == nil || mul["type"] != "i64" {
+		t.Fatalf("exprs: %s", b.String())
+	}
+	b.Reset()
+	Show(dir, []string{"st:demo.main:1"}, true, false, false, &b)
+	if !strings.Contains(b.String(), "//   "+mul["id"].(string)+" 10:19 2 * 3  hash="+mul["hash"].(string)) {
+		t.Fatalf("text: %s", b.String())
+	}
+	b.Reset()
+	if Show(dir, []string{"main"}, true, false, false, &b); strings.Contains(b.String(), "//   ex:") {
+		t.Fatalf("a decl lists exprs only with --exprs: %s", b.String())
+	}
+	b.Reset()
+	if Show(dir, []string{"main"}, true, false, true, &b); !strings.Contains(b.String(), "//   ex:") {
+		t.Fatalf("--exprs: %s", b.String())
+	}
+	b.Reset()
+	if Show(dir, []string{"ty:demo.P"}, true, true, true, &b); !strings.Contains(b.String(), `"exprs":[]`) {
+		t.Fatalf("a node without expressions lists []: %s", b.String())
+	}
+	b.Reset()
+	op := EditOp{Op: "replace", ID: mul["id"].(string), Expect: mul["hash"].(string), Text: "(2 - 3)"}
+	if code := EditOne(dir, op, "", EditOpts{}, &b); code != 0 {
+		t.Fatalf("replace: %d %s", code, b.String())
+	}
+	src, _ := os.ReadFile(filepath.Join(dir, "demo", "main.ov"))
+	if !strings.Contains(string(src), "var x i64 = 1 + (2 - 3)\n") {
+		t.Fatalf("source: %s", src)
+	}
+}
+
+func TestOneLine(t *testing.T) {
+	for _, c := range []struct {
+		in   string
+		n    int
+		want string
+	}{
+		{`strlen("a  b")`, 72, `strlen("a  b")`},
+		{"f(1,\n    2)", 72, "f(1, 2)"},
+		{`strlen("héllo")`, 10, `strlen("h…`}, // byte 10 is inside é
+	} {
+		if got := oneLine(c.in, c.n); got != c.want {
+			t.Errorf("oneLine(%q, %d) = %q, want %q", c.in, c.n, got, c.want)
+		}
+	}
+}
+
 // hashOf is the hash `ovid show` would print for id now.
 func hashOf(t *testing.T, dir, id string) string {
 	t.Helper()
@@ -413,7 +483,7 @@ func contains(xs []string, s string) bool {
 func TestEditFixAndStale(t *testing.T) {
 	dir := mkmod(t, demo(addSrc))
 	var sb bytes.Buffer
-	Show(dir, []string{"main"}, true, true, &sb)
+	Show(dir, []string{"main"}, true, true, false, &sb)
 	h := lines(t, sb.String())[0]["hash"].(string)
 
 	// Fix the bad argument by replacing the expression.
