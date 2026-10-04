@@ -416,6 +416,22 @@ func TestShowExprs(t *testing.T) {
 	}
 }
 
+func TestOneLine(t *testing.T) {
+	for _, c := range []struct {
+		in   string
+		n    int
+		want string
+	}{
+		{`strlen("a  b")`, 72, `strlen("a  b")`},
+		{"f(1,\n    2)", 72, "f(1, 2)"},
+		{`strlen("héllo")`, 10, `strlen("h…`}, // byte 10 is inside é
+	} {
+		if got := oneLine(c.in, c.n); got != c.want {
+			t.Errorf("oneLine(%q, %d) = %q, want %q", c.in, c.n, got, c.want)
+		}
+	}
+}
+
 // hashOf is the hash `ovid show` would print for id now.
 func hashOf(t *testing.T, dir, id string) string {
 	t.Helper()

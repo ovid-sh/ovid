@@ -5,6 +5,7 @@ import (
 	"io"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"ovid/internal/check"
 	"ovid/internal/ir"
@@ -262,10 +263,19 @@ func exprsIn(m *module.Module, l *module.Loc) []*module.Loc {
 	return out
 }
 
-// oneLine is s on one line, cut to about n bytes.
+// oneLine is s on one line, cut to about n bytes at a character boundary.
+// Only line breaks and the indentation around them become one space; a
+// string literal cannot span lines, so its spacing is kept.
 func oneLine(s string, n int) string {
-	s = strings.Join(strings.Fields(s), " ")
+	ls := strings.Split(s, "\n")
+	for i, l := range ls {
+		ls[i] = strings.Trim(l, " \t\r")
+	}
+	s = strings.Join(ls, " ")
 	if len(s) > n {
+		for n > 0 && !utf8.RuneStart(s[n]) {
+			n--
+		}
 		s = s[:n] + "…"
 	}
 	return s
