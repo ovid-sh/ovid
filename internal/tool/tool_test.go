@@ -1552,14 +1552,7 @@ func TestSelfHostLarge(t *testing.T) {
 	if testing.Short() {
 		t.Skip("large program")
 	}
-	const n = 30000
-	var src strings.Builder
-	src.WriteString("package demo\nimport ovid/io\nfunc F0() i64 {\n  return 1\n}\n")
-	for i := 1; i < n; i++ {
-		fmt.Fprintf(&src, "func F%d() i64 {\n  return (F%d() + strlen(\"a%d\") + strlen(\"b%d\") + load8(strptr(\"c%d\")) + strlen(\"a%d\")) & 1023\n}\n", i, i-1, i, i, i, i-1)
-	}
-	fmt.Fprintf(&src, "func main(io *ovid/io.Cap) i64 {\n  return F%d() & 127\n}\n", n-1)
-	dir := mkmod(t, demo(src.String()))
+	dir := mkmod(t, demo(largeSource(30000)))
 	g := mustBuild(t, dir)
 
 	tmp := t.TempDir()

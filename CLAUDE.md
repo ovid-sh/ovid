@@ -50,7 +50,7 @@ The Go pipeline, one package per stage under `internal/`:
 
 ### Two compilers that must stay identical
 
-`prog/ovid/{parse,check,cg,asm,elf}` mirror `internal/{syntax,check,compile,asm,elf}` (plus `sha`, `cli`). `TestSelfHost` requires the two to emit **byte-identical** binaries for the same source and compares the self-hosted checker's diagnostics. So a change to the language, the checker's diagnostics, codegen, the assembler, or the ELF layout must be made in both `internal/` and `prog/`, and `std/` changes affect both. The README also describes the language and commands; keep it in step. It gives the self-hosted compiler's size and build time only roughly and dated: do not update them for an ordinary change, since every PR editing that line conflicts with every other. Exact numbers belong to the bench (#11).
+`prog/ovid/{parse,check,cg,asm,elf}` mirror `internal/{syntax,check,compile,asm,elf}` (plus `sha`, `cli`). `TestSelfHost` requires the two to emit **byte-identical** binaries for the same source and compares the self-hosted checker's diagnostics. So a change to the language, the checker's diagnostics, codegen, the assembler, or the ELF layout must be made in both `internal/` and `prog/`, and `std/` changes affect both. The README also describes the language and commands; keep it in step. It gives the self-hosted compiler's size and build time only roughly and dated: do not update them for an ordinary change, since every PR editing that line conflicts with every other. Exact numbers come from the bench: `go test ./internal/tool -run '^$' -bench .` (`internal/tool/bench_test.go`), which CI runs and records in the job summary. `TestSelfHostSize` fails when the self-hosted compiler outgrows `selfHostBudget`.
 
 ### The output contract
 
