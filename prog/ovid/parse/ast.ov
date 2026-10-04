@@ -1,0 +1,1256 @@
+package ovid/parse
+
+import ovid/io
+import ovid/mem
+
+// Op codes. Statements are 1..9; everything else is an expression.
+const OP_VAR i64 = 1
+const OP_ASSIGN i64 = 2
+const OP_SETFIELD i64 = 3
+const OP_STORE8 i64 = 4
+const OP_STORE64 i64 = 5
+const OP_RETURN i64 = 6
+const OP_IF i64 = 7
+const OP_WHILE i64 = 8
+const OP_EXPR i64 = 9
+const OP_INT i64 = 10
+const OP_BOOL i64 = 11
+const OP_NAME i64 = 12
+const OP_CALL i64 = 13
+const OP_SYSCALL i64 = 14
+const OP_FIELD i64 = 15
+const OP_CAST i64 = 16
+const OP_NOT i64 = 17
+const OP_NEG i64 = 18
+const OP_BNOT i64 = 19
+const OP_LOAD8 i64 = 20
+const OP_LOAD32 i64 = 21
+const OP_LOAD64 i64 = 22
+const OP_STRPTR i64 = 23
+const OP_STRLEN i64 = 24
+const OP_SIZEOF i64 = 25
+const OP_LOR i64 = 30
+const OP_LAND i64 = 31
+const OP_EQ i64 = 32
+const OP_NE i64 = 33
+const OP_LT i64 = 34
+const OP_LE i64 = 35
+const OP_GT i64 = 36
+const OP_GE i64 = 37
+const OP_ADD i64 = 38
+const OP_SUB i64 = 39
+const OP_OR i64 = 40
+const OP_XOR i64 = 41
+const OP_MUL i64 = 42
+const OP_DIV i64 = 43
+const OP_MOD i64 = 44
+const OP_AND i64 = 45
+const OP_SHL i64 = 46
+const OP_SHR i64 = 47
+
+// Node is a statement or expression. num is its per-func id number; lists
+// (args, then, els, body) are chained through next. valk selects the JSON
+// value: 1 int, 2 bool, 3 string. The heap is never reused, so Alloc memory
+// starts zeroed.
+type Node struct {
+  op i64
+  num i64
+  namep i64
+  namen i64
+  typp i64
+  typn i64
+  pkgp i64
+  pkgn i64
+  fnp i64
+  fnn i64
+  strp i64
+  strn i64
+  ival i64
+  valk i64
+  left *Node
+  right *Node
+  arg *Node
+  base *Node
+  addr *Node
+  val *Node
+  cond *Node
+  args *Node
+  then *Node
+  els *Node
+  body *Node
+  next *Node
+  off i64
+  end i64
+}
+
+// Decl is an import (name = path), const, type, field, func, or param.
+// typ is the const/field/param type or the func result; sub holds fields or
+// params.
+type Decl struct {
+  namep i64
+  namen i64
+  typp i64
+  typn i64
+  val i64
+  sub *Decl
+  subt *Decl
+  body *Node
+  next *Decl
+  file *File
+  off i64
+}
+
+// Pkg is one package: the merged result of its files.
+type Pkg struct {
+  pathp i64
+  pathn i64
+  file *File
+  off i64
+  files *File
+  ims *Decl
+  imt *Decl
+  cs *Decl
+  ct *Decl
+  ts *Decl
+  tt *Decl
+  fs *Decl
+  ft *Decl
+  next *Pkg
+  std i64
+  ok i64
+}
+
+// File is one source file. rel is the module-relative path (std:<pkg>/<f>
+// for shipped files), disp the path printed in diagnostics.
+type File struct {
+  relp i64
+  reln i64
+  dispp i64
+  dispn i64
+  src i64
+  n i64
+  std i64
+  next *File
+  mnext *File
+}
+
+func NewNode(p *P, op i64) *Node {
+  var n *Node = ovid/io.Alloc(p.io, sizeof(Node)) as *Node
+  n.op = op
+  return n
+}
+
+func NewDecl(p *P, np i64, nn i64, off i64) *Decl {
+  var d *Decl = ovid/io.Alloc(p.io, sizeof(Decl)) as *Decl
+  d.namep = np
+  d.namen = nn
+  d.file = p.file
+  d.off = off
+  return d
+}
+
+func AddSub(d *Decl, s *Decl) i64 {
+  if d.subt == 0 as *Decl {
+    d.sub = s
+  } else {
+    d.subt.next = s
+  }
+  d.subt = s
+  return 0
+}
+
+func AddImport(k *Pkg, d *Decl) i64 {
+  if k.imt == 0 as *Decl {
+    k.ims = d
+  } else {
+    k.imt.next = d
+  }
+  k.imt = d
+  return 0
+}
+
+func AddConst(k *Pkg, d *Decl) i64 {
+  if k.ct == 0 as *Decl {
+    k.cs = d
+  } else {
+    k.ct.next = d
+  }
+  k.ct = d
+  return 0
+}
+
+func AddType(k *Pkg, d *Decl) i64 {
+  if k.tt == 0 as *Decl {
+    k.ts = d
+  } else {
+    k.tt.next = d
+  }
+  k.tt = d
+  return 0
+}
+
+func AddFunc(k *Pkg, d *Decl) i64 {
+  if k.ft == 0 as *Decl {
+    k.fs = d
+  } else {
+    k.ft.next = d
+  }
+  k.ft = d
+  return 0
+}
+
+func Sid(p *P) i64 {
+  p.sc = p.sc + 1
+  return p.sc
+}
+
+func Eid(p *P) i64 {
+  p.ec = p.ec + 1
+  return p.ec
+}
+
+func NewP(io *ovid/io.Cap, f *File) *P {
+  var p *P = ovid/io.Alloc(io, sizeof(P)) as *P
+  p.io = io
+  p.src = f.src
+  p.n = f.n
+  p.file = f
+  p.emsg = ovid/mem.New(io, 128)
+  return p
+}
+
+// ParseFile parses one file into a fresh Pkg. On a syntax error p.err is set
+// and p.eoff/p.emsg say where and what.
+func ParseFile(p *P) *Pkg {
+  var s i64 = Start(p)
+  ExpectKw(p, strptr("package"), strlen("package"))
+  ParsePath(p)
+  var k *Pkg = ovid/io.Alloc(p.io, sizeof(Pkg)) as *Pkg
+  k.pathp = p.tp
+  k.pathn = p.tn
+  k.file = p.file
+  k.off = s
+  ExpectEnd(p)
+  p.pkg = k
+  var more bool = true
+  while more && p.err == 0 {
+    var is i64 = Start(p)
+    if Kw(p, strptr("import"), strlen("import")) {
+      ParsePath(p)
+      AddImport(k, NewDecl(p, p.tp, p.tn, is))
+      ExpectEnd(p)
+    } else {
+      more = false
+    }
+  }
+  while p.err == 0 && !Eof(p) {
+    var ds i64 = Start(p)
+    if Kw(p, strptr("const"), strlen("const")) {
+      ParseConst(p, ds)
+    } else if Kw(p, strptr("type"), strlen("type")) {
+      ParseTypeDecl(p, ds)
+    } else if Kw(p, strptr("func"), strlen("func")) {
+      ParseFunc(p, ds)
+    } else if PeekKw(p, strptr("import"), strlen("import")) {
+      Errorf(p, strptr("imports must come before declarations"), strlen("imports must come before declarations"))
+    } else {
+      Errorf(p, strptr("expected const, type, or func"), strlen("expected const, type, or func"))
+    }
+  }
+  return k
+}
+
+func ParseConst(p *P, s i64) i64 {
+  Ident(p)
+  var np i64 = p.tp
+  var nn i64 = p.tn
+  ParseType(p)
+  var tp i64 = p.tp
+  var tn i64 = p.tn
+  Expect(p, 61)
+  var ex *Node = ParseExpr(p)
+  p.cok = true
+  var v i64 = EvalConst(p, ex)
+  if !p.cok {
+    if ErrBegin(p) {
+      EW(p, strptr("const "), strlen("const "))
+      EW(p, np, nn)
+      EW(p, strptr(" is not a constant integer expression"), strlen(" is not a constant integer expression"))
+      ErrEnd(p)
+    }
+  }
+  if !ovid/mem.Eq(tp, tn, strptr("i64"), 3) {
+    if ErrBegin(p) {
+      EW(p, strptr("const "), strlen("const "))
+      EW(p, np, nn)
+      EW(p, strptr(" must be i64"), strlen(" must be i64"))
+      ErrEnd(p)
+    }
+  }
+  var d *Decl = NewDecl(p, np, nn, s)
+  d.typp = strptr("i64")
+  d.typn = 3
+  d.val = v
+  AddConst(p.pkg, d)
+  ExpectEnd(p)
+  return 0
+}
+
+// EvalConst folds a const expression with Go int64 semantics; it clears
+// p.cok if n is not constant.
+func EvalConst(p *P, n *Node) i64 {
+  if n == 0 as *Node {
+    p.cok = false
+    return 0
+  }
+  var op i64 = n.op
+  if op == OP_INT {
+    return n.ival
+  }
+  if op == OP_NAME {
+    if n.pkgn > 0 && !ovid/mem.Eq(n.pkgp, n.pkgn, p.pkg.pathp, p.pkg.pathn) {
+      if ErrBegin(p) {
+        EW(p, strptr("a const's value cannot name another package's const ("), strlen("a const's value cannot name another package's const ("))
+        EW(p, n.pkgp, n.pkgn)
+        EW(p, strptr("."), 1)
+        EW(p, n.namep, n.namen)
+        EW(p, strptr("); write the number"), strlen("); write the number"))
+        ErrEnd(p)
+      }
+      return 0
+    }
+    var c *Decl = p.pkg.cs
+    while c != 0 as *Decl {
+      if ovid/mem.Eq(c.namep, c.namen, n.namep, n.namen) {
+        return c.val
+      }
+      c = c.next
+    }
+    p.cok = false
+    return 0
+  }
+  if op == OP_SIZEOF {
+    Errorf(p, strptr("a const's value cannot use sizeof; write sizeof(T) where the size is used"), strlen("a const's value cannot use sizeof; write sizeof(T) where the size is used"))
+    return 0
+  }
+  if op == OP_NEG {
+    return 0 - EvalConst(p, n.arg)
+  }
+  if op == OP_BNOT {
+    return ^EvalConst(p, n.arg)
+  }
+  if op < OP_ADD {
+    p.cok = false
+    return 0
+  }
+  var l i64 = EvalConst(p, n.left)
+  var r i64 = EvalConst(p, n.right)
+  if !p.cok {
+    return 0
+  }
+  if op == OP_ADD {
+    return l + r
+  }
+  if op == OP_SUB {
+    return l - r
+  }
+  if op == OP_MUL {
+    return l * r
+  }
+  if op == OP_DIV || op == OP_MOD {
+    if r == 0 {
+      p.cok = false
+      return 0
+    }
+    if r == -1 {
+      if op == OP_DIV {
+        return 0 - l
+      }
+      return 0
+    }
+    if op == OP_DIV {
+      return l / r
+    }
+    return l % r
+  }
+  if op == OP_AND {
+    return l & r
+  }
+  if op == OP_OR {
+    return l | r
+  }
+  if op == OP_XOR {
+    return l ^ r
+  }
+  if op == OP_SHL {
+    if r < 0 || r >= 64 {
+      return 0
+    }
+    return l << r
+  }
+  if op == OP_SHR {
+    if r < 0 || r >= 64 {
+      if l < 0 {
+        return -1
+      }
+      return 0
+    }
+    return l >> r
+  }
+  p.cok = false
+  return 0
+}
+
+func ParseTypeDecl(p *P, s i64) i64 {
+  Ident(p)
+  var d *Decl = NewDecl(p, p.tp, p.tn, s)
+  ExpectKw(p, strptr("struct"), strlen("struct"))
+  Expect(p, 123)
+  while p.err == 0 && !PeekByte(p, 125) {
+    if Eof(p) {
+      Errorf(p, strptr("unclosed struct"), strlen("unclosed struct"))
+      return 0
+    }
+    var fs i64 = Start(p)
+    Ident(p)
+    var f *Decl = NewDecl(p, p.tp, p.tn, fs)
+    ParseType(p)
+    f.typp = p.tp
+    f.typn = p.tn
+    AddSub(d, f)
+    ExpectEnd(p)
+  }
+  Expect(p, 125)
+  AddType(p.pkg, d)
+  ExpectEnd(p)
+  return 0
+}
+
+func ParseFunc(p *P, s i64) i64 {
+  Ident(p)
+  var d *Decl = NewDecl(p, p.tp, p.tn, s)
+  p.fnp = p.tp
+  p.fnn = p.tn
+  p.ec = 0
+  p.sc = 0
+  Expect(p, 40)
+  if !PeekByte(p, 41) {
+    var more bool = true
+    while more && p.err == 0 {
+      var ps i64 = Start(p)
+      Ident(p)
+      var pa *Decl = NewDecl(p, p.tp, p.tn, ps)
+      ParseType(p)
+      pa.typp = p.tp
+      pa.typn = p.tn
+      AddSub(d, pa)
+      if PeekByte(p, 41) {
+        more = false
+      } else {
+        Expect(p, 44)
+      }
+    }
+  }
+  Expect(p, 41)
+  ParseType(p)
+  d.typp = p.tp
+  d.typn = p.tn
+  d.body = ParseBlock(p)
+  AddFunc(p.pkg, d)
+  p.fnp = 0
+  p.fnn = 0
+  ExpectEnd(p)
+  return 0
+}
+
+func ParseBlock(p *P) *Node {
+  Expect(p, 123)
+  var head *Node = 0 as *Node
+  var tail *Node = 0 as *Node
+  while p.err == 0 && !PeekByte(p, 125) {
+    if Eof(p) {
+      Errorf(p, strptr("unclosed block"), strlen("unclosed block"))
+      return head
+    }
+    var st *Node = ParseStmt(p)
+    if tail == 0 as *Node {
+      head = st
+    } else {
+      tail.next = st
+    }
+    tail = st
+    ExpectEnd(p)
+  }
+  Expect(p, 125)
+  return head
+}
+
+func ParseStmt(p *P) *Node {
+  var s i64 = Start(p)
+  var id i64 = Sid(p)
+  var n *Node = Stmt(p, s, id)
+  n.num = id
+  n.off = s
+  n.end = p.last
+  return n
+}
+
+func Stmt(p *P, s i64, id i64) *Node {
+  if Kw(p, strptr("var"), 3) {
+    return ParseVar(p)
+  }
+  if Kw(p, strptr("if"), 2) {
+    return ParseIf(p, s, id)
+  }
+  if Kw(p, strptr("while"), 5) {
+    return ParseWhile(p)
+  }
+  if Kw(p, strptr("return"), 6) {
+    return ParseReturn(p)
+  }
+  if PeekKw(p, strptr("store8"), 6) || PeekKw(p, strptr("store64"), 7) {
+    Ident(p)
+    var op i64 = OP_STORE8
+    if p.tn == 7 {
+      op = OP_STORE64
+    }
+    Expect(p, 40)
+    var addr *Node = ParseExpr(p)
+    Expect(p, 44)
+    var val *Node = ParseExpr(p)
+    Expect(p, 41)
+    var sn *Node = NewNode(p, op)
+    sn.addr = addr
+    sn.val = val
+    return sn
+  }
+  var e *Node = ParseExpr(p)
+  if PeekAssign(p) {
+    Expect(p, 61)
+    var v *Node = ParseExpr(p)
+    if e.op == OP_NAME {
+      var a *Node = NewNode(p, OP_ASSIGN)
+      a.namep = e.namep
+      a.namen = e.namen
+      a.val = v
+      return a
+    }
+    if e.op == OP_FIELD {
+      var sf *Node = NewNode(p, OP_SETFIELD)
+      sf.base = e.base
+      sf.namep = e.namep
+      sf.namen = e.namen
+      sf.val = v
+      return sf
+    }
+    Errorf(p, strptr("cannot assign to this expression"), strlen("cannot assign to this expression"))
+  }
+  var x *Node = NewNode(p, OP_EXPR)
+  x.val = e
+  return x
+}
+
+func ParseVar(p *P) *Node {
+  Ident(p)
+  var n *Node = NewNode(p, OP_VAR)
+  n.namep = p.tp
+  n.namen = p.tn
+  ParseType(p)
+  n.typp = p.tp
+  n.typn = p.tn
+  if PeekAssign(p) {
+    Expect(p, 61)
+    n.val = ParseExpr(p)
+  }
+  return n
+}
+
+func ParseReturn(p *P) *Node {
+  var n *Node = NewNode(p, OP_RETURN)
+  Skip(p)
+  if p.i >= p.n || p.nl || At(p, p.i) == 125 {
+    return n
+  }
+  if PeekKw(p, strptr("var"), 3) || PeekKw(p, strptr("if"), 2) || PeekKw(p, strptr("while"), 5) || PeekKw(p, strptr("return"), 6) || PeekKw(p, strptr("store8"), 6) || PeekKw(p, strptr("store64"), 7) {
+    return n
+  }
+  n.val = ParseExpr(p)
+  return n
+}
+
+func ParseIf(p *P, s i64, id i64) *Node {
+  var cond *Node = ParseExpr(p)
+  var then *Node = ParseBlock(p)
+  var els *Node = 0 as *Node
+  if PeekKw(p, strptr("else"), 4) {
+    Ident(p)
+    if PeekKw(p, strptr("if"), 2) {
+      var es i64 = Start(p)
+      var eid i64 = Sid(p)
+      Ident(p)
+      els = ParseIf(p, es, eid)
+    } else {
+      els = ParseBlock(p)
+    }
+  }
+  var n *Node = NewNode(p, OP_IF)
+  n.num = id
+  n.cond = cond
+  n.then = then
+  n.els = els
+  n.off = s
+  n.end = p.last
+  return n
+}
+
+func ParseWhile(p *P) *Node {
+  var cond *Node = ParseExpr(p)
+  var body *Node = ParseBlock(p)
+  var n *Node = NewNode(p, OP_WHILE)
+  n.cond = cond
+  n.body = body
+  return n
+}
+
+func ParseExpr(p *P) *Node {
+  return Prec(p, 1)
+}
+
+func Level(op i64) i64 {
+  if op == OP_LOR {
+    return 1
+  }
+  if op == OP_LAND {
+    return 2
+  }
+  if op <= OP_GE {
+    return 3
+  }
+  if op <= OP_XOR {
+    return 4
+  }
+  return 5
+}
+
+func Prec(p *P, min i64) *Node {
+  var left *Node = Unary(p)
+  var op i64 = PeekBinop(p)
+  while p.err == 0 && op != 0 && Level(op) >= min {
+    var lvl i64 = Level(op)
+    ConsumeBinop(p)
+    var right *Node = Prec(p, lvl + 1)
+    var n *Node = NewNode(p, op)
+    n.num = Eid(p)
+    n.left = left
+    n.right = right
+    n.off = left.off
+    n.end = p.last
+    left = n
+    op = PeekBinop(p)
+  }
+  return left
+}
+
+func PeekBinop(p *P) i64 {
+  Skip(p)
+  if p.i >= p.n {
+    return 0
+  }
+  var c i64 = At(p, p.i)
+  if p.i + 1 < p.n {
+    var d i64 = At(p, p.i + 1)
+    if c == 38 && d == 38 {
+      return OP_LAND
+    }
+    if c == 124 && d == 124 {
+      return OP_LOR
+    }
+    if c == 61 && d == 61 {
+      return OP_EQ
+    }
+    if c == 33 && d == 61 {
+      return OP_NE
+    }
+    if c == 60 && d == 61 {
+      return OP_LE
+    }
+    if c == 62 && d == 61 {
+      return OP_GE
+    }
+    if c == 60 && d == 60 {
+      return OP_SHL
+    }
+    if c == 62 && d == 62 {
+      return OP_SHR
+    }
+  }
+  if c == 60 {
+    return OP_LT
+  }
+  if c == 62 {
+    return OP_GT
+  }
+  if c == 43 {
+    return OP_ADD
+  }
+  if c == 45 {
+    return OP_SUB
+  }
+  if c == 124 {
+    return OP_OR
+  }
+  if c == 94 {
+    return OP_XOR
+  }
+  if c == 42 {
+    return OP_MUL
+  }
+  if c == 47 {
+    return OP_DIV
+  }
+  if c == 37 {
+    return OP_MOD
+  }
+  if c == 38 {
+    return OP_AND
+  }
+  return 0
+}
+
+func ConsumeBinop(p *P) i64 {
+  var op i64 = PeekBinop(p)
+  if op == OP_LAND || op == OP_LOR || op == OP_EQ || op == OP_NE || op == OP_LE || op == OP_GE || op == OP_SHL || op == OP_SHR {
+    p.i = p.i + 2
+  } else {
+    p.i = p.i + 1
+  }
+  Bump(p)
+  return 0
+}
+
+func Unary(p *P) *Node {
+  var s i64 = Start(p)
+  var n *Node = Unary0(p)
+  if n.end == 0 {
+    n.off = s
+    n.end = p.last
+  }
+  return n
+}
+
+func Unary0(p *P) *Node {
+  var op i64 = 0
+  if PeekByte(p, 33) {
+    op = OP_NOT
+  } else if PeekByte(p, 45) {
+    if p.i + 1 < p.n && IsDigit(At(p, p.i + 1)) {
+      return Number(p)
+    }
+    op = OP_NEG
+  } else if PeekByte(p, 94) {
+    op = OP_BNOT
+  }
+  if op == 0 {
+    return Postfix(p)
+  }
+  p.i = p.i + 1
+  Bump(p)
+  var n *Node = NewNode(p, op)
+  n.num = Eid(p)
+  n.arg = Unary(p)
+  return n
+}
+
+func Postfix(p *P) *Node {
+  var e *Node = Primary(p)
+  while p.err == 0 {
+    if PeekByte(p, 46) {
+      Expect(p, 46)
+      Ident(p)
+      var np i64 = p.tp
+      var nn i64 = p.tn
+      if PeekByte(p, 40) {
+        Errorf(p, strptr("methods are not in v0"), strlen("methods are not in v0"))
+      }
+      var f *Node = NewNode(p, OP_FIELD)
+      f.num = Eid(p)
+      f.base = e
+      f.namep = np
+      f.namen = nn
+      f.off = e.off
+      f.end = p.last
+      e = f
+    } else if PeekKw(p, strptr("as"), 2) {
+      Ident(p)
+      ParseType(p)
+      var c *Node = NewNode(p, OP_CAST)
+      c.num = Eid(p)
+      c.typp = p.tp
+      c.typn = p.tn
+      c.arg = e
+      c.off = e.off
+      c.end = p.last
+      e = c
+    } else {
+      return e
+    }
+  }
+  return e
+}
+
+func Primary(p *P) *Node {
+  var s i64 = Start(p)
+  var n *Node = Primary0(p)
+  if n.end == 0 {
+    n.off = s
+    n.end = p.last
+  }
+  return n
+}
+
+func Primary0(p *P) *Node {
+  if PeekByte(p, 40) {
+    Expect(p, 40)
+    var e *Node = ParseExpr(p)
+    Expect(p, 41)
+    return e
+  }
+  if PeekByte(p, 34) {
+    Errorf(p, strptr("bare string literal; write strptr(\"...\") for the address and strlen(\"...\") for the length"), strlen("bare string literal; write strptr(\"...\") for the address and strlen(\"...\") for the length"))
+    return NewNode(p, OP_NAME)
+  }
+  if IsNum(p) {
+    return Number(p)
+  }
+  if PeekKw(p, strptr("true"), 4) || PeekKw(p, strptr("false"), 5) {
+    Ident(p)
+    var b *Node = NewNode(p, OP_BOOL)
+    b.num = Eid(p)
+    b.valk = 2
+    if p.tn == 4 {
+      b.ival = 1
+    }
+    return b
+  }
+  if PeekKw(p, strptr("syscall"), 7) {
+    Ident(p)
+    return CallArgs(p, OP_SYSCALL, 0, 0, 0, 0)
+  }
+  if PeekKw(p, strptr("load8"), 5) || PeekKw(p, strptr("load32"), 6) || PeekKw(p, strptr("load64"), 6) {
+    Ident(p)
+    var lop i64 = OP_LOAD8
+    if p.tn == 6 {
+      if At(p, p.tp - p.src + 4) == 51 {
+        lop = OP_LOAD32
+      } else {
+        lop = OP_LOAD64
+      }
+    }
+    Expect(p, 40)
+    var a *Node = ParseExpr(p)
+    Expect(p, 41)
+    var l *Node = NewNode(p, lop)
+    l.num = Eid(p)
+    l.arg = a
+    return l
+  }
+  if PeekKw(p, strptr("sizeof"), 6) {
+    Ident(p)
+    Expect(p, 40)
+    if PeekByte(p, 42) {
+      Errorf(p, strptr("sizeof takes a struct type, not a pointer: sizeof(T) is 8 * T's fields"), strlen("sizeof takes a struct type, not a pointer: sizeof(T) is 8 * T's fields"))
+    }
+    ParseType(p)
+    var zp i64 = p.tp
+    var zn i64 = p.tn
+    Expect(p, 41)
+    var z *Node = NewNode(p, OP_SIZEOF)
+    z.num = Eid(p)
+    z.typp = zp
+    z.typn = zn
+    return z
+  }
+  if PeekKw(p, strptr("strptr"), 6) || PeekKw(p, strptr("strlen"), 6) {
+    Ident(p)
+    var sop i64 = OP_STRPTR
+    if At(p, p.tp - p.src + 3) == 108 {
+      sop = OP_STRLEN
+    }
+    Expect(p, 40)
+    ParseString(p)
+    var sp i64 = p.tp
+    var sn i64 = p.tn
+    Expect(p, 41)
+    var sl *Node = NewNode(p, sop)
+    sl.num = Eid(p)
+    sl.valk = 3
+    sl.strp = sp
+    sl.strn = sn
+    return sl
+  }
+  if !PeekIdent(p) {
+    Errorf(p, strptr("expected an expression"), strlen("expected an expression"))
+    return NewNode(p, OP_NAME)
+  }
+  var mi i64 = p.i
+  var mnl bool = p.nl
+  var msk bool = p.skipped
+  var mlast i64 = p.last
+  Ident(p)
+  var idp i64 = p.tp
+  var idn i64 = p.tn
+  if PeekByte(p, 47) {
+    if TryPkgCall(p, idp, idn) {
+      if PeekByte(p, 40) {
+        return CallArgs(p, OP_CALL, p.xp, p.xn, p.tp, p.tn)
+      }
+      if Imported(p, p.xp, p.xn) {
+        return PkgName(p, p.xp, p.xn, p.tp, p.tn)
+      }
+    }
+    p.i = mi
+    p.nl = mnl
+    p.skipped = msk
+    p.last = mlast
+    Ident(p)
+    idp = p.tp
+    idn = p.tn
+  }
+  if PeekByte(p, 46) && Imported(p, idp, idn) {
+    mi = p.i
+    mnl = p.nl
+    msk = p.skipped
+    mlast = p.last
+    Expect(p, 46)
+    if PeekIdent(p) {
+      Ident(p)
+      if PeekByte(p, 40) {
+        return CallArgs(p, OP_CALL, idp, idn, p.tp, p.tn)
+      }
+      return PkgName(p, idp, idn, p.tp, p.tn)
+    }
+    p.i = mi
+    p.nl = mnl
+    p.skipped = msk
+    p.last = mlast
+  }
+  if PeekByte(p, 40) {
+    return CallArgs(p, OP_CALL, 0, 0, idp, idn)
+  }
+  var nm *Node = NewNode(p, OP_NAME)
+  nm.num = Eid(p)
+  nm.namep = idp
+  nm.namen = idn
+  return nm
+}
+
+// PkgName is a reference to another package's const: pkg.NAME.
+func PkgName(p *P, pkgp i64, pkgn i64, np i64, nn i64) *Node {
+  var n *Node = NewNode(p, OP_NAME)
+  n.num = Eid(p)
+  n.pkgp = pkgp
+  n.pkgn = pkgn
+  n.namep = np
+  n.namen = nn
+  return n
+}
+
+func Imported(p *P, sp i64, sn i64) bool {
+  var d *Decl = p.pkg.ims
+  while d != 0 as *Decl {
+    if ovid/mem.Eq(d.namep, d.namen, sp, sn) {
+      return true
+    }
+    d = d.next
+  }
+  return false
+}
+
+// TryPkgCall reads the rest of path/to/pkg.Name after its first segment.
+// On success the path is in p.xp/p.xn and the name in p.tp/p.tn; on
+// failure the caller restores the cursor.
+func TryPkgCall(p *P, fp i64, fn i64) bool {
+  if !PeekByte(p, 47) {
+    return false
+  }
+  var sp i64 = fp
+  var sn i64 = fn
+  while PeekByte(p, 47) {
+    Expect(p, 47)
+    if !PeekIdent(p) {
+      return false
+    }
+    Ident(p)
+    if p.tp == sp + sn + 1 {
+      sn = sn + 1 + p.tn
+    } else {
+      var t i64 = Cat(p.io, sp, sn, strptr("/"), 1)
+      sp = Cat(p.io, t, sn + 1, p.tp, p.tn)
+      sn = sn + 1 + p.tn
+    }
+  }
+  if !PeekByte(p, 46) {
+    return false
+  }
+  Expect(p, 46)
+  if !PeekIdent(p) {
+    return false
+  }
+  Ident(p)
+  p.xp = sp
+  p.xn = sn
+  return true
+}
+
+func CallArgs(p *P, op i64, pkgp i64, pkgn i64, fnp i64, fnn i64) *Node {
+  Expect(p, 40)
+  var head *Node = 0 as *Node
+  var tail *Node = 0 as *Node
+  if !PeekByte(p, 41) {
+    var more bool = true
+    while more && p.err == 0 {
+      var a *Node = ParseExpr(p)
+      if tail == 0 as *Node {
+        head = a
+      } else {
+        tail.next = a
+      }
+      tail = a
+      if PeekByte(p, 41) {
+        more = false
+      } else {
+        Expect(p, 44)
+      }
+    }
+  }
+  Expect(p, 41)
+  var n *Node = NewNode(p, op)
+  n.num = Eid(p)
+  n.pkgp = pkgp
+  n.pkgn = pkgn
+  n.fnp = fnp
+  n.fnn = fnn
+  n.args = head
+  return n
+}
+
+func IsNum(p *P) bool {
+  Skip(p)
+  if p.i >= p.n {
+    return false
+  }
+  var c i64 = At(p, p.i)
+  if c == 45 && p.i + 1 < p.n && IsDigit(At(p, p.i + 1)) {
+    return true
+  }
+  return IsDigit(c)
+}
+
+func HexDigit(c i64) i64 {
+  if c >= 48 && c <= 57 {
+    return c - 48
+  }
+  if c >= 97 && c <= 102 {
+    return c - 87
+  }
+  if c >= 65 && c <= 70 {
+    return c - 55
+  }
+  return -1
+}
+
+func Number(p *P) *Node {
+  Skip(p)
+  var s i64 = p.i
+  if At(p, p.i) == 45 {
+    p.i = p.i + 1
+  }
+  var base i64 = 10
+  if p.i + 1 < p.n && At(p, p.i) == 48 && (At(p, p.i + 1) == 120 || At(p, p.i + 1) == 88) {
+    base = 16
+    p.i = p.i + 2
+  }
+  while p.i < p.n && (IsDigit(At(p, p.i)) || (base == 16 && HexDigit(At(p, p.i)) >= 0)) {
+    p.i = p.i + 1
+  }
+  var e i64 = p.i
+  Bump(p)
+  p.cok = true
+  var v i64 = ParseInt(p, s, e)
+  if !p.cok {
+    Errorf2(p, strptr("bad integer "), strlen("bad integer "), p.src + s, e - s)
+  }
+  var n *Node = NewNode(p, OP_INT)
+  n.num = Eid(p)
+  n.valk = 1
+  n.ival = v
+  return n
+}
+
+// ParseInt is strconv.ParseInt(src[s:e], 0, 64) for the literals Number
+// scans: [-]digits (a leading 0 means octal) or [-]0x hex. It accumulates
+// negatively so -9223372036854775808 fits; clears p.cok on a bad literal.
+func ParseInt(p *P, s i64, e i64) i64 {
+  var j i64 = s
+  var neg bool = false
+  if At(p, j) == 45 {
+    neg = true
+    j = j + 1
+  }
+  var base i64 = 10
+  if e - j >= 2 && At(p, j) == 48 && (At(p, j + 1) == 120 || At(p, j + 1) == 88) {
+    base = 16
+    j = j + 2
+  } else if e - j >= 2 && At(p, j) == 48 {
+    base = 8
+    j = j + 1
+  }
+  if j >= e {
+    p.cok = false
+    return 0
+  }
+  var min i64 = -9223372036854775807 - 1
+  var v i64 = 0
+  while j < e {
+    var d i64 = HexDigit(At(p, j))
+    if d < 0 || d >= base {
+      p.cok = false
+      return 0
+    }
+    if v < (min + d) / base {
+      p.cok = false
+      return 0
+    }
+    v = (v * base) - d
+    j = j + 1
+  }
+  if neg {
+    return v
+  }
+  if v == min {
+    p.cok = false
+    return 0
+  }
+  return 0 - v
+}
+
+// Utf8Len is the length of the valid UTF-8 sequence at q (at most m bytes
+// available), or 0 if it is invalid, like utf8.DecodeRune's RuneError/1.
+func Utf8Len(q i64, m i64) i64 {
+  var c i64 = load8(q)
+  if c < 128 {
+    return 1
+  }
+  var need i64 = 0
+  var lo i64 = 128
+  var hi i64 = 191
+  if c >= 194 && c <= 223 {
+    need = 1
+  } else if c == 224 {
+    need = 2
+    lo = 160
+  } else if (c >= 225 && c <= 236) || c == 238 || c == 239 {
+    need = 2
+  } else if c == 237 {
+    need = 2
+    hi = 159
+  } else if c == 240 {
+    need = 3
+    lo = 144
+  } else if c >= 241 && c <= 243 {
+    need = 3
+  } else if c == 244 {
+    need = 3
+    hi = 143
+  } else {
+    return 0
+  }
+  if m < need + 1 {
+    return 0
+  }
+  var b1 i64 = load8(q + 1)
+  if b1 < lo || b1 > hi {
+    return 0
+  }
+  var k i64 = 2
+  while k <= need {
+    var b i64 = load8(q + k)
+    if b < 128 || b > 191 {
+      return 0
+    }
+    k = k + 1
+  }
+  return need + 1
+}
+
+// ParseString reads a "..." literal; the decoded bytes are p.tp/p.tn.
+func ParseString(p *P) i64 {
+  p.tp = p.src
+  p.tn = 0
+  if !PeekByte(p, 34) {
+    Errorf(p, strptr("expected string"), strlen("expected string"))
+    return 0
+  }
+  p.i = p.i + 1
+  Bump(p)
+  var b *ovid/mem.Buf = ovid/mem.New(p.io, 32)
+  while p.i < p.n {
+    var c i64 = At(p, p.i)
+    if c == 34 {
+      p.i = p.i + 1
+      Bump(p)
+      p.tp = b.data
+      p.tn = b.len
+      return 0
+    }
+    if c == 92 {
+      if p.i + 1 >= p.n {
+        Errorf(p, strptr("bad escape"), strlen("bad escape"))
+        return 0
+      }
+      var e i64 = At(p, p.i + 1)
+      p.i = p.i + 2
+      if e == 110 {
+        ovid/mem.WByte(p.io, b, 10)
+      } else if e == 116 {
+        ovid/mem.WByte(p.io, b, 9)
+      } else if e == 114 {
+        ovid/mem.WByte(p.io, b, 13)
+      } else if e == 92 || e == 34 {
+        ovid/mem.WByte(p.io, b, e)
+      } else if e == 48 {
+        ovid/mem.WByte(p.io, b, 0)
+      } else if e == 120 {
+        if p.i + 1 >= p.n {
+          Errorf(p, strptr("bad hex escape"), strlen("bad hex escape"))
+          return 0
+        }
+        var h1 i64 = HexDigit(At(p, p.i))
+        var h2 i64 = HexDigit(At(p, p.i + 1))
+        if h1 < 0 || h2 < 0 {
+          Errorf(p, strptr("bad hex escape"), strlen("bad hex escape"))
+          return 0
+        }
+        ovid/mem.WByte(p.io, b, (h1 * 16) + h2)
+        p.i = p.i + 2
+      } else {
+        Errorf(p, strptr("bad escape"), strlen("bad escape"))
+        return 0
+      }
+    } else {
+      if c == 10 {
+        Errorf(p, strptr("newline in string"), strlen("newline in string"))
+        return 0
+      }
+      var sz i64 = Utf8Len(p.src + p.i, p.n - p.i)
+      if sz == 0 {
+        Errorf(p, strptr("bad utf-8"), strlen("bad utf-8"))
+        return 0
+      }
+      ovid/mem.WBytes(p.io, b, p.src + p.i, sz)
+      p.i = p.i + sz
+    }
+  }
+  Errorf(p, strptr("unclosed string"), strlen("unclosed string"))
+  return 0
+}

@@ -17,8 +17,22 @@ const heapSize int64 = 128 << 20
 
 // Compile emits a statically linked executable.
 func Compile(p *ir.Program) ([]byte, error) {
+	bin, _, err := CompileMap(p)
+	return bin, err
+}
+
+// Mark says the code from Off (an offset into the code, which starts at
+// elf.CodeVAddr) up to the next mark belongs to the func or statement ID.
+type Mark struct {
+	Off int
+	ID  string
+}
+
+// CompileMap is Compile plus the code map, in increasing Off order, which
+// turns a crash address back into a statement.
+func CompileMap(p *ir.Program) ([]byte, []Mark, error) {
 	if p == nil {
-		return nil, fmt.Errorf("nil program")
+		return nil, nil, fmt.Errorf("nil program")
 	}
 	c := &cg{
 		prog:      p,
@@ -33,7 +47,7 @@ func Compile(p *ir.Program) ([]byte, error) {
 		for _, fn := range pkg.Funcs {
 			key := pkg.Path + "." + fn.Name
 			if _, ok := c.funcLabel[key]; ok {
-				return nil, fmt.Errorf("duplicate func %s", key)
+				return nil, nil, fmt.Errorf("duplicate func %s", key)
 			}
 			c.funcLabel[key] = c.b.NewLabel()
 			var ps []string
@@ -45,24 +59,28 @@ func Compile(p *ir.Program) ([]byte, error) {
 	}
 	mainKey := p.Entry + ".main"
 	if _, ok := c.funcLabel[mainKey]; !ok {
-		return nil, fmt.Errorf("missing %s", mainKey)
+		return nil, nil, fmt.Errorf("missing %s", mainKey)
 	}
 	if err := c.emitStartup(c.funcLabel[mainKey]); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+	live := reachable(p, mainKey)
 	for i := range p.Packages {
 		pkg := &p.Packages[i]
 		for fi := range pkg.Funcs {
+			if !live[pkg.Path+"."+pkg.Funcs[fi].Name] {
+				continue
+			}
 			if err := c.emitFunc(pkg, &pkg.Funcs[fi]); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 		}
 	}
 	if err := c.b.PatchRel(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	c.b.PatchAbs(elf.CodeVAddr())
-	return elf.Link(c.b.Code, c.ro, 0), nil
+	c.b.PatchAbs(elf.RodataVAddr(len(c.b.Code)))
+	return elf.Link(c.b.Code, c.ro, 0), c.marks, nil
 }
 
 type sig struct {
@@ -71,19 +89,28 @@ type sig struct {
 }
 
 type cg struct {
-	prog      *ir.Program
-	b         asm.Buf
-	ro        []byte
-	strs      map[string]int
-	funcLabel map[string]int
-	sigs      map[string]sig
-	pkgs      map[string]*ir.Package
-	locals    map[string]int32
-	consts    map[string]int64
+	prog       *ir.Program
+	b          asm.Buf
+	ro         []byte
+	strs       map[string]int
+	funcLabel  map[string]int
+	sigs       map[string]sig
+	pkgs       map[string]*ir.Package
+	locals     map[string]int32
+	consts     map[string]int64
 	localBytes int32
-	epi       int
-	pkg       *ir.Package
-	fn        *ir.Func
+	epi        int
+	pkg        *ir.Package
+	fn         *ir.Func
+	marks      []Mark
+}
+
+func (c *cg) mark(id string) {
+	if n := len(c.marks); n > 0 && c.marks[n-1].Off == len(c.b.Code) {
+		c.marks[n-1].ID = id
+		return
+	}
+	c.marks = append(c.marks, Mark{len(c.b.Code), id})
 }
 
 func (c *cg) intern(s string) int {
@@ -234,6 +261,7 @@ func (c *cg) emitFunc(pkg *ir.Package, fn *ir.Func) error {
 	}
 	lab := c.funcLabel[pkg.Path+"."+fn.Name]
 	c.b.Mark(lab)
+	c.mark(fn.ID)
 	c.epi = c.b.NewLabel()
 	c.b.PushReg(asm.RBP)
 	c.b.MovRegReg(asm.RBP, asm.RSP)
@@ -251,6 +279,7 @@ func (c *cg) emitFunc(pkg *ir.Package, fn *ir.Func) error {
 	if err := c.emitStmts(fn.Body); err != nil {
 		return err
 	}
+	c.mark(fn.ID)
 	c.b.XorRaxRax()
 	c.b.Mark(c.epi)
 	c.b.MovRegReg(asm.RSP, asm.RBP)
@@ -316,7 +345,7 @@ func exprMax(n *ir.Node, lv int) int {
 		return -1
 	}
 	switch n.Op {
-	case "int", "bool", "name", "strptr", "strlen":
+	case "int", "bool", "name", "strptr", "strlen", "sizeof":
 		return -1
 	case "add", "sub", "mul", "div", "mod", "and", "or", "xor", "shl", "shr", "eq", "ne", "lt", "le", "gt", "ge":
 		return max2(exprMax(n.Left, lv), exprMax(n.Right, lv+1), lv)
@@ -364,8 +393,13 @@ func (c *cg) emitStmts(stmts []*ir.Node) error {
 		if s == nil {
 			continue
 		}
+		c.mark(s.ID)
 		if err := c.emitStmt(s); err != nil {
 			return err
+		}
+		// Code after a nested block (a loop's jump back) is the statement's.
+		if len(s.Then) > 0 || len(s.Else) > 0 || len(s.Body) > 0 {
+			c.mark(s.ID)
 		}
 	}
 	return nil
@@ -496,6 +530,13 @@ func (c *cg) emitExpr(n *ir.Node, lv int) error {
 	case "int":
 		c.b.MovRegImm64(asm.RAX, n.Int)
 		return nil
+	case "sizeof":
+		sz, err := c.sizeOf(n.Type)
+		if err != nil {
+			return err
+		}
+		c.b.MovRegImm64(asm.RAX, sz)
+		return nil
 	case "bool":
 		v := int64(0)
 		if n.Bool {
@@ -512,6 +553,14 @@ func (c *cg) emitExpr(n *ir.Node, lv int) error {
 		c.b.MovRegImm64(asm.RAX, int64(len(n.Str)))
 		return nil
 	case "name":
+		if n.Pkg != "" {
+			v, err := c.pkgConst(n)
+			if err != nil {
+				return err
+			}
+			c.b.MovRegImm64(asm.RAX, v)
+			return nil
+		}
 		if disp, ok := c.locals[n.Name]; ok {
 			c.b.MovRaxMemRbp(disp)
 			return nil
@@ -702,6 +751,20 @@ func (c *cg) emitExpr(n *ir.Node, lv int) error {
 	}
 }
 
+// sizeOf is the byte size of struct type t (pkg.T): 8 per field.
+func (c *cg) sizeOf(t string) (int64, error) {
+	i := strings.LastIndex(t, ".")
+	if i < 0 || c.pkgs[t[:i]] == nil {
+		return 0, fmt.Errorf("sizeof %s", t)
+	}
+	for _, td := range c.pkgs[t[:i]].Types {
+		if td.Name == t[i+1:] {
+			return int64(8 * len(td.Fields)), nil
+		}
+	}
+	return 0, fmt.Errorf("sizeof %s", t)
+}
+
 func (c *cg) fieldOff(base *ir.Node, field string) (int32, error) {
 	bt := c.typeOf(base)
 	if !strings.HasPrefix(bt, "*") {
@@ -735,11 +798,14 @@ func (c *cg) typeOf(n *ir.Node) string {
 		return "invalid"
 	}
 	switch n.Op {
-	case "int", "strptr", "strlen", "add", "sub", "mul", "div", "mod", "and", "or", "xor", "shl", "shr", "neg", "bnot", "load8", "load32", "load64", "syscall":
+	case "int", "strptr", "strlen", "sizeof", "add", "sub", "mul", "div", "mod", "and", "or", "xor", "shl", "shr", "neg", "bnot", "load8", "load32", "load64", "syscall":
 		return "i64"
 	case "bool", "eq", "ne", "lt", "le", "gt", "ge", "land", "lor", "not":
 		return "bool"
 	case "name":
+		if n.Pkg != "" {
+			return "i64"
+		}
 		if _, ok := c.locals[n.Name]; ok {
 			// Recover the declared type from params and vars by scanning.
 			return c.localType(n.Name)
@@ -822,4 +888,59 @@ func (c *cg) fieldType(baseType, field string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("no field")
+}
+
+// pkgConst is the value of another package's const, path.Name.
+func (c *cg) pkgConst(n *ir.Node) (int64, error) {
+	if pkg := c.pkgs[n.Pkg]; pkg != nil {
+		for _, cn := range pkg.Consts {
+			if cn.Name == n.Name {
+				return cn.Value, nil
+			}
+		}
+	}
+	return 0, fmt.Errorf("const %s.%s", n.Pkg, n.Name)
+}
+
+// reachable is the set of funcs main can call, directly or not. Only these
+// are emitted.
+func reachable(p *ir.Program, root string) map[string]bool {
+	funcs := map[string]*ir.Func{}
+	for i := range p.Packages {
+		pkg := &p.Packages[i]
+		for fi := range pkg.Funcs {
+			funcs[pkg.Path+"."+pkg.Funcs[fi].Name] = &pkg.Funcs[fi]
+		}
+	}
+	live := map[string]bool{}
+	work := []string{root}
+	for len(work) > 0 {
+		key := work[len(work)-1]
+		work = work[:len(work)-1]
+		if live[key] || funcs[key] == nil {
+			continue
+		}
+		live[key] = true
+		pkg := key[:strings.LastIndex(key, ".")]
+		var walk func(n *ir.Node)
+		walk = func(n *ir.Node) {
+			if n == nil {
+				return
+			}
+			if n.Op == "call" {
+				callee := n.Pkg
+				if callee == "" {
+					callee = pkg
+				}
+				work = append(work, callee+"."+n.Func)
+			}
+			for _, ch := range n.Children() {
+				walk(ch)
+			}
+		}
+		for _, st := range funcs[key].Body {
+			walk(st)
+		}
+	}
+	return live
 }

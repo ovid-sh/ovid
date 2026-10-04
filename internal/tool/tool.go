@@ -1,3 +1,5 @@
+// Package tool implements the ovid commands. Every command writes JSON lines
+// to stdout; the last line is the result and always has "ok".
 package tool
 
 import (
@@ -6,173 +8,218 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"time"
 
 	"ovid/internal/check"
 	"ovid/internal/compile"
 	"ovid/internal/ir"
-	"ovid/internal/patch"
-	"ovid/internal/proj"
-	"ovid/internal/query"
+	"ovid/internal/module"
 )
 
-func Check(dir string, w io.Writer) int {
-	file, prog, err := ir.ReadFile(dir)
-	if err != nil {
-		writeErr(w, "read", err.Error())
-		return 1
-	}
-	lines, nerr := check.Run(prog, dir, file)
-	for _, ln := range lines {
-		fmt.Fprintf(w, "%s\n", ln)
-	}
-	if nerr > 0 {
-		return 1
-	}
-	return 0
-}
+// Exit codes.
+const (
+	ExitOK    = 0
+	ExitFail  = 1  // the program has errors, or the request failed
+	ExitStale = 2  // an edit named a hash or revision that has moved on
+	ExitUsage = 64 // bad command line
+	ExitBuild = 125
+)
 
-func Query(dir, id, name, pkg, kind string, w io.Writer) int {
-	file, prog, err := ir.ReadFile(dir)
-	if err != nil {
-		writeErr(w, "read", err.Error())
-		return 1
-	}
-	_, computed, err := ir.Hash(file)
-	if err != nil {
-		writeErr(w, "revision", err.Error())
-		return 1
-	}
-	res := query.Run(prog, computed, id, name, pkg, kind)
-	w.Write(query.Marshal(res))
-	return 0
-}
+// maxErrors caps error lines; the summary still counts all of them.
+const maxErrors = 40
 
-func Patch(dir, patchPath string, w io.Writer) int {
-	file, prog, err := ir.ReadFile(dir)
-	if err != nil {
-		writeErr(w, "read", err.Error())
-		return 1
-	}
-	_, computed, err := ir.Hash(file)
-	if err != nil {
-		writeErr(w, "revision", err.Error())
-		return 1
-	}
-	raw, err := os.ReadFile(patchPath)
-	if err != nil {
-		writeErr(w, "read", err.Error())
-		return 1
-	}
-	updated, resp := patch.Apply(prog, computed, raw)
-	if !resp.Ok {
-		w.Write(patch.Marshal(resp))
-		if resp.Error == "stale_patch" {
-			return 2
-		}
-		return 1
-	}
-	if err := WriteModule(dir, updated, ""); err != nil {
-		writeErr(w, "write", err.Error())
-		return 1
-	}
-	b, _, err := ir.ReadFile(dir)
-	if err != nil {
-		writeErr(w, "read", err.Error())
-		return 1
-	}
-	_, rev, err := ir.Hash(b)
-	if err != nil {
-		writeErr(w, "revision", err.Error())
-		return 1
-	}
-	resp.Revision = rev
-	w.Write(patch.Marshal(resp))
-	return 0
-}
-
-func Build(dir, out string, w io.Writer) int {
-	file, prog, err := ir.ReadFile(dir)
-	if err != nil {
-		writeErr(w, "read", err.Error())
-		return 1
-	}
-	lines, nerr := check.Run(prog, dir, file)
-	if nerr > 0 {
-		for _, ln := range lines {
-			fmt.Fprintf(w, "%s\n", ln)
-		}
-		return 1
-	}
-	bin, err := compile.Compile(prog)
-	if err != nil {
-		writeErr(w, "compile", err.Error())
-		return 1
-	}
-	if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil && filepath.Dir(out) != "." {
-		writeErr(w, "write", err.Error())
-		return 1
-	}
-	if err := os.WriteFile(out, bin, 0o755); err != nil {
-		writeErr(w, "write", err.Error())
-		return 1
-	}
-	writeOK(w, map[string]any{"ok": true, "output": out, "bytes": len(bin)})
-	return 0
-}
-
-// WriteModule writes ovid.json (stamped), PROJECTION, and one directory per package.
-// projection is used verbatim when non-empty; otherwise it is rendered from p.
-func WriteModule(dir string, p *ir.Program, projection string) error {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	p.Revision = ir.RevZeros
-	raw, err := ir.Marshal(p)
-	if err != nil {
-		return err
-	}
-	stamped, err := ir.Stamp(raw)
-	if err != nil {
-		return err
-	}
-	if err := os.WriteFile(filepath.Join(dir, "ovid.json"), stamped, 0o644); err != nil {
-		return err
-	}
-	stored, computed, err := ir.Hash(stamped)
-	if err != nil {
-		return err
-	}
-	if stored != computed {
-		return fmt.Errorf("revision stamp mismatch")
-	}
-	p.Revision = computed
-	if projection == "" {
-		projection = proj.Text(p)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "PROJECTION"), []byte(projection), 0o644); err != nil {
-		return err
-	}
-	for _, pkg := range p.Packages {
-		d := filepath.Join(dir, filepath.FromSlash(pkg.Path))
-		if err := os.MkdirAll(d, 0o755); err != nil {
-			return err
-		}
-		if err := os.WriteFile(filepath.Join(d, "PACKAGE"), []byte(pkg.Path+"\n"), 0o644); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func writeErr(w io.Writer, code, detail string) {
-	writeOK(w, map[string]any{"ok": false, "error": code, "detail": detail})
-}
-
-func writeOK(w io.Writer, v any) {
+func emit(w io.Writer, v any) {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
 	_ = enc.Encode(v)
 	w.Write(buf.Bytes())
+}
+
+func fail(w io.Writer, code, msg, hint string) int {
+	r := map[string]any{"ok": false, "error": code, "message": msg}
+	if hint != "" {
+		r["hint"] = hint
+	}
+	emit(w, r)
+	return ExitFail
+}
+
+// checked is a loaded module with its check result.
+type checked struct {
+	m     *module.Module
+	res   *check.Result
+	diags []module.Diag
+}
+
+// lockModule takes the module's write lock; see module.Lock.
+func lockModule(dir string) (func(), error) {
+	if dir == "" {
+		dir = "."
+	}
+	return module.Lock(dir)
+}
+
+func load(dir string) (*module.Module, error) {
+	if dir == "" {
+		dir = "."
+	}
+	return module.Load(dir)
+}
+
+func runCheck(m *module.Module) *checked {
+	c := &checked{m: m}
+	c.diags = append(c.diags, m.Errors...)
+	if len(m.Errors) > 0 {
+		// Do not typecheck a tree with holes; every error would cascade.
+		c.res = &check.Result{Types: map[string]string{}}
+		return c
+	}
+	c.res = check.Run(m.Prog)
+	for _, is := range c.res.Issues {
+		d := module.Diag{Fact: "error", Code: is.Code, Message: is.Message, ID: is.ID,
+			Expected: is.Expected, Got: is.Got, Hint: is.Hint}
+		m.Locate(&d)
+		c.diags = append(c.diags, d)
+	}
+	return c
+}
+
+func (c *checked) writeDiags(w io.Writer) {
+	for i, d := range c.diags {
+		if i == maxErrors {
+			emit(w, map[string]any{"fact": "truncated", "more": len(c.diags) - maxErrors})
+			break
+		}
+		emit(w, d)
+	}
+}
+
+// Check prints errors and a summary. facts adds declaration facts.
+func Check(dir string, facts bool, w io.Writer) int {
+	t0 := time.Now()
+	m, err := load(dir)
+	if err != nil {
+		return fail(w, "load", err.Error(), "")
+	}
+	c := runCheck(m)
+	c.writeDiags(w)
+	if facts {
+		for _, f := range c.res.Facts {
+			if l := m.Index[fmt.Sprint(f["id"])]; l != nil {
+				file, a, _, _ := m.Where(l.Span)
+				f["file"], f["line"] = file, a.Line
+			}
+			emit(w, f)
+		}
+	}
+	emit(w, map[string]any{"fact": "summary", "ok": len(c.diags) == 0, "errors": len(c.diags),
+		"packages": len(m.Prog.Packages), "funcs": c.res.Funcs, "revision": m.Revision(),
+		"ms": time.Since(t0).Milliseconds()})
+	if len(c.diags) > 0 {
+		return ExitFail
+	}
+	return ExitOK
+}
+
+// DefaultOut is where build writes when -o is not given.
+func DefaultOut(m *module.Module) string {
+	return filepath.Join(m.Root, "bin", filepath.Base(m.Name))
+}
+
+func compileTo(m *module.Module, p *ir.Program, out string) (int, error) {
+	bin, err := compile.Compile(p)
+	if err != nil {
+		return 0, err
+	}
+	_, err = module.WriteFiles(map[string][]byte{out: bin}, 0o755)
+	return len(bin), err
+}
+
+func Build(dir, out string, w io.Writer) int {
+	m, err := load(dir)
+	if err != nil {
+		return fail(w, "load", err.Error(), "")
+	}
+	c := runCheck(m)
+	if len(c.diags) > 0 {
+		c.writeDiags(w)
+		emit(w, map[string]any{"ok": false, "errors": len(c.diags)})
+		return ExitFail
+	}
+	if out == "" {
+		out = DefaultOut(m)
+	}
+	n, err := compileTo(m, m.Prog, out)
+	if err != nil {
+		return fail(w, "compile", err.Error(), "")
+	}
+	emit(w, map[string]any{"ok": true, "output": out, "bytes": n})
+	return ExitOK
+}
+
+// Run builds to a temporary file and runs it with the given args. stdio is
+// the program's; the exit code is the program's. If the build fails, ovid
+// prints the errors and exits 125.
+func Run(dir string, args []string, w io.Writer) int {
+	m, err := load(dir)
+	if err != nil {
+		fail(w, "load", err.Error(), "")
+		return ExitBuild
+	}
+	c := runCheck(m)
+	if len(c.diags) > 0 {
+		c.writeDiags(w)
+		emit(w, map[string]any{"ok": false, "errors": len(c.diags)})
+		return ExitBuild
+	}
+	tmpd, err := os.MkdirTemp("", "ovid-run-")
+	if err != nil {
+		fail(w, "write", err.Error(), "")
+		return ExitBuild
+	}
+	defer os.RemoveAll(tmpd)
+	bin := filepath.Join(tmpd, filepath.Base(m.Name))
+	if _, err := compileTo(m, m.Prog, bin); err != nil {
+		fail(w, "compile", err.Error(), "")
+		return ExitBuild
+	}
+	cmd := exec.Command(bin, args...)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	err = cmd.Run()
+	if ee, ok := err.(*exec.ExitError); ok {
+		if sig := signalOf(ee); sig != "" {
+			fmt.Fprintf(os.Stderr, "ovid: program killed by %s\n", sig)
+			return 128 + sigNum(ee)
+		}
+		return ee.ExitCode()
+	}
+	if err != nil {
+		fail(w, "run", err.Error(), "")
+		return ExitBuild
+	}
+	return ExitOK
+}
+
+// Dump prints the program tree as JSON (the format the self-hosted CLI reads).
+func Dump(dir string, w io.Writer) int {
+	m, err := load(dir)
+	if err != nil {
+		return fail(w, "load", err.Error(), "")
+	}
+	if len(m.Errors) > 0 {
+		c := &checked{m: m, diags: m.Errors}
+		c.writeDiags(w)
+		emit(w, map[string]any{"ok": false, "errors": len(m.Errors)})
+		return ExitFail
+	}
+	m.Prog.Revision = m.Revision()
+	raw, err := ir.Marshal(m.Prog)
+	if err != nil {
+		return fail(w, "dump", err.Error(), "")
+	}
+	w.Write(raw)
+	return ExitOK
 }

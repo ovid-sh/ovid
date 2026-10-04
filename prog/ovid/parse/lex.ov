@@ -1,0 +1,382 @@
+package ovid/parse
+
+import ovid/io
+import ovid/mem
+
+// P is the parser state for one file. It mirrors internal/syntax/parse.go:
+// i is the cursor, last the end of the last consumed token, nl whether the
+// blank run before the next token holds a newline, skipped whether that run
+// was already skipped. Ident, ParsePath and ParseType return their string in
+// tp/tn. The first error sets err and moves the cursor to the end so every
+// loop stops; later errors are ignored.
+type P struct {
+  io *ovid/io.Cap
+  src i64
+  n i64
+  i i64
+  nl bool
+  skipped bool
+  last i64
+  file *File
+  err i64
+  eoff i64
+  emsg *ovid/mem.Buf
+  pkg *Pkg
+  fnp i64
+  fnn i64
+  ec i64
+  sc i64
+  tp i64
+  tn i64
+  cok bool
+  xp i64
+  xn i64
+}
+
+func IsIdentStart(c i64) bool {
+  return c == 95 || (c >= 97 && c <= 122) || (c >= 65 && c <= 90)
+}
+
+func IsDigit(c i64) bool {
+  return c >= 48 && c <= 57
+}
+
+func IsIdentCont(c i64) bool {
+  return IsIdentStart(c) || IsDigit(c)
+}
+
+func At(p *P, k i64) i64 {
+  return load8(p.src + k)
+}
+
+// ErrBegin starts an error message in p.emsg; false if an error is already set.
+func ErrBegin(p *P) bool {
+  if p.err != 0 {
+    return false
+  }
+  Skip(p)
+  if p.err != 0 {
+    return false
+  }
+  p.emsg.len = 0
+  return true
+}
+
+func EW(p *P, s i64, n i64) i64 {
+  return ovid/mem.WBytes(p.io, p.emsg, s, n)
+}
+
+// ErrEnd finishes the message begun by ErrBegin: "expected ..." messages get
+// ", found <token>", and the offset points at the end of the line when the
+// next token is on a later line.
+func ErrEnd(p *P) i64 {
+  if p.emsg.len >= 8 && ovid/mem.Eq(p.emsg.data, 8, strptr("expected"), 8) {
+    EW(p, strptr(", found "), strlen(", found "))
+    Found(p)
+  }
+  var off i64 = p.i
+  if p.i >= p.n || (p.nl && p.i > 0) {
+    off = p.last
+  }
+  p.err = 1
+  p.eoff = off
+  p.i = p.n
+  p.skipped = true
+  p.nl = false
+  return 0
+}
+
+func Errorf(p *P, s i64, n i64) i64 {
+  if ErrBegin(p) {
+    EW(p, s, n)
+    ErrEnd(p)
+  }
+  return 0
+}
+
+// Errorf2 is Errorf with a formatted middle: s1 + name + s2.
+func Errorf2(p *P, s1 i64, n1 i64, mp i64, mn i64) i64 {
+  if ErrBegin(p) {
+    EW(p, s1, n1)
+    EW(p, mp, mn)
+    ErrEnd(p)
+  }
+  return 0
+}
+
+// Found describes the next token the way strconv.Quote would.
+func Found(p *P) i64 {
+  if p.i >= p.n {
+    return EW(p, strptr("end of file"), strlen("end of file"))
+  }
+  if p.nl && p.i > 0 {
+    return EW(p, strptr("newline"), strlen("newline"))
+  }
+  var e i64 = p.i
+  if IsIdentStart(At(p, e)) || IsDigit(At(p, e)) {
+    while e < p.n && IsIdentCont(At(p, e)) {
+      e = e + 1
+    }
+  } else {
+    e = e + 1
+  }
+  ovid/mem.WByte(p.io, p.emsg, 34)
+  var k i64 = p.i
+  while k < e {
+    var c i64 = At(p, k)
+    if c == 34 || c == 92 {
+      ovid/mem.WByte(p.io, p.emsg, 92)
+      ovid/mem.WByte(p.io, p.emsg, c)
+    } else if c >= 32 && c < 127 {
+      ovid/mem.WByte(p.io, p.emsg, c)
+    } else if c == 10 {
+      EW(p, strptr("\\n"), 2)
+    } else if c == 9 {
+      EW(p, strptr("\\t"), 2)
+    } else if c == 13 {
+      EW(p, strptr("\\r"), 2)
+    } else {
+      var hx i64 = ovid/io.Alloc(p.io, 8)
+      store8(hx, 92)
+      store8(hx + 1, 120)
+      ovid/mem.HexOut(hx + 2, c, 2)
+      EW(p, hx, 4)
+    }
+    k = k + 1
+  }
+  ovid/mem.WByte(p.io, p.emsg, 34)
+  return 0
+}
+
+func Start(p *P) i64 {
+  Skip(p)
+  return p.i
+}
+
+func Bump(p *P) i64 {
+  p.skipped = false
+  p.last = p.i
+  return 0
+}
+
+func Eof(p *P) bool {
+  Skip(p)
+  return p.i >= p.n
+}
+
+func Skip(p *P) i64 {
+  if p.skipped {
+    return 0
+  }
+  p.skipped = true
+  p.nl = false
+  while p.i < p.n {
+    var c i64 = At(p, p.i)
+    if c == 32 || c == 9 || c == 13 {
+      p.i = p.i + 1
+    } else if c == 10 {
+      p.nl = true
+      p.i = p.i + 1
+    } else if c == 47 && p.i + 1 < p.n && At(p, p.i + 1) == 47 {
+      p.i = p.i + 2
+      while p.i < p.n && At(p, p.i) != 10 {
+        p.i = p.i + 1
+      }
+    } else if c == 47 && p.i + 1 < p.n && At(p, p.i + 1) == 42 {
+      p.i = p.i + 2
+      while p.i + 1 < p.n && !(At(p, p.i) == 42 && At(p, p.i + 1) == 47) {
+        if At(p, p.i) == 10 {
+          p.nl = true
+        }
+        p.i = p.i + 1
+      }
+      if p.i + 1 >= p.n {
+        p.emsg.len = 0
+        EW(p, strptr("unclosed comment"), strlen("unclosed comment"))
+        ErrEnd(p)
+        return 0
+      }
+      p.i = p.i + 2
+    } else {
+      return 0
+    }
+  }
+  return 0
+}
+
+func PeekByte(p *P, b i64) bool {
+  Skip(p)
+  return p.i < p.n && At(p, p.i) == b
+}
+
+func Expect(p *P, b i64) i64 {
+  if !PeekByte(p, b) {
+    if ErrBegin(p) {
+      EW(p, strptr("expected \""), strlen("expected \""))
+      ovid/mem.WByte(p.io, p.emsg, b)
+      ovid/mem.WByte(p.io, p.emsg, 34)
+      ErrEnd(p)
+    }
+    return 0
+  }
+  p.i = p.i + 1
+  Bump(p)
+  return 0
+}
+
+func PeekIdent(p *P) bool {
+  Skip(p)
+  return p.i < p.n && IsIdentStart(At(p, p.i))
+}
+
+// Ident consumes an identifier; its text is p.tp/p.tn (empty on error).
+func Ident(p *P) i64 {
+  Skip(p)
+  if p.i >= p.n || !IsIdentStart(At(p, p.i)) {
+    Errorf(p, strptr("expected identifier"), strlen("expected identifier"))
+    p.tp = p.src
+    p.tn = 0
+    return p.tp
+  }
+  var s i64 = p.i
+  p.i = p.i + 1
+  while p.i < p.n && IsIdentCont(At(p, p.i)) {
+    p.i = p.i + 1
+  }
+  p.tp = p.src + s
+  p.tn = p.i - s
+  Bump(p)
+  return p.tp
+}
+
+// PeekKw reports whether the next token is the identifier lit. Skipping
+// blanks is idempotent, so unlike the Go parser it needs no save/restore.
+func PeekKw(p *P, lit i64, n i64) bool {
+  Skip(p)
+  if p.i >= p.n || !IsIdentStart(At(p, p.i)) {
+    return false
+  }
+  var e i64 = p.i + 1
+  while e < p.n && IsIdentCont(At(p, e)) {
+    e = e + 1
+  }
+  return ovid/mem.Eq(p.src + p.i, e - p.i, lit, n)
+}
+
+func Kw(p *P, lit i64, n i64) bool {
+  if !PeekKw(p, lit, n) {
+    return false
+  }
+  Ident(p)
+  return true
+}
+
+func ExpectKw(p *P, lit i64, n i64) i64 {
+  if !Kw(p, lit, n) {
+    Errorf2(p, strptr("expected "), strlen("expected "), lit, n)
+  }
+  return 0
+}
+
+func ExpectEnd(p *P) i64 {
+  if PeekByte(p, 125) {
+    return 0
+  }
+  if Eof(p) {
+    return 0
+  }
+  if !p.nl {
+    Errorf(p, strptr("expected newline"), strlen("expected newline"))
+  }
+  return 0
+}
+
+func PeekAssign(p *P) bool {
+  Skip(p)
+  if p.i < p.n && At(p, p.i) == 61 {
+    if p.i + 1 < p.n && At(p, p.i + 1) == 61 {
+      return false
+    }
+    return true
+  }
+  return false
+}
+
+// Cat returns a new buffer holding a then b (length an + bn).
+func Cat(io *ovid/io.Cap, a i64, an i64, b i64, bn i64) i64 {
+  var d i64 = ovid/io.Alloc(io, an + bn + 1)
+  ovid/mem.Copy(d, a, an)
+  ovid/mem.Copy(d + an, b, bn)
+  store8(d + an + bn, 0)
+  return d
+}
+
+// ParsePath reads ident ('/' ident)*; the joined path is p.tp/p.tn.
+func ParsePath(p *P) i64 {
+  Ident(p)
+  var sp i64 = p.tp
+  var sn i64 = p.tn
+  while PeekByte(p, 47) {
+    Expect(p, 47)
+    Ident(p)
+    if p.tp == sp + sn + 1 {
+      sn = sn + 1 + p.tn
+    } else {
+      var t i64 = Cat(p.io, sp, sn, strptr("/"), 1)
+      sp = Cat(p.io, t, sn + 1, p.tp, p.tn)
+      sn = sn + 1 + p.tn
+    }
+  }
+  p.tp = sp
+  p.tn = sn
+  return 0
+}
+
+// ParseType reads a type and leaves its full spelling in p.tp/p.tn:
+// i64, bool, pkg/path.Name, or *pkg/path.Name.
+func ParseType(p *P) i64 {
+  var star bool = false
+  if PeekByte(p, 42) {
+    Expect(p, 42)
+    star = true
+  }
+  ParsePath(p)
+  var namep i64 = p.tp
+  var namen i64 = p.tn
+  var pkgp i64 = 0
+  var pkgn i64 = 0
+  if PeekByte(p, 46) {
+    Expect(p, 46)
+    pkgp = namep
+    pkgn = namen
+    Ident(p)
+    namep = p.tp
+    namen = p.tn
+  }
+  if pkgp == 0 {
+    if ovid/mem.Eq(namep, namen, strptr("i64"), 3) || ovid/mem.Eq(namep, namen, strptr("bool"), 4) {
+      if star {
+        Errorf2(p, strptr("cannot use a pointer to "), strlen("cannot use a pointer to "), namep, namen)
+      }
+      p.tp = namep
+      p.tn = namen
+      return 0
+    }
+    pkgp = p.pkg.pathp
+    pkgn = p.pkg.pathn
+  }
+  var k i64 = 0
+  if star {
+    k = 1
+  }
+  var tn i64 = ((k + pkgn) + 1) + namen
+  var d i64 = ovid/io.Alloc(p.io, tn + 1)
+  store8(d, 42)
+  ovid/mem.Copy(d + k, pkgp, pkgn)
+  store8((d + k) + pkgn, 46)
+  ovid/mem.Copy(((d + k) + pkgn) + 1, namep, namen)
+  store8(d + tn, 0)
+  p.tp = d
+  p.tn = tn
+  return 0
+}

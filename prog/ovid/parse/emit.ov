@@ -1,0 +1,608 @@
+package ovid/parse
+
+import ovid/io
+import ovid/mem
+
+// E writes the program tree as compact JSON in the shape of `ovid dump`
+// (internal/ir Marshal). Every id it writes is recorded in m.locs as
+// (offset of the id text in b, its length, *File, source offset) so
+// diagnostics can map an id back to file:line:col.
+type E struct {
+  io *ovid/io.Cap
+  b *ovid/mem.Buf
+  m *Mod
+  pkgp i64
+  pkgn i64
+  fnp i64
+  fnn i64
+  file *File
+}
+
+func WL(e *E, s i64, n i64) i64 {
+  return ovid/mem.WBytes(e.io, e.b, s, n)
+}
+
+func WC(e *E, c i64) i64 {
+  return ovid/mem.WByte(e.io, e.b, c)
+}
+
+func WInt(io *ovid/io.Cap, b *ovid/mem.Buf, v i64) i64 {
+  var tmp i64 = ovid/io.Alloc(io, 64)
+  if v == -9223372036854775807 - 1 {
+    return ovid/mem.WBytes(io, b, strptr("-9223372036854775808"), 20)
+  }
+  var n i64 = ovid/mem.FormatI64(tmp, v)
+  return ovid/mem.WBytes(io, b, tmp, n)
+}
+
+// WStr writes p[0:n] as a JSON string. Bytes >= 0x80 pass through as is.
+func WStr(io *ovid/io.Cap, b *ovid/mem.Buf, p i64, n i64) i64 {
+  ovid/mem.WByte(io, b, 34)
+  var i i64 = 0
+  var s i64 = 0
+  while i < n {
+    var c i64 = load8(p + i)
+    if c == 34 || c == 92 || c < 32 {
+      ovid/mem.WBytes(io, b, p + s, i - s)
+      ovid/mem.WByte(io, b, 92)
+      if c == 34 || c == 92 {
+        ovid/mem.WByte(io, b, c)
+      } else if c == 10 {
+        ovid/mem.WByte(io, b, 110)
+      } else if c == 13 {
+        ovid/mem.WByte(io, b, 114)
+      } else if c == 9 {
+        ovid/mem.WByte(io, b, 116)
+      } else {
+        ovid/mem.WBytes(io, b, strptr("u00"), 3)
+        var hx i64 = ovid/io.Alloc(io, 8)
+        ovid/mem.HexOut(hx, c, 2)
+        ovid/mem.WBytes(io, b, hx, 2)
+      }
+      s = i + 1
+    }
+    i = i + 1
+  }
+  ovid/mem.WBytes(io, b, p + s, n - s)
+  ovid/mem.WByte(io, b, 34)
+  return 0
+}
+
+func WS(e *E, p i64, n i64) i64 {
+  return WStr(e.io, e.b, p, n)
+}
+
+// Rec records that the id text at b[start:b.len] names source offset off.
+func Rec(e *E, start i64, off i64) i64 {
+  var m *Mod = e.m
+  if m.nloc >= m.capl {
+    var nc i64 = m.capl * 2
+    if nc < 1024 {
+      nc = 1024
+    }
+    var nl i64 = ovid/io.Alloc(e.io, nc * 32)
+    ovid/mem.Copy(nl, m.locs, m.nloc * 32)
+    m.locs = nl
+    m.capl = nc
+  }
+  var r i64 = m.locs + (m.nloc * 32)
+  store64(r, start)
+  store64(r + 8, e.b.len - start)
+  store64(r + 16, e.file as i64)
+  store64(r + 24, off)
+  m.nloc = m.nloc + 1
+  return 0
+}
+
+// IdOpen writes `"id":"` plus a prefix; IdClose closes it and records it.
+func IdOpen(e *E, pre i64, pren i64) i64 {
+  WL(e, strptr("\"id\":\""), 6)
+  var start i64 = e.b.len
+  WL(e, pre, pren)
+  return start
+}
+
+func IdClose(e *E, start i64, off i64) i64 {
+  Rec(e, start, off)
+  WC(e, 34)
+  return 0
+}
+
+func WOp(e *E, op i64) i64 {
+  if op == OP_VAR {
+    return WL(e, strptr("var"), 3)
+  }
+  if op == OP_ASSIGN {
+    return WL(e, strptr("assign"), 6)
+  }
+  if op == OP_SETFIELD {
+    return WL(e, strptr("setfield"), 8)
+  }
+  if op == OP_STORE8 {
+    return WL(e, strptr("store8"), 6)
+  }
+  if op == OP_STORE64 {
+    return WL(e, strptr("store64"), 7)
+  }
+  if op == OP_RETURN {
+    return WL(e, strptr("return"), 6)
+  }
+  if op == OP_IF {
+    return WL(e, strptr("if"), 2)
+  }
+  if op == OP_WHILE {
+    return WL(e, strptr("while"), 5)
+  }
+  if op == OP_EXPR {
+    return WL(e, strptr("expr"), 4)
+  }
+  if op == OP_INT {
+    return WL(e, strptr("int"), 3)
+  }
+  if op == OP_BOOL {
+    return WL(e, strptr("bool"), 4)
+  }
+  if op == OP_NAME {
+    return WL(e, strptr("name"), 4)
+  }
+  if op == OP_CALL {
+    return WL(e, strptr("call"), 4)
+  }
+  if op == OP_SYSCALL {
+    return WL(e, strptr("syscall"), 7)
+  }
+  if op == OP_FIELD {
+    return WL(e, strptr("field"), 5)
+  }
+  if op == OP_CAST {
+    return WL(e, strptr("cast"), 4)
+  }
+  if op == OP_NOT {
+    return WL(e, strptr("not"), 3)
+  }
+  if op == OP_NEG {
+    return WL(e, strptr("neg"), 3)
+  }
+  if op == OP_BNOT {
+    return WL(e, strptr("bnot"), 4)
+  }
+  if op == OP_LOAD8 {
+    return WL(e, strptr("load8"), 5)
+  }
+  if op == OP_LOAD32 {
+    return WL(e, strptr("load32"), 6)
+  }
+  if op == OP_LOAD64 {
+    return WL(e, strptr("load64"), 6)
+  }
+  if op == OP_STRPTR {
+    return WL(e, strptr("strptr"), 6)
+  }
+  if op == OP_STRLEN {
+    return WL(e, strptr("strlen"), 6)
+  }
+  if op == OP_SIZEOF {
+    return WL(e, strptr("sizeof"), 6)
+  }
+  if op == OP_LOR {
+    return WL(e, strptr("lor"), 3)
+  }
+  if op == OP_LAND {
+    return WL(e, strptr("land"), 4)
+  }
+  if op == OP_EQ {
+    return WL(e, strptr("eq"), 2)
+  }
+  if op == OP_NE {
+    return WL(e, strptr("ne"), 2)
+  }
+  if op == OP_LT {
+    return WL(e, strptr("lt"), 2)
+  }
+  if op == OP_LE {
+    return WL(e, strptr("le"), 2)
+  }
+  if op == OP_GT {
+    return WL(e, strptr("gt"), 2)
+  }
+  if op == OP_GE {
+    return WL(e, strptr("ge"), 2)
+  }
+  if op == OP_ADD {
+    return WL(e, strptr("add"), 3)
+  }
+  if op == OP_SUB {
+    return WL(e, strptr("sub"), 3)
+  }
+  if op == OP_OR {
+    return WL(e, strptr("or"), 2)
+  }
+  if op == OP_XOR {
+    return WL(e, strptr("xor"), 3)
+  }
+  if op == OP_MUL {
+    return WL(e, strptr("mul"), 3)
+  }
+  if op == OP_DIV {
+    return WL(e, strptr("div"), 3)
+  }
+  if op == OP_MOD {
+    return WL(e, strptr("mod"), 3)
+  }
+  if op == OP_AND {
+    return WL(e, strptr("and"), 3)
+  }
+  if op == OP_SHL {
+    return WL(e, strptr("shl"), 3)
+  }
+  return WL(e, strptr("shr"), 3)
+}
+
+func ESub(e *E, key i64, kn i64, n *Node) i64 {
+  if n == 0 as *Node {
+    return 0
+  }
+  WL(e, key, kn)
+  return ENode(e, n)
+}
+
+func EList(e *E, key i64, kn i64, n *Node) i64 {
+  if n == 0 as *Node {
+    return 0
+  }
+  WL(e, key, kn)
+  while n != 0 as *Node {
+    ENode(e, n)
+    n = n.next
+    if n != 0 as *Node {
+      WC(e, 44)
+    }
+  }
+  WC(e, 93)
+  return 0
+}
+
+func ENode(e *E, n *Node) i64 {
+  WC(e, 123)
+  var st i64 = 0
+  if n.op <= OP_EXPR {
+    st = IdOpen(e, strptr("st:"), 3)
+  } else {
+    st = IdOpen(e, strptr("ex:"), 3)
+  }
+  WL(e, e.pkgp, e.pkgn)
+  WC(e, 46)
+  WL(e, e.fnp, e.fnn)
+  WC(e, 58)
+  WInt(e.io, e.b, n.num)
+  IdClose(e, st, n.off)
+  WL(e, strptr(",\"op\":\""), 7)
+  WOp(e, n.op)
+  WC(e, 34)
+  if n.namen != 0 {
+    WL(e, strptr(",\"name\":"), 8)
+    WS(e, n.namep, n.namen)
+  }
+  if n.typn != 0 {
+    WL(e, strptr(",\"type\":"), 8)
+    WS(e, n.typp, n.typn)
+  }
+  if n.pkgn != 0 {
+    WL(e, strptr(",\"pkg\":"), 7)
+    WS(e, n.pkgp, n.pkgn)
+  }
+  if n.fnn != 0 {
+    WL(e, strptr(",\"func\":"), 8)
+    WS(e, n.fnp, n.fnn)
+  }
+  if n.valk == 1 {
+    WL(e, strptr(",\"value\":"), 9)
+    WInt(e.io, e.b, n.ival)
+  } else if n.valk == 2 {
+    if n.ival != 0 {
+      WL(e, strptr(",\"value\":true"), 13)
+    } else {
+      WL(e, strptr(",\"value\":false"), 14)
+    }
+  } else if n.valk == 3 {
+    WL(e, strptr(",\"value\":"), 9)
+    WS(e, n.strp, n.strn)
+  }
+  ESub(e, strptr(",\"left\":"), 8, n.left)
+  ESub(e, strptr(",\"right\":"), 9, n.right)
+  ESub(e, strptr(",\"arg\":"), 7, n.arg)
+  ESub(e, strptr(",\"base\":"), 8, n.base)
+  ESub(e, strptr(",\"addr\":"), 8, n.addr)
+  ESub(e, strptr(",\"val\":"), 7, n.val)
+  ESub(e, strptr(",\"cond\":"), 8, n.cond)
+  EList(e, strptr(",\"args\":["), 9, n.args)
+  EList(e, strptr(",\"then\":["), 9, n.then)
+  EList(e, strptr(",\"else\":["), 9, n.els)
+  EList(e, strptr(",\"body\":["), 9, n.body)
+  WC(e, 125)
+  return 0
+}
+
+// EDeclId writes "id":"<pre><pkg>.<name>" for decl d.
+func EDeclId(e *E, pre i64, pren i64, d *Decl) i64 {
+  var st i64 = IdOpen(e, pre, pren)
+  WL(e, e.pkgp, e.pkgn)
+  WC(e, 46)
+  WL(e, d.namep, d.namen)
+  e.file = d.file
+  IdClose(e, st, d.off)
+  WL(e, strptr(",\"name\":"), 8)
+  WS(e, d.namep, d.namen)
+  return 0
+}
+
+func EPkg(e *E, k *Pkg) i64 {
+  e.pkgp = k.pathp
+  e.pkgn = k.pathn
+  e.file = k.file
+  WC(e, 123)
+  var st i64 = IdOpen(e, strptr("pkg:"), 4)
+  WL(e, k.pathp, k.pathn)
+  IdClose(e, st, k.off)
+  WL(e, strptr(",\"path\":"), 8)
+  WS(e, k.pathp, k.pathn)
+  var d *Decl = k.ims
+  if d != 0 as *Decl {
+    WL(e, strptr(",\"imports\":["), 12)
+    while d != 0 as *Decl {
+      WC(e, 123)
+      e.file = d.file
+      var is i64 = IdOpen(e, strptr("im:"), 3)
+      WL(e, k.pathp, k.pathn)
+      WC(e, 58)
+      WL(e, d.namep, d.namen)
+      IdClose(e, is, d.off)
+      WL(e, strptr(",\"path\":"), 8)
+      WS(e, d.namep, d.namen)
+      WC(e, 125)
+      d = d.next
+      if d != 0 as *Decl {
+        WC(e, 44)
+      }
+    }
+    WC(e, 93)
+  }
+  d = k.cs
+  if d != 0 as *Decl {
+    WL(e, strptr(",\"consts\":["), 11)
+    while d != 0 as *Decl {
+      WC(e, 123)
+      EDeclId(e, strptr("cn:"), 3, d)
+      WL(e, strptr(",\"type\":\"i64\",\"value\":"), 22)
+      WInt(e.io, e.b, d.val)
+      WC(e, 125)
+      d = d.next
+      if d != 0 as *Decl {
+        WC(e, 44)
+      }
+    }
+    WC(e, 93)
+  }
+  d = k.ts
+  if d != 0 as *Decl {
+    WL(e, strptr(",\"types\":["), 10)
+    while d != 0 as *Decl {
+      WC(e, 123)
+      EDeclId(e, strptr("ty:"), 3, d)
+      WL(e, strptr(",\"fields\":"), 10)
+      var f *Decl = d.sub
+      if f == 0 as *Decl {
+        WL(e, strptr("null"), 4)
+      } else {
+        WC(e, 91)
+        while f != 0 as *Decl {
+          WC(e, 123)
+          var fs i64 = IdOpen(e, strptr("fld:"), 4)
+          WL(e, k.pathp, k.pathn)
+          WC(e, 46)
+          WL(e, d.namep, d.namen)
+          WC(e, 46)
+          WL(e, f.namep, f.namen)
+          IdClose(e, fs, f.off)
+          WL(e, strptr(",\"name\":"), 8)
+          WS(e, f.namep, f.namen)
+          WL(e, strptr(",\"type\":"), 8)
+          WS(e, f.typp, f.typn)
+          WC(e, 125)
+          f = f.next
+          if f != 0 as *Decl {
+            WC(e, 44)
+          }
+        }
+        WC(e, 93)
+      }
+      WC(e, 125)
+      d = d.next
+      if d != 0 as *Decl {
+        WC(e, 44)
+      }
+    }
+    WC(e, 93)
+  }
+  d = k.fs
+  if d != 0 as *Decl {
+    WL(e, strptr(",\"funcs\":["), 10)
+    while d != 0 as *Decl {
+      WC(e, 123)
+      EDeclId(e, strptr("fn:"), 3, d)
+      var pa *Decl = d.sub
+      if pa != 0 as *Decl {
+        WL(e, strptr(",\"params\":["), 11)
+        while pa != 0 as *Decl {
+          WC(e, 123)
+          var ps i64 = IdOpen(e, strptr("pa:"), 3)
+          WL(e, k.pathp, k.pathn)
+          WC(e, 46)
+          WL(e, d.namep, d.namen)
+          WC(e, 46)
+          WL(e, pa.namep, pa.namen)
+          IdClose(e, ps, pa.off)
+          WL(e, strptr(",\"name\":"), 8)
+          WS(e, pa.namep, pa.namen)
+          WL(e, strptr(",\"type\":"), 8)
+          WS(e, pa.typp, pa.typn)
+          WC(e, 125)
+          pa = pa.next
+          if pa != 0 as *Decl {
+            WC(e, 44)
+          }
+        }
+        WC(e, 93)
+      }
+      WL(e, strptr(",\"result\":"), 10)
+      WS(e, d.typp, d.typn)
+      e.fnp = d.namep
+      e.fnn = d.namen
+      EList(e, strptr(",\"body\":["), 9, d.body)
+      WC(e, 125)
+      d = d.next
+      if d != 0 as *Decl {
+        WC(e, 44)
+      }
+    }
+    WC(e, 93)
+  }
+  WC(e, 125)
+  return 0
+}
+
+// Emit writes the whole program to m.json and indexes the ids.
+func Emit(m *Mod) i64 {
+  var e *E = ovid/io.Alloc(m.io, sizeof(E)) as *E
+  e.io = m.io
+  e.m = m
+  e.b = ovid/mem.New(m.io, 1 << 20)
+  m.json = e.b
+  WL(e, strptr("{\"revision\":\""), 13)
+  WL(e, m.rev, 16)
+  WL(e, strptr("\",\"module\":"), 11)
+  WS(e, m.namep, m.namen)
+  WL(e, strptr(",\"entry\":"), 9)
+  WS(e, m.entryp, m.entryn)
+  WL(e, strptr(",\"packages\":"), 12)
+  var k *Pkg = m.pkgs
+  if k == 0 as *Pkg {
+    WL(e, strptr("null"), 4)
+  } else {
+    WC(e, 91)
+    while k != 0 as *Pkg {
+      EPkg(e, k)
+      k = k.next
+      if k != 0 as *Pkg {
+        WC(e, 44)
+      }
+    }
+    WC(e, 93)
+  }
+  WL(e, strptr("}\n"), 2)
+  Index(m)
+  return 0
+}
+
+func HashBytes(p i64, n i64) i64 {
+  var h i64 = 5381
+  var i i64 = 0
+  while i < n {
+    h = ((h << 5) + h) + load8(p + i)
+    i = i + 1
+  }
+  return h
+}
+
+// Index builds an open-addressing table over the recorded ids. Slots hold
+// record index + 1. Duplicate ids keep their first record.
+func Index(m *Mod) i64 {
+  var sz i64 = 1024
+  while sz < m.nloc * 2 {
+    sz = sz * 2
+  }
+  m.tab = ovid/io.Alloc(m.io, sz * 8)
+  m.tabmask = sz - 1
+  var i i64 = 0
+  while i < m.nloc {
+    var r i64 = m.locs + (i * 32)
+    var p i64 = m.json.data + load64(r)
+    var n i64 = load64(r + 8)
+    var h i64 = HashBytes(p, n) & m.tabmask
+    var placed bool = false
+    while !placed {
+      var slot i64 = load64(m.tab + (h * 8))
+      if slot == 0 {
+        store64(m.tab + (h * 8), i + 1)
+        placed = true
+      } else {
+        var o i64 = m.locs + ((slot - 1) * 32)
+        if ovid/mem.Eq(m.json.data + load64(o), load64(o + 8), p, n) {
+          placed = true
+        }
+        h = (h + 1) & m.tabmask
+      }
+    }
+    i = i + 1
+  }
+  return 0
+}
+
+// Find returns the location record for id p[0:n], or 0.
+func Find(m *Mod, p i64, n i64) i64 {
+  if m.tab == 0 || n == 0 {
+    return 0
+  }
+  var h i64 = HashBytes(p, n) & m.tabmask
+  while true {
+    var slot i64 = load64(m.tab + (h * 8))
+    if slot == 0 {
+      return 0
+    }
+    var o i64 = m.locs + ((slot - 1) * 32)
+    if ovid/mem.Eq(m.json.data + load64(o), load64(o + 8), p, n) {
+      return o
+    }
+    h = (h + 1) & m.tabmask
+  }
+  return 0
+}
+
+// WPos appends ,"file":..,"line":..,"col":..,"source":.. for offset off of f.
+func WPos(io *ovid/io.Cap, b *ovid/mem.Buf, f *File, off i64) i64 {
+  var line i64 = 1
+  var ls i64 = 0
+  var i i64 = 0
+  while i < off && i < f.n {
+    if load8(f.src + i) == 10 {
+      line = line + 1
+      ls = i + 1
+    }
+    i = i + 1
+  }
+  var le i64 = ls
+  while le < f.n && load8(f.src + le) != 10 {
+    le = le + 1
+  }
+  ovid/mem.WBytes(io, b, strptr(",\"file\":"), 8)
+  WStr(io, b, f.dispp, f.dispn)
+  ovid/mem.WBytes(io, b, strptr(",\"line\":"), 8)
+  WInt(io, b, line)
+  ovid/mem.WBytes(io, b, strptr(",\"col\":"), 7)
+  WInt(io, b, (off - ls) + 1)
+  ovid/mem.WBytes(io, b, strptr(",\"source\":"), 10)
+  WStr(io, b, f.src + ls, le - ls)
+  return 0
+}
+
+// WLoc appends the source position of id p[0:n] to b, if the id is known.
+func WLoc(io *ovid/io.Cap, b *ovid/mem.Buf, m *Mod, p i64, n i64) i64 {
+  if m == 0 as *Mod {
+    return 0
+  }
+  var r i64 = Find(m, p, n)
+  if r == 0 {
+    return 0
+  }
+  return WPos(io, b, load64(r + 16) as *File, load64(r + 24))
+}

@@ -1,442 +1,359 @@
-// Package check typechecks an Ovid program and prints one JSON fact per line.
+// Package check typechecks an Ovid program. It reports issues addressed by
+// node id and records the type of every expression it visits.
 package check
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
+	"sort"
 	"strings"
 
 	"ovid/internal/ir"
 )
 
-type Fact struct {
-	raw []byte
+// Issue is one error. ID names the node; the caller maps it to a location.
+type Issue struct {
+	Code     string `json:"code"`
+	ID       string `json:"id,omitempty"`
+	Message  string `json:"message"`
+	Expected string `json:"expected,omitempty"`
+	Got      string `json:"got,omitempty"`
+	Hint     string `json:"hint,omitempty"`
 }
 
-func (f Fact) Bytes() []byte { return f.raw }
+// Fact is a declaration-level fact (types, layouts, signatures).
+type Fact map[string]any
 
-type result struct {
-	facts  [][]byte
-	errors int
-}
-
-func (r *result) add(v any) {
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
-	_ = enc.Encode(v)
-	r.facts = append(r.facts, bytes.TrimRight(buf.Bytes(), "\n"))
-}
-
-func (r *result) err(id, pkg, fn, code, detail string) {
-	r.errors++
-	r.add(struct {
-		Fact   string `json:"fact"`
-		ID     string `json:"id"`
-		Pkg    string `json:"pkg,omitempty"`
-		Func   string `json:"func,omitempty"`
-		Code   string `json:"code"`
-		Detail string `json:"detail"`
-	}{Fact: "error", ID: id, Pkg: pkg, Func: fn, Code: code, Detail: detail})
-}
-
-// Run checks p. root is the module directory (import paths are subdirectories).
-// file is the raw ovid.json used for the revision fact. facts are one JSON
-// object per line, without trailing newlines.
-func Run(p *ir.Program, root string, file []byte) (lines [][]byte, errors int) {
-	var r result
-	if p == nil {
-		r.err("", "", "", "no_program", "missing program")
-		return r.facts, r.errors
-	}
-	stored, computed, herr := "", "", error(nil)
-	if file != nil {
-		stored, computed, herr = ir.Hash(file)
-		if herr != nil {
-			r.err("", "", "", "revision", herr.Error())
-		} else if stored != computed {
-			r.err("", p.Module, "", "revision_mismatch", "stored revision does not match file bytes")
-		}
-	}
-	r.add(struct {
-		Fact     string `json:"fact"`
-		Revision string `json:"revision"`
-		Module   string `json:"module"`
-		Entry    string `json:"entry"`
-		Packages int    `json:"packages"`
-	}{Fact: "module", Revision: computed, Module: p.Module, Entry: p.Entry, Packages: len(p.Packages)})
-
-	if strings.TrimSpace(p.Module) == "" {
-		r.err("", "", "", "bad_module", "module name is empty")
-	}
-	proj := filepath.Join(root, "PROJECTION")
-	_, statErr := os.Stat(proj)
-	r.add(struct {
-		Fact    string `json:"fact"`
-		Path    string `json:"path"`
-		Present bool   `json:"present"`
-	}{Fact: "projection", Path: "PROJECTION", Present: statErr == nil})
-	if statErr != nil {
-		r.err("", "", "", "missing_projection", "PROJECTION is not in the module directory")
-	}
-
-	pkgs := map[string]*ir.Package{}
-	ids := map[string]string{}
-	claim := func(id, what string) {
-		if id == "" {
-			r.err("", "", "", "missing_id", what)
-			return
-		}
-		if prev, ok := ids[id]; ok {
-			r.err(id, "", "", "duplicate_id", prev)
-			return
-		}
-		ids[id] = what
-	}
-
-	for i := range p.Packages {
-		pkg := &p.Packages[i]
-		claim(pkg.ID, "package")
-		if prev, ok := pkgs[pkg.Path]; ok {
-			r.err(pkg.ID, pkg.Path, "", "duplicate_package", prev.ID)
-		}
-		pkgs[pkg.Path] = pkg
-		dir := filepath.Join(root, filepath.FromSlash(pkg.Path))
-		info, err := os.Stat(dir)
-		okDir := err == nil && info.IsDir()
-		r.add(struct {
-			Fact string `json:"fact"`
-			ID   string `json:"id"`
-			Path string `json:"path"`
-			Dir  bool   `json:"dir"`
-		}{Fact: "package", ID: pkg.ID, Path: pkg.Path, Dir: okDir})
-		if !okDir {
-			r.err(pkg.ID, pkg.Path, "", "missing_dir", "package directory does not exist")
-		}
-		for _, im := range pkg.Imports {
-			claim(im.ID, "import")
-		}
-		for _, c := range pkg.Consts {
-			claim(c.ID, "const")
-		}
-		for _, t := range pkg.Types {
-			claim(t.ID, "type")
-			for _, f := range t.Fields {
-				claim(f.ID, "field")
-			}
-		}
-		for _, fn := range pkg.Funcs {
-			claim(fn.ID, "func")
-			for _, pa := range fn.Params {
-				claim(pa.ID, "param")
-			}
-			var walk func(n *ir.Node)
-			walk = func(n *ir.Node) {
-				if n == nil {
-					return
-				}
-				claim(n.ID, "node")
-				n.Walk(func(c *ir.Node) {
-					if c != n {
-						claim(c.ID, "node")
-					}
-				})
-			}
-			// Walk already visits n. Avoid double-counting: claim tree once.
-			_ = walk
-			var seenRoot bool
-			_ = seenRoot
-			for _, st := range fn.Body {
-				if st == nil {
-					continue
-				}
-				st.Walk(func(c *ir.Node) { claim(c.ID, "node") })
-			}
-		}
-	}
-
-	for i := range p.Packages {
-		pkg := &p.Packages[i]
-		for _, im := range pkg.Imports {
-			target, ok := pkgs[im.Path]
-			resolved := ok && target.Path == im.Path
-			dir := filepath.Join(root, filepath.FromSlash(im.Path))
-			info, err := os.Stat(dir)
-			dirOK := err == nil && info.IsDir()
-			r.add(struct {
-				Fact     string `json:"fact"`
-				ID       string `json:"id"`
-				Pkg      string `json:"pkg"`
-				Path     string `json:"path"`
-				Resolved bool   `json:"resolved"`
-			}{Fact: "import", ID: im.ID, Pkg: pkg.Path, Path: im.Path, Resolved: resolved && dirOK})
-			if im.Path == pkg.Path {
-				r.err(im.ID, pkg.Path, "", "import_self", im.Path)
-			}
-			if !ok {
-				r.err(im.ID, pkg.Path, "", "unknown_package", im.Path)
-			}
-			if !dirOK {
-				r.err(im.ID, pkg.Path, "", "missing_dir", im.Path)
-			}
-		}
-		for _, t := range pkg.Types {
-			r.add(struct {
-				Fact   string `json:"fact"`
-				ID     string `json:"id"`
-				Pkg    string `json:"pkg"`
-				Name   string `json:"name"`
-				Fields int    `json:"fields"`
-				Size   int    `json:"size"`
-			}{Fact: "type", ID: t.ID, Pkg: pkg.Path, Name: t.Name, Fields: len(t.Fields), Size: len(t.Fields) * 8})
-			for i, f := range t.Fields {
-				ft, _, ferr := resolveType(pkg, f.Type, pkgs)
-				r.add(struct {
-					Fact   string `json:"fact"`
-					ID     string `json:"id"`
-					Pkg    string `json:"pkg"`
-					Type   string `json:"type"`
-					Name   string `json:"name"`
-					Of     string `json:"of"`
-					Offset int    `json:"offset"`
-				}{Fact: "field", ID: f.ID, Pkg: pkg.Path, Type: t.Name, Name: f.Name, Of: ft, Offset: i * 8})
-				if ferr != nil {
-					r.err(f.ID, pkg.Path, "", "bad_type", ferr.Error())
-				}
-				if ft != "i64" && ft != "bool" && !strings.HasPrefix(ft, "*") {
-					r.err(f.ID, pkg.Path, "", "bad_type", "field must be i64, bool, or a pointer")
-				}
-			}
-		}
-		for _, c := range pkg.Consts {
-			r.add(struct {
-				Fact  string `json:"fact"`
-				ID    string `json:"id"`
-				Pkg   string `json:"pkg"`
-				Name  string `json:"name"`
-				Type  string `json:"type"`
-				Value int64  `json:"value"`
-			}{Fact: "const", ID: c.ID, Pkg: pkg.Path, Name: c.Name, Type: c.Type, Value: c.Value})
-			if c.Type != "i64" {
-				r.err(c.ID, pkg.Path, "", "bad_type", "const must be i64")
-			}
-		}
-		for _, fn := range pkg.Funcs {
-			r.add(struct {
-				Fact   string `json:"fact"`
-				ID     string `json:"id"`
-				Pkg    string `json:"pkg"`
-				Name   string `json:"name"`
-				Params int    `json:"params"`
-				Result string `json:"result"`
-			}{Fact: "func", ID: fn.ID, Pkg: pkg.Path, Name: fn.Name, Params: len(fn.Params), Result: fn.Result})
-			if len(fn.Params) > 6 {
-				r.err(fn.ID, pkg.Path, fn.Name, "arity", "at most 6 parameters")
-			}
-			for i, pa := range fn.Params {
-				pt, _, perr := resolveType(pkg, pa.Type, pkgs)
-				r.add(struct {
-					Fact  string `json:"fact"`
-					ID    string `json:"id"`
-					Pkg   string `json:"pkg"`
-					Func  string `json:"func"`
-					Name  string `json:"name"`
-					Type  string `json:"type"`
-					Index int    `json:"index"`
-				}{Fact: "param", ID: pa.ID, Pkg: pkg.Path, Func: fn.Name, Name: pa.Name, Type: pt, Index: i})
-				if perr != nil {
-					r.err(pa.ID, pkg.Path, fn.Name, "bad_type", perr.Error())
-				}
-				if strings.HasPrefix(pt, "*") || pt == "i64" || pt == "bool" {
-					continue
-				}
-				r.err(pa.ID, pkg.Path, fn.Name, "struct_value", "parameters must be i64, bool, or a pointer")
-			}
-			rt, _, rerr := resolveType(pkg, fn.Result, pkgs)
-			if rerr != nil {
-				r.err(fn.ID, pkg.Path, fn.Name, "bad_type", rerr.Error())
-			} else if rt != "i64" && rt != "bool" && !strings.HasPrefix(rt, "*") {
-				r.err(fn.ID, pkg.Path, fn.Name, "struct_value", "result must be i64, bool, or a pointer")
-			}
-		}
-	}
-
-	sigs := map[string]sig{}
-	for i := range p.Packages {
-		pkg := &p.Packages[i]
-		seen := map[string]bool{}
-		for _, fn := range pkg.Funcs {
-			if seen[fn.Name] {
-				r.err(fn.ID, pkg.Path, fn.Name, "duplicate_func", fn.Name)
-			}
-			seen[fn.Name] = true
-			var ps []string
-			for _, pa := range fn.Params {
-				t, _, _ := resolveType(pkg, pa.Type, pkgs)
-				ps = append(ps, t)
-			}
-			res, _, _ := resolveType(pkg, fn.Result, pkgs)
-			sigs[pkg.Path+"."+fn.Name] = sig{params: ps, result: res, id: fn.ID}
-		}
-	}
-
-	var entryFn *ir.Func
-	var entryPkg *ir.Package
-	if ep, ok := pkgs[p.Entry]; !ok {
-		r.err("", "", "", "no_entry", p.Entry)
-	} else {
-		entryPkg = ep
-		for i := range ep.Funcs {
-			if ep.Funcs[i].Name == "main" {
-				entryFn = &ep.Funcs[i]
-			}
-		}
-		if entryFn == nil {
-			r.err(ep.ID, ep.Path, "", "bad_main", "entry package has no main")
-		} else {
-			pt := ""
-			if len(entryFn.Params) == 1 {
-				pt, _, _ = resolveType(ep, entryFn.Params[0].Type, pkgs)
-			}
-			res, _, _ := resolveType(ep, entryFn.Result, pkgs)
-			if len(entryFn.Params) != 1 || pt != "*ovid/io.Cap" || res != "i64" {
-				r.err(entryFn.ID, ep.Path, "main", "bad_main", "main must be (io *ovid/io.Cap) i64")
-			}
-		}
-	}
-
-	if ioPkg, ok := pkgs["ovid/io"]; ok {
-		var capTy *ir.TypeDecl
-		for i := range ioPkg.Types {
-			if ioPkg.Types[i].Name == "Cap" {
-				capTy = &ioPkg.Types[i]
-			}
-		}
-		need := []string{"argc", "argv", "heap", "used", "size"}
-		if capTy == nil {
-			r.err(ioPkg.ID, "ovid/io", "", "bad_abi", "missing Cap")
-		} else {
-			have := map[string]string{}
-			for _, f := range capTy.Fields {
-				have[f.Name] = f.Type
-			}
-			for _, n := range need {
-				if have[n] != "i64" {
-					r.err(capTy.ID, "ovid/io", "", "bad_abi", "Cap."+n+" must be i64")
-				}
-			}
-		}
-	} else {
-		r.err("", "", "", "bad_abi", "missing package ovid/io")
-	}
-
-	for i := range p.Packages {
-		pkg := &p.Packages[i]
-		imported := map[string]bool{}
-		for _, im := range pkg.Imports {
-			imported[im.Path] = true
-		}
-		for _, fn := range pkg.Funcs {
-			ok := checkBody(&r, pkg, &fn, pkgs, sigs, imported)
-			r.add(struct {
-				Fact string `json:"fact"`
-				ID   string `json:"id"`
-				Pkg  string `json:"pkg"`
-				Name string `json:"name"`
-				Ok   bool   `json:"ok"`
-			}{Fact: "checked", ID: fn.ID, Pkg: pkg.Path, Name: fn.Name, Ok: ok})
-		}
-	}
-	_ = entryPkg
-
-	r.add(struct {
-		Fact     string `json:"fact"`
-		Ok       bool   `json:"ok"`
-		Errors   int    `json:"errors"`
-		Packages int    `json:"packages"`
-		Funcs    int    `json:"funcs"`
-	}{Fact: "summary", Ok: r.errors == 0, Errors: r.errors, Packages: len(p.Packages), Funcs: countFuncs(p)})
-	return r.facts, r.errors
-}
-
-func countFuncs(p *ir.Program) int {
-	n := 0
-	for _, pkg := range p.Packages {
-		n += len(pkg.Funcs)
-	}
-	return n
+type Result struct {
+	Issues []Issue
+	Facts  []Fact
+	// Types maps expression ids to their checked type.
+	Types map[string]string
+	Funcs int
 }
 
 type sig struct {
 	params []string
+	names  []string
 	result string
 	id     string
 }
 
-func resolveType(pkg *ir.Package, t string, pkgs map[string]*ir.Package) (string, string, error) {
+type checker struct {
+	r        *Result
+	pkgs     map[string]*ir.Package
+	sigs     map[string]sig
+	pkg      *ir.Package
+	fn       *ir.Func
+	imported map[string]bool
+	res      string
+}
+
+func (c *checker) issue(is Issue) { c.r.Issues = append(c.r.Issues, is) }
+
+func (c *checker) err(id, code, msg string) {
+	c.issue(Issue{Code: code, ID: id, Message: msg})
+}
+
+func (c *checker) mismatch(id, what, got, want string) {
+	c.issue(Issue{Code: "type_mismatch", ID: id, Message: fmt.Sprintf("%s: got %s, want %s", what, got, want), Expected: want, Got: got})
+}
+
+// Run checks p.
+func Run(p *ir.Program) *Result {
+	r := &Result{Types: map[string]string{}}
+	c := &checker{r: r, pkgs: map[string]*ir.Package{}, sigs: map[string]sig{}}
+	if strings.TrimSpace(p.Module) == "" {
+		c.err("", "bad_module", "ovid.mod has no module line")
+	}
+	ids := map[string]bool{}
+	claim := func(id string) {
+		if id == "" {
+			return
+		}
+		if ids[id] {
+			c.err(id, "duplicate_id", "two nodes share id "+id)
+		}
+		ids[id] = true
+	}
+	for i := range p.Packages {
+		pkg := &p.Packages[i]
+		claim(pkg.ID)
+		if _, ok := c.pkgs[pkg.Path]; ok {
+			c.err(pkg.ID, "duplicate_package", "package "+pkg.Path+" is declared twice")
+		}
+		c.pkgs[pkg.Path] = pkg
+	}
+
+	for i := range p.Packages {
+		pkg := &p.Packages[i]
+		c.pkg = pkg
+		seen := map[string]string{}
+		decl := func(id, name string) {
+			claim(id)
+			if prev, ok := seen[name]; ok {
+				c.err(id, "duplicate_name", fmt.Sprintf("%s is already declared in package %s (%s)", name, pkg.Path, prev))
+			}
+			seen[name] = id
+		}
+		for _, im := range pkg.Imports {
+			claim(im.ID)
+			if im.Path == pkg.Path {
+				c.err(im.ID, "import_self", "package "+pkg.Path+" imports itself")
+			} else if _, ok := c.pkgs[im.Path]; !ok {
+				c.issue(Issue{Code: "unknown_package", ID: im.ID, Message: "no package " + im.Path,
+					Hint: "packages are directories under the module root; std packages are " + strings.Join(StdHint, ", ")})
+			}
+		}
+		for _, cn := range pkg.Consts {
+			decl(cn.ID, cn.Name)
+			c.r.Facts = append(c.r.Facts, Fact{"fact": "const", "id": cn.ID, "value": cn.Value})
+			if cn.Type != "i64" {
+				c.err(cn.ID, "bad_type", "const must be i64")
+			}
+		}
+		for _, t := range pkg.Types {
+			decl(t.ID, t.Name)
+			c.r.Facts = append(c.r.Facts, Fact{"fact": "type", "id": t.ID, "fields": len(t.Fields), "size": len(t.Fields) * 8})
+			fseen := map[string]bool{}
+			for i, f := range t.Fields {
+				claim(f.ID)
+				if fseen[f.Name] {
+					c.err(f.ID, "duplicate_name", "field "+f.Name+" is declared twice")
+				}
+				fseen[f.Name] = true
+				ft, err := c.resolve(f.Type)
+				c.r.Facts = append(c.r.Facts, Fact{"fact": "field", "id": f.ID, "type": ft, "offset": i * 8})
+				if err != nil {
+					c.err(f.ID, "bad_type", err.Error())
+				} else if !scalar(ft) {
+					c.err(f.ID, "struct_value", "field must be i64, bool, or a pointer; write *"+ft)
+				}
+			}
+		}
+		for fi := range pkg.Funcs {
+			fn := &pkg.Funcs[fi]
+			decl(fn.ID, fn.Name)
+			c.r.Funcs++
+			if len(fn.Params) > 6 {
+				c.err(fn.ID, "arity", fmt.Sprintf("%s has %d parameters; at most 6", fn.Name, len(fn.Params)))
+			}
+			var ps, names []string
+			for _, pa := range fn.Params {
+				claim(pa.ID)
+				pt, err := c.resolve(pa.Type)
+				if err != nil {
+					c.err(pa.ID, "bad_type", err.Error())
+					pt = "invalid"
+				} else if !scalar(pt) {
+					c.err(pa.ID, "struct_value", "parameter must be i64, bool, or a pointer; write *"+pt)
+				}
+				ps = append(ps, pt)
+				names = append(names, pa.Name)
+			}
+			rt, err := c.resolve(fn.Result)
+			if err != nil {
+				c.err(fn.ID, "bad_type", err.Error())
+				rt = "invalid"
+			} else if !scalar(rt) {
+				c.err(fn.ID, "struct_value", "result must be i64, bool, or a pointer; write *"+rt)
+			}
+			c.sigs[pkg.Path+"."+fn.Name] = sig{params: ps, names: names, result: rt, id: fn.ID}
+			c.r.Facts = append(c.r.Facts, Fact{"fact": "func", "id": fn.ID, "sig": Signature(pkg.Path, fn)})
+			for _, st := range fn.Body {
+				st.Walk(func(n *ir.Node) { claim(n.ID) })
+			}
+		}
+	}
+
+	c.checkEntry(p)
+
+	for i := range p.Packages {
+		pkg := &p.Packages[i]
+		c.pkg = pkg
+		c.imported = map[string]bool{}
+		for _, im := range pkg.Imports {
+			c.imported[im.Path] = true
+		}
+		for fi := range pkg.Funcs {
+			c.checkBody(&pkg.Funcs[fi])
+		}
+	}
+	return r
+}
+
+// StdHint lists the packages the toolchain ships.
+var StdHint = []string{"ovid/io", "ovid/mem"}
+
+func (c *checker) checkEntry(p *ir.Program) {
+	ep, ok := c.pkgs[p.Entry]
+	if !ok {
+		c.issue(Issue{Code: "no_entry", Message: "entry package " + p.Entry + " does not exist", Hint: "set `entry <pkg>` in ovid.mod"})
+		return
+	}
+	var main *ir.Func
+	for i := range ep.Funcs {
+		if ep.Funcs[i].Name == "main" {
+			main = &ep.Funcs[i]
+		}
+	}
+	want := "func main(io *ovid/io.Cap) i64"
+	if main == nil {
+		c.issue(Issue{Code: "bad_main", ID: ep.ID, Message: "entry package has no main", Expected: want})
+		return
+	}
+	c.pkg = ep
+	pt := ""
+	if len(main.Params) == 1 {
+		pt, _ = c.resolve(main.Params[0].Type)
+	}
+	res, _ := c.resolve(main.Result)
+	if len(main.Params) != 1 || pt != "*ovid/io.Cap" || res != "i64" {
+		c.issue(Issue{Code: "bad_main", ID: main.ID, Message: "main has the wrong signature", Expected: want, Got: Signature(ep.Path, main)})
+	}
+	if io, ok := c.pkgs["ovid/io"]; ok {
+		var capTy *ir.TypeDecl
+		for i := range io.Types {
+			if io.Types[i].Name == "Cap" {
+				capTy = &io.Types[i]
+			}
+		}
+		if capTy == nil {
+			c.err(io.ID, "bad_abi", "ovid/io has no type Cap")
+			return
+		}
+		need := []string{"argc", "argv", "heap", "used", "size"}
+		for i, n := range need {
+			if i >= len(capTy.Fields) || capTy.Fields[i].Name != n || capTy.Fields[i].Type != "i64" {
+				c.issue(Issue{Code: "bad_abi", ID: capTy.ID, Message: "the runtime fills Cap's first five fields", Expected: "argc, argv, heap, used, size (all i64, in order)"})
+				return
+			}
+		}
+	} else {
+		c.issue(Issue{Code: "bad_abi", Message: "missing package ovid/io", Hint: "import ovid/io; the toolchain ships it"})
+	}
+}
+
+// Signature renders fn the way it is written in source.
+func Signature(pkg string, fn *ir.Func) string {
+	var b strings.Builder
+	b.WriteString("func ")
+	b.WriteString(fn.Name)
+	b.WriteByte('(')
+	for i, pa := range fn.Params {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString(pa.Name)
+		b.WriteByte(' ')
+		b.WriteString(ShowType(pkg, pa.Type))
+	}
+	b.WriteString(") ")
+	b.WriteString(ShowType(pkg, fn.Result))
+	return b.String()
+}
+
+// ShowType strips pkg's own prefix from a type name.
+func ShowType(pkg, t string) string {
+	prefix := pkg + "."
+	if strings.HasPrefix(t, "*"+prefix) {
+		return "*" + strings.TrimPrefix(t, "*"+prefix)
+	}
+	return strings.TrimPrefix(t, prefix)
+}
+
+func scalar(t string) bool {
+	return t == "i64" || t == "bool" || strings.HasPrefix(t, "*") || t == "invalid"
+}
+
+// resolve turns a source type into its full form (i64, bool, pkg.T, *pkg.T).
+func (c *checker) resolve(t string) (string, error) {
+	return Resolve(c.pkg, t, c.pkgs)
+}
+
+func Resolve(pkg *ir.Package, t string, pkgs map[string]*ir.Package) (string, error) {
 	if t == "i64" || t == "bool" {
-		return t, t, nil
+		return t, nil
 	}
-	star := false
-	if strings.HasPrefix(t, "*") {
-		star = true
-		t = t[1:]
-	}
+	star := strings.HasPrefix(t, "*")
+	t = strings.TrimPrefix(t, "*")
 	if t == "i64" || t == "bool" {
-		return "", "", fmt.Errorf("cannot point at %s", t)
+		return "", fmt.Errorf("cannot point at %s; use i64 for a raw address", t)
 	}
-	tpkg := pkg.Path
-	name := t
+	tpkg, name := pkg.Path, t
 	if i := strings.LastIndex(t, "."); i >= 0 {
-		tpkg = t[:i]
-		name = t[i+1:]
+		tpkg, name = t[:i], t[i+1:]
 	}
 	target, ok := pkgs[tpkg]
 	if !ok {
-		return "", "", fmt.Errorf("unknown package in type %s", t)
+		return "", fmt.Errorf("unknown package %s in type %s", tpkg, t)
 	}
 	found := false
+	var names []string
 	for _, td := range target.Types {
+		names = append(names, td.Name)
 		if td.Name == name {
 			found = true
 		}
 	}
 	if !found {
-		return "", "", fmt.Errorf("unknown type %s", t)
+		msg := "unknown type " + t
+		if s := Suggest(name, names); s != "" {
+			msg += "; did you mean " + s + "?"
+		}
+		return "", fmt.Errorf("%s", msg)
 	}
-	full := "*" + tpkg + "." + name
-	if !star {
-		return tpkg + "." + name, "struct", nil
+	if star {
+		return "*" + tpkg + "." + name, nil
 	}
-	return full, "ptr", nil
+	return tpkg + "." + name, nil
 }
 
 type env struct {
 	vars map[string]string
+	up   *env
 }
 
-func checkBody(r *result, pkg *ir.Package, fn *ir.Func, pkgs map[string]*ir.Package, sigs map[string]sig, imported map[string]bool) bool {
-	before := r.errors
+func (e *env) get(name string) (string, bool) {
+	for ; e != nil; e = e.up {
+		if t, ok := e.vars[name]; ok {
+			return t, true
+		}
+	}
+	return "", false
+}
+
+func (e *env) names() []string {
+	var out []string
+	for ; e != nil; e = e.up {
+		for k := range e.vars {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
+func (c *checker) checkBody(fn *ir.Func) {
+	c.fn = fn
 	e := &env{vars: map[string]string{}}
 	for _, pa := range fn.Params {
 		if _, ok := e.vars[pa.Name]; ok {
-			r.err(pa.ID, pkg.Path, fn.Name, "duplicate_name", pa.Name)
+			c.err(pa.ID, "duplicate_name", "parameter "+pa.Name+" is declared twice")
 		}
-		t, _, err := resolveType(pkg, pa.Type, pkgs)
+		t, err := c.resolve(pa.Type)
 		if err != nil {
 			t = "invalid"
 		}
 		e.vars[pa.Name] = t
 	}
-	res, _, _ := resolveType(pkg, fn.Result, pkgs)
-	checkStmts(r, pkg, fn, e, pkgs, sigs, imported, fn.Body, res)
-	if !pathsReturn(fn.Body) {
-		r.err(fn.ID, pkg.Path, fn.Name, "missing_return", "not every path returns")
+	c.res, _ = c.resolve(fn.Result)
+	if c.res == "" {
+		c.res = "invalid"
 	}
-	return r.errors == before
+	c.stmts(e, fn.Body)
+	if !pathsReturn(fn.Body) {
+		c.issue(Issue{Code: "missing_return", ID: fn.ID, Message: fn.Name + ": not every path ends in return",
+			Hint: "end the body with `return`; an if only counts when both branches return"})
+	}
 }
 
 func pathsReturn(stmts []*ir.Node) bool {
@@ -444,297 +361,388 @@ func pathsReturn(stmts []*ir.Node) bool {
 		return false
 	}
 	last := stmts[len(stmts)-1]
-	if last == nil {
-		return false
-	}
 	switch last.Op {
 	case "return":
 		return true
 	case "if":
-		if len(last.Else) == 0 {
-			return false
-		}
-		return pathsReturn(last.Then) && pathsReturn(last.Else)
-	default:
-		return false
-	}
-}
-
-func checkStmts(r *result, pkg *ir.Package, fn *ir.Func, e *env, pkgs map[string]*ir.Package, sigs map[string]sig, imported map[string]bool, stmts []*ir.Node, res string) {
-	for _, s := range stmts {
-		if s == nil {
-			continue
-		}
-		switch s.Op {
-		case "var":
-			t, _, err := resolveType(pkg, s.Type, pkgs)
-			if err != nil {
-				r.err(s.ID, pkg.Path, fn.Name, "bad_type", err.Error())
-				t = "invalid"
-			}
-			if t != "i64" && t != "bool" && !strings.HasPrefix(t, "*") {
-				r.err(s.ID, pkg.Path, fn.Name, "struct_value", "local must be i64, bool, or a pointer")
-			}
-			if _, ok := e.vars[s.Name]; ok {
-				r.err(s.ID, pkg.Path, fn.Name, "duplicate_name", s.Name)
-			}
-			e.vars[s.Name] = t
-			if s.Val != nil {
-				vt := checkExpr(r, pkg, fn, e, pkgs, sigs, imported, s.Val)
-				if vt != t && vt != "invalid" && t != "invalid" {
-					r.err(s.ID, pkg.Path, fn.Name, "type_mismatch", "var "+s.Name+" got "+vt+" want "+t)
-				}
-			}
-		case "assign":
-			t, ok := e.vars[s.Name]
-			if !ok {
-				r.err(s.ID, pkg.Path, fn.Name, "unknown_name", s.Name)
-				t = "invalid"
-			}
-			vt := checkExpr(r, pkg, fn, e, pkgs, sigs, imported, s.Val)
-			if vt != t && vt != "invalid" && t != "invalid" {
-				r.err(s.ID, pkg.Path, fn.Name, "type_mismatch", "assign "+s.Name+" got "+vt+" want "+t)
-			}
-		case "setfield":
-			bt := checkExpr(r, pkg, fn, e, pkgs, sigs, imported, s.Base)
-			ft, ferr := fieldType(bt, s.Name, pkgs)
-			if ferr != nil {
-				r.err(s.ID, pkg.Path, fn.Name, "unknown_field", ferr.Error())
-				ft = "invalid"
-			}
-			vt := checkExpr(r, pkg, fn, e, pkgs, sigs, imported, s.Val)
-			if vt != ft && vt != "invalid" && ft != "invalid" {
-				r.err(s.ID, pkg.Path, fn.Name, "type_mismatch", "set field got "+vt+" want "+ft)
-			}
-		case "store8", "store64":
-			at := checkExpr(r, pkg, fn, e, pkgs, sigs, imported, s.Addr)
-			vt := checkExpr(r, pkg, fn, e, pkgs, sigs, imported, s.Val)
-			if at != "i64" && at != "invalid" {
-				r.err(s.ID, pkg.Path, fn.Name, "type_mismatch", s.Op+" address got "+at+" want i64")
-			}
-			if vt != "i64" && vt != "invalid" {
-				r.err(s.ID, pkg.Path, fn.Name, "type_mismatch", s.Op+" value got "+vt+" want i64")
-			}
-		case "expr":
-			checkExpr(r, pkg, fn, e, pkgs, sigs, imported, s.Val)
-		case "return":
-			vt := "i64"
-			if s.Val != nil {
-				vt = checkExpr(r, pkg, fn, e, pkgs, sigs, imported, s.Val)
-			} else {
-				vt = "void"
-			}
-			if vt != res && vt != "invalid" {
-				r.err(s.ID, pkg.Path, fn.Name, "type_mismatch", "return got "+vt+" want "+res)
-			}
-		case "if":
-			ct := checkExpr(r, pkg, fn, e, pkgs, sigs, imported, s.Cond)
-			if ct != "bool" && ct != "invalid" {
-				r.err(s.ID, pkg.Path, fn.Name, "type_mismatch", "if condition got "+ct+" want bool")
-			}
-			checkStmts(r, pkg, fn, childEnv(e), pkgs, sigs, imported, s.Then, res)
-			checkStmts(r, pkg, fn, childEnv(e), pkgs, sigs, imported, s.Else, res)
-		case "while":
-			ct := checkExpr(r, pkg, fn, e, pkgs, sigs, imported, s.Cond)
-			if ct != "bool" && ct != "invalid" {
-				r.err(s.ID, pkg.Path, fn.Name, "type_mismatch", "while condition got "+ct+" want bool")
-			}
-			checkStmts(r, pkg, fn, childEnv(e), pkgs, sigs, imported, s.Body, res)
-		default:
-			r.err(s.ID, pkg.Path, fn.Name, "bad_op", s.Op)
-		}
-	}
-}
-
-func childEnv(e *env) *env {
-	n := &env{vars: map[string]string{}}
-	for k, v := range e.vars {
-		n.vars[k] = v
-	}
-	return n
-}
-
-func checkExpr(r *result, pkg *ir.Package, fn *ir.Func, e *env, pkgs map[string]*ir.Package, sigs map[string]sig, imported map[string]bool, n *ir.Node) string {
-	if n == nil {
-		r.err(fn.ID, pkg.Path, fn.Name, "missing_expr", "empty expression")
-		return "invalid"
-	}
-	switch n.Op {
-	case "int":
-		if n.ValK != 1 {
-			r.err(n.ID, pkg.Path, fn.Name, "bad_op", "int needs an integer value")
-			return "invalid"
-		}
-		return "i64"
-	case "bool":
-		if n.ValK != 2 {
-			r.err(n.ID, pkg.Path, fn.Name, "bad_op", "bool needs a boolean value")
-			return "invalid"
-		}
-		return "bool"
-	case "strptr", "strlen":
-		if n.ValK != 3 {
-			r.err(n.ID, pkg.Path, fn.Name, "bad_op", n.Op+" needs a string value")
-			return "invalid"
-		}
-		return "i64"
-	case "name":
-		if t, ok := e.vars[n.Name]; ok {
-			return t
-		}
-		for _, c := range pkg.Consts {
-			if c.Name == n.Name {
-				return "i64"
-			}
-		}
-		r.err(n.ID, pkg.Path, fn.Name, "unknown_name", n.Name)
-		return "invalid"
-	case "add", "sub", "mul", "div", "mod", "and", "or", "xor", "shl", "shr":
-		lt := checkExpr(r, pkg, fn, e, pkgs, sigs, imported, n.Left)
-		rt := checkExpr(r, pkg, fn, e, pkgs, sigs, imported, n.Right)
-		if (lt != "i64" && lt != "invalid") || (rt != "i64" && rt != "invalid") {
-			r.err(n.ID, pkg.Path, fn.Name, "type_mismatch", n.Op+" needs i64")
-		}
-		return "i64"
-	case "eq", "ne":
-		lt := checkExpr(r, pkg, fn, e, pkgs, sigs, imported, n.Left)
-		rt := checkExpr(r, pkg, fn, e, pkgs, sigs, imported, n.Right)
-		if lt != rt && lt != "invalid" && rt != "invalid" {
-			r.err(n.ID, pkg.Path, fn.Name, "type_mismatch", n.Op+" type "+lt+" vs "+rt)
-		}
-		return "bool"
-	case "lt", "le", "gt", "ge":
-		lt := checkExpr(r, pkg, fn, e, pkgs, sigs, imported, n.Left)
-		rt := checkExpr(r, pkg, fn, e, pkgs, sigs, imported, n.Right)
-		if (lt != "i64" && lt != "invalid") || (rt != "i64" && rt != "invalid") {
-			r.err(n.ID, pkg.Path, fn.Name, "type_mismatch", n.Op+" needs i64")
-		}
-		return "bool"
-	case "land", "lor":
-		lt := checkExpr(r, pkg, fn, e, pkgs, sigs, imported, n.Left)
-		rt := checkExpr(r, pkg, fn, e, pkgs, sigs, imported, n.Right)
-		if (lt != "bool" && lt != "invalid") || (rt != "bool" && rt != "invalid") {
-			r.err(n.ID, pkg.Path, fn.Name, "type_mismatch", n.Op+" needs bool")
-		}
-		return "bool"
-	case "not":
-		t := checkExpr(r, pkg, fn, e, pkgs, sigs, imported, n.Arg)
-		if t != "bool" && t != "invalid" {
-			r.err(n.ID, pkg.Path, fn.Name, "type_mismatch", "not needs bool")
-		}
-		return "bool"
-	case "neg", "bnot":
-		t := checkExpr(r, pkg, fn, e, pkgs, sigs, imported, n.Arg)
-		if t != "i64" && t != "invalid" {
-			r.err(n.ID, pkg.Path, fn.Name, "type_mismatch", n.Op+" needs i64")
-		}
-		return "i64"
-	case "cast":
-		t, _, err := resolveType(pkg, n.Type, pkgs)
-		if err != nil {
-			r.err(n.ID, pkg.Path, fn.Name, "bad_type", err.Error())
-			return "invalid"
-		}
-		src := checkExpr(r, pkg, fn, e, pkgs, sigs, imported, n.Arg)
-		if !castOK(src, t) && src != "invalid" {
-			r.err(n.ID, pkg.Path, fn.Name, "type_mismatch", "cannot cast "+src+" to "+t)
-		}
-		return t
-	case "field":
-		bt := checkExpr(r, pkg, fn, e, pkgs, sigs, imported, n.Base)
-		ft, err := fieldType(bt, n.Name, pkgs)
-		if err != nil {
-			r.err(n.ID, pkg.Path, fn.Name, "unknown_field", err.Error())
-			return "invalid"
-		}
-		return ft
-	case "call":
-		path := n.Pkg
-		if path == "" {
-			path = pkg.Path
-		} else if path != pkg.Path && !imported[path] {
-			r.err(n.ID, pkg.Path, fn.Name, "unknown_package", "call "+path+"."+n.Func+" without import")
-		}
-		sg, ok := sigs[path+"."+n.Func]
-		if !ok {
-			r.err(n.ID, pkg.Path, fn.Name, "unknown_name", path+"."+n.Func)
-			for _, a := range n.Args {
-				checkExpr(r, pkg, fn, e, pkgs, sigs, imported, a)
-			}
-			return "invalid"
-		}
-		if len(n.Args) != len(sg.params) {
-			r.err(n.ID, pkg.Path, fn.Name, "arity", fmt.Sprintf("%s wants %d args", n.Func, len(sg.params)))
-		}
-		for i, a := range n.Args {
-			at := checkExpr(r, pkg, fn, e, pkgs, sigs, imported, a)
-			if i < len(sg.params) && at != sg.params[i] && at != "invalid" && sg.params[i] != "" {
-				r.err(a.ID, pkg.Path, fn.Name, "type_mismatch", fmt.Sprintf("%s arg %d got %s want %s", n.Func, i, at, sg.params[i]))
-			}
-		}
-		return sg.result
-	case "syscall":
-		if pkg.Path != "ovid/io" {
-			r.err(n.ID, pkg.Path, fn.Name, "syscall_forbidden", "syscall is only valid in package ovid/io")
-		}
-		if len(n.Args) != 7 {
-			r.err(n.ID, pkg.Path, fn.Name, "arity", "syscall wants 7 i64 args")
-		}
-		for _, a := range n.Args {
-			at := checkExpr(r, pkg, fn, e, pkgs, sigs, imported, a)
-			if at != "i64" && at != "invalid" {
-				r.err(a.ID, pkg.Path, fn.Name, "type_mismatch", "syscall arg got "+at+" want i64")
-			}
-		}
-		return "i64"
-	case "load8", "load32", "load64":
-		at := checkExpr(r, pkg, fn, e, pkgs, sigs, imported, n.Arg)
-		if at != "i64" && at != "invalid" {
-			r.err(n.ID, pkg.Path, fn.Name, "type_mismatch", n.Op+" got "+at+" want i64")
-		}
-		return "i64"
-	default:
-		r.err(n.ID, pkg.Path, fn.Name, "bad_op", n.Op)
-		return "invalid"
-	}
-}
-
-func castOK(src, dst string) bool {
-	if src == dst {
-		return true
-	}
-	isPtr := func(s string) bool { return strings.HasPrefix(s, "*") }
-	if (src == "i64" || isPtr(src) || src == "bool") && (dst == "i64" || isPtr(dst) || dst == "bool") {
-		return true
+		return len(last.Else) > 0 && pathsReturn(last.Then) && pathsReturn(last.Else)
 	}
 	return false
 }
 
-func fieldType(baseType, field string, pkgs map[string]*ir.Package) (string, error) {
+func (c *checker) stmts(e *env, stmts []*ir.Node) {
+	for _, s := range stmts {
+		if s != nil {
+			c.stmt(e, s)
+		}
+	}
+}
+
+func (c *checker) stmt(e *env, s *ir.Node) {
+	switch s.Op {
+	case "var":
+		t, err := c.resolve(s.Type)
+		if err != nil {
+			c.err(s.ID, "bad_type", err.Error())
+			t = "invalid"
+		} else if !scalar(t) {
+			c.err(s.ID, "struct_value", "local must be i64, bool, or a pointer; write *"+t)
+		}
+		if _, ok := e.get(s.Name); ok {
+			c.err(s.ID, "duplicate_name", s.Name+" is already declared in this function; assign with `"+s.Name+" = ...` instead")
+		}
+		if s.Val != nil {
+			vt := c.expr(e, s.Val)
+			if vt != t && vt != "invalid" && t != "invalid" {
+				c.mismatch(s.Val.ID, "var "+s.Name, vt, t)
+			}
+		}
+		e.vars[s.Name] = t
+	case "assign":
+		t, ok := e.get(s.Name)
+		if !ok {
+			c.unknownName(s.ID, s.Name, e)
+			t = "invalid"
+		}
+		vt := c.expr(e, s.Val)
+		if vt != t && vt != "invalid" && t != "invalid" {
+			c.mismatch(s.Val.ID, "assign to "+s.Name, vt, t)
+		}
+	case "setfield":
+		bt := c.expr(e, s.Base)
+		ft := c.field(s.ID, bt, s.Name)
+		vt := c.expr(e, s.Val)
+		if vt != ft && vt != "invalid" && ft != "invalid" {
+			c.mismatch(s.Val.ID, "field "+s.Name, vt, ft)
+		}
+	case "store8", "store64":
+		at := c.expr(e, s.Addr)
+		vt := c.expr(e, s.Val)
+		if at != "i64" && at != "invalid" {
+			c.mismatch(s.Addr.ID, s.Op+" address", at, "i64")
+		}
+		if vt != "i64" && vt != "invalid" {
+			c.mismatch(s.Val.ID, s.Op+" value", vt, "i64")
+		}
+	case "expr":
+		c.expr(e, s.Val)
+	case "return":
+		if s.Val == nil {
+			c.mismatch(s.ID, "return", "nothing", c.res)
+			return
+		}
+		vt := c.expr(e, s.Val)
+		if vt != c.res && vt != "invalid" && c.res != "invalid" {
+			c.mismatch(s.Val.ID, "return value of "+c.fn.Name, vt, c.res)
+		}
+	case "if":
+		if ct := c.expr(e, s.Cond); ct != "bool" && ct != "invalid" {
+			c.mismatch(s.Cond.ID, "if condition", ct, "bool")
+		}
+		c.stmts(&env{vars: map[string]string{}, up: e}, s.Then)
+		c.stmts(&env{vars: map[string]string{}, up: e}, s.Else)
+	case "while":
+		if ct := c.expr(e, s.Cond); ct != "bool" && ct != "invalid" {
+			c.mismatch(s.Cond.ID, "while condition", ct, "bool")
+		}
+		c.stmts(&env{vars: map[string]string{}, up: e}, s.Body)
+	default:
+		c.err(s.ID, "bad_op", "unknown statement op "+s.Op)
+	}
+}
+
+func (c *checker) unknownName(id, name string, e *env) {
+	cands := e.names()
+	for _, cn := range c.pkg.Consts {
+		cands = append(cands, cn.Name)
+	}
+	is := Issue{Code: "unknown_name", ID: id, Message: "undefined: " + name}
+	switch name {
+	case "break", "continue":
+		is.Message = "there is no " + name
+		is.Hint = "loop on a flag instead: var more bool = true; while more { ... more = false }"
+	case "nil", "null":
+		is.Hint = "a null pointer is 0 as *T: var z i64 = 0, then z as *T"
+	default:
+		if s := Suggest(name, cands); s != "" {
+			is.Hint = "did you mean " + s + "?"
+		}
+	}
+	c.issue(is)
+}
+
+func (c *checker) field(id, bt, name string) string {
+	if bt == "invalid" {
+		return "invalid"
+	}
+	ft, fields, err := FieldType(bt, name, c.pkgs)
+	if err != nil {
+		is := Issue{Code: "unknown_field", ID: id, Message: err.Error()}
+		if s := Suggest(name, fields); s != "" {
+			is.Hint = "did you mean " + s + "?"
+		} else if len(fields) > 0 {
+			is.Hint = "fields: " + strings.Join(fields, ", ")
+		}
+		c.issue(is)
+		return "invalid"
+	}
+	return ft
+}
+
+func (c *checker) expr(e *env, n *ir.Node) string {
+	if n == nil {
+		c.err(c.fn.ID, "missing_expr", "empty expression")
+		return "invalid"
+	}
+	t := c.expr0(e, n)
+	c.r.Types[n.ID] = t
+	return t
+}
+
+func (c *checker) want(e *env, n *ir.Node, want, what string) {
+	if t := c.expr(e, n); t != want && t != "invalid" {
+		c.mismatch(n.ID, what, t, want)
+	}
+}
+
+var opText = map[string]string{
+	"add": "+", "sub": "-", "mul": "*", "div": "/", "mod": "%", "and": "&", "or": "|", "xor": "^",
+	"shl": "<<", "shr": ">>", "eq": "==", "ne": "!=", "lt": "<", "le": "<=", "gt": ">", "ge": ">=",
+	"land": "&&", "lor": "||", "not": "!", "neg": "-", "bnot": "^",
+}
+
+func (c *checker) expr0(e *env, n *ir.Node) string {
+	switch n.Op {
+	case "int":
+		return "i64"
+	case "bool":
+		return "bool"
+	case "strptr", "strlen":
+		return "i64"
+	case "name":
+		if n.Pkg != "" && n.Pkg != c.pkg.Path {
+			return c.pkgConst(n)
+		}
+		if t, ok := e.get(n.Name); ok {
+			return t
+		}
+		for _, cn := range c.pkg.Consts {
+			if cn.Name == n.Name {
+				return "i64"
+			}
+		}
+		c.unknownName(n.ID, n.Name, e)
+		return "invalid"
+	case "add", "sub", "mul", "div", "mod", "and", "or", "xor", "shl", "shr":
+		c.want(e, n.Left, "i64", "left of "+opText[n.Op])
+		c.want(e, n.Right, "i64", "right of "+opText[n.Op])
+		return "i64"
+	case "lt", "le", "gt", "ge":
+		c.want(e, n.Left, "i64", "left of "+opText[n.Op])
+		c.want(e, n.Right, "i64", "right of "+opText[n.Op])
+		return "bool"
+	case "eq", "ne":
+		lt := c.expr(e, n.Left)
+		rt := c.expr(e, n.Right)
+		if lt != rt && lt != "invalid" && rt != "invalid" {
+			c.mismatch(n.Right.ID, "right of "+opText[n.Op], rt, lt)
+		}
+		return "bool"
+	case "land", "lor":
+		c.want(e, n.Left, "bool", "left of "+opText[n.Op])
+		c.want(e, n.Right, "bool", "right of "+opText[n.Op])
+		return "bool"
+	case "not":
+		c.want(e, n.Arg, "bool", "operand of !")
+		return "bool"
+	case "neg", "bnot":
+		c.want(e, n.Arg, "i64", "operand of "+opText[n.Op])
+		return "i64"
+	case "cast":
+		t, err := c.resolve(n.Type)
+		if err != nil {
+			c.err(n.ID, "bad_type", err.Error())
+			return "invalid"
+		}
+		src := c.expr(e, n.Arg)
+		if src != "invalid" && !scalar(t) {
+			c.mismatch(n.ID, "cast", src, "i64, bool, or a pointer type")
+		}
+		return t
+	case "sizeof":
+		if n.Type == "i64" || n.Type == "bool" {
+			c.issue(Issue{Code: "bad_type", ID: n.ID, Message: "sizeof(" + n.Type + ") is always 8", Hint: "write 8; sizeof takes a struct type"})
+			return "i64"
+		}
+		if _, err := c.resolve(n.Type); err != nil {
+			c.err(n.ID, "bad_type", err.Error())
+		}
+		return "i64"
+	case "field":
+		return c.field(n.ID, c.expr(e, n.Base), n.Name)
+	case "call":
+		return c.call(e, n)
+	case "syscall":
+		if c.pkg.Path != "ovid/io" {
+			c.issue(Issue{Code: "syscall_forbidden", ID: n.ID, Message: "syscall is only valid in package ovid/io", Hint: "call an ovid/io function instead"})
+		}
+		if len(n.Args) != 7 {
+			c.issue(Issue{Code: "arity", ID: n.ID, Message: "syscall takes 7 arguments", Expected: "7", Got: fmt.Sprint(len(n.Args))})
+		}
+		for i, a := range n.Args {
+			c.want(e, a, "i64", fmt.Sprintf("syscall argument %d", i+1))
+		}
+		return "i64"
+	case "load8", "load32", "load64":
+		c.want(e, n.Arg, "i64", n.Op+" address")
+		return "i64"
+	}
+	c.err(n.ID, "bad_op", "unknown expression op "+n.Op)
+	return "invalid"
+}
+
+// pkgConst checks a reference to another package's const, path.Name.
+func (c *checker) pkgConst(n *ir.Node) string {
+	pk := c.pkgs[n.Pkg]
+	var cands []string
+	if pk != nil {
+		for _, cn := range pk.Consts {
+			if cn.Name == n.Name {
+				return "i64"
+			}
+			cands = append(cands, cn.Name)
+		}
+	}
+	is := Issue{Code: "unknown_name", ID: n.ID, Message: "undefined const " + n.Pkg + "." + n.Name}
+	if s := Suggest(n.Name, cands); s != "" {
+		is.Hint = "did you mean " + n.Pkg + "." + s + "?"
+	} else if pk == nil {
+		is.Hint = "there is no package " + n.Pkg
+	} else if _, ok := c.sigs[n.Pkg+"."+n.Name]; ok {
+		is.Hint = n.Name + " is a func; call it: " + n.Pkg + "." + n.Name + "(...)"
+	}
+	c.issue(is)
+	return "invalid"
+}
+
+func (c *checker) call(e *env, n *ir.Node) string {
+	path := n.Pkg
+	if path == "" {
+		path = c.pkg.Path
+	} else if path != c.pkg.Path && !c.imported[path] {
+		c.issue(Issue{Code: "missing_import", ID: n.ID, Message: "call to " + path + "." + n.Func + " but " + path + " is not imported",
+			Hint: "add `import " + path + "` after the package line"})
+	}
+	sg, ok := c.sigs[path+"."+n.Func]
+	if !ok {
+		var cands []string
+		if pk := c.pkgs[path]; pk != nil {
+			for _, f := range pk.Funcs {
+				cands = append(cands, f.Name)
+			}
+		}
+		is := Issue{Code: "unknown_name", ID: n.ID, Message: "undefined function " + path + "." + n.Func}
+		if s := Suggest(n.Func, cands); s != "" {
+			is.Hint = "did you mean " + s + "?"
+		} else if c.pkgs[path] == nil {
+			is.Hint = "there is no package " + path
+		}
+		c.issue(is)
+		for _, a := range n.Args {
+			c.expr(e, a)
+		}
+		return "invalid"
+	}
+	if len(n.Args) != len(sg.params) {
+		c.issue(Issue{Code: "arity", ID: n.ID, Message: fmt.Sprintf("%s takes %d arguments, got %d", n.Func, len(sg.params), len(n.Args)),
+			Expected: fmt.Sprint(len(sg.params)), Got: fmt.Sprint(len(n.Args)), Hint: c.sigText(path, n.Func)})
+	}
+	for i, a := range n.Args {
+		at := c.expr(e, a)
+		if i < len(sg.params) && at != sg.params[i] && at != "invalid" && sg.params[i] != "invalid" {
+			c.issue(Issue{Code: "type_mismatch", ID: a.ID,
+				Message:  fmt.Sprintf("argument %d (%s) of %s: got %s, want %s", i+1, sg.names[i], n.Func, at, sg.params[i]),
+				Expected: sg.params[i], Got: at, Hint: c.sigText(path, n.Func)})
+		}
+	}
+	return sg.result
+}
+
+func (c *checker) sigText(path, name string) string {
+	pk := c.pkgs[path]
+	for i := range pk.Funcs {
+		if pk.Funcs[i].Name == name {
+			return path + ": " + Signature(path, &pk.Funcs[i])
+		}
+	}
+	return ""
+}
+
+// FieldType returns the type of field on pointer type baseType, and the
+// field names of the struct for hints.
+func FieldType(baseType, field string, pkgs map[string]*ir.Package) (string, []string, error) {
 	if !strings.HasPrefix(baseType, "*") {
-		return "", fmt.Errorf("field %s on non-pointer %s", field, baseType)
+		return "", nil, fmt.Errorf("field %s on %s, which is not a struct pointer", field, baseType)
 	}
 	full := strings.TrimPrefix(baseType, "*")
 	i := strings.LastIndex(full, ".")
-	if i < 0 {
-		return "", fmt.Errorf("bad pointer type %s", baseType)
+	pkg := pkgs[full[:max(i, 0)]]
+	if i < 0 || pkg == nil {
+		return "", nil, fmt.Errorf("bad pointer type %s", baseType)
 	}
-	tpkg, name := full[:i], full[i+1:]
-	pkg := pkgs[tpkg]
-	if pkg == nil {
-		return "", fmt.Errorf("unknown package %s", tpkg)
-	}
+	name := full[i+1:]
 	for _, t := range pkg.Types {
 		if t.Name != name {
 			continue
 		}
+		var names []string
 		for _, f := range t.Fields {
+			names = append(names, f.Name)
 			if f.Name == field {
-				ft, _, err := resolveType(pkg, f.Type, pkgs)
-				return ft, err
+				ft, err := Resolve(pkg, f.Type, pkgs)
+				return ft, nil, err
 			}
 		}
-		return "", fmt.Errorf("unknown field %s.%s", name, field)
+		return "", names, fmt.Errorf("%s has no field %s", full, field)
 	}
-	return "", fmt.Errorf("unknown type %s", full)
+	return "", nil, fmt.Errorf("unknown type %s", full)
+}
+
+// Suggest returns the candidate closest to name, if any is close enough.
+func Suggest(name string, cands []string) string {
+	sort.Strings(cands)
+	best, bestD := "", 3
+	if len(name) <= 3 {
+		bestD = 2
+	}
+	for _, c := range cands {
+		if c == name {
+			continue
+		}
+		d := lev(strings.ToLower(name), strings.ToLower(c))
+		if d < bestD {
+			best, bestD = c, d
+		}
+	}
+	return best
+}
+
+func lev(a, b string) int {
+	prev := make([]int, len(b)+1)
+	cur := make([]int, len(b)+1)
+	for j := range prev {
+		prev[j] = j
+	}
+	for i := 1; i <= len(a); i++ {
+		cur[0] = i
+		for j := 1; j <= len(b); j++ {
+			cost := 1
+			if a[i-1] == b[j-1] {
+				cost = 0
+			}
+			cur[j] = min(prev[j]+1, cur[j-1]+1, prev[j-1]+cost)
+		}
+		prev, cur = cur, prev
+	}
+	return prev[len(b)]
 }

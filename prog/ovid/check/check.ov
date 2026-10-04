@@ -1,0 +1,1206 @@
+package ovid/check
+
+import ovid/io
+import ovid/json
+import ovid/mem
+import ovid/parse
+
+type Ch struct {
+  io *ovid/io.Cap
+  root i64
+  file i64
+  filen i64
+  dir i64
+  dirn i64
+  errs i64
+  pkgs i64
+  npkg i64
+  env i64
+  nenv i64
+  mark i64
+  nmark i64
+  typ i64
+  tyn i64
+  pathp i64
+  pathn i64
+  fnp i64
+  fnn i64
+  idp i64
+  idn i64
+  tab i64
+  b *ovid/mem.Buf
+  pkg i64
+  nfunc i64
+  resp i64
+  resn i64
+  tabsz i64
+  mod *ovid/parse.Mod
+}
+
+func Zero(p i64, n i64) i64 {
+  var i i64 = 0
+  while i < n {
+    store8(p + i, 0)
+    i = i + 1
+  }
+  return 0
+}
+
+func SGet(obj i64, lit i64, n i64) i64 {
+  if obj == 0 {
+    return 0
+  }
+  return ovid/json.GetLit(obj, lit, n)
+}
+
+func JStrP(v i64) i64 {
+  if v == 0 {
+    return 0
+  }
+  return ovid/json.StrP(v)
+}
+
+func JStrN(v i64) i64 {
+  if v == 0 {
+    return 0
+  }
+  return ovid/json.StrN(v)
+}
+
+func WLit(c *Ch, p i64, n i64) i64 {
+  return ovid/mem.WBytes(c.io, c.b, p, n)
+}
+
+func WRaw(c *Ch, p i64, n i64) i64 {
+  var i i64 = 0
+  while i < n {
+    var ch i64 = load8(p + i)
+    if ch == 34 || ch == 92 {
+      ovid/mem.WByte(c.io, c.b, 92)
+      ovid/mem.WByte(c.io, c.b, ch)
+    } else {
+      if ch == 10 {
+        ovid/mem.WByte(c.io, c.b, 92)
+        ovid/mem.WByte(c.io, c.b, 110)
+      } else {
+        ovid/mem.WByte(c.io, c.b, ch)
+      }
+    }
+    i = i + 1
+  }
+  return 0
+}
+
+func WStr(c *Ch, p i64, n i64) i64 {
+  ovid/mem.WByte(c.io, c.b, 34)
+  WRaw(c, p, n)
+  ovid/mem.WByte(c.io, c.b, 34)
+  return 0
+}
+
+func WNum(c *Ch, v i64) i64 {
+  var tmp i64 = ovid/io.Alloc(c.io, 64)
+  var n i64 = ovid/mem.FormatI64(tmp, v)
+  return ovid/mem.WBytes(c.io, c.b, tmp, n)
+}
+
+func Line(c *Ch) i64 {
+  ovid/mem.WByte(c.io, c.b, 10)
+  ovid/io.Stdout(c.b.data, c.b.len)
+  c.b.len = 0
+  return 0
+}
+
+// Err prints one error line: code, message, the id it is about, and that
+// id's source position when the loader knows it.
+func Err(c *Ch, code i64, coden i64, detail i64, dn i64) i64 {
+  c.errs = c.errs + 1
+  WLit(c, strptr("{\"fact\":\"error\",\"code\":"), strlen("{\"fact\":\"error\",\"code\":"))
+  WStr(c, code, coden)
+  WLit(c, strptr(",\"message\":"), strlen(",\"message\":"))
+  WStr(c, detail, dn)
+  if c.idn != 0 {
+    WLit(c, strptr(",\"id\":"), strlen(",\"id\":"))
+    WStr(c, c.idp, c.idn)
+  }
+  if c.pathn != 0 {
+    WLit(c, strptr(",\"pkg\":"), strlen(",\"pkg\":"))
+    WStr(c, c.pathp, c.pathn)
+  }
+  if c.fnn != 0 {
+    WLit(c, strptr(",\"func\":"), strlen(",\"func\":"))
+    WStr(c, c.fnp, c.fnn)
+  }
+  ovid/parse.WLoc(c.io, c.b, c.mod, c.idp, c.idn)
+  ovid/mem.WByte(c.io, c.b, 125)
+  Line(c)
+  return 0
+}
+
+func Here(c *Ch, n i64) i64 {
+  var id i64 = SGet(n, strptr("id"), strlen("id"))
+  c.idp = JStrP(id)
+  c.idn = JStrN(id)
+  return 0
+}
+
+func HashStr(p i64, n i64) i64 {
+  var h i64 = 5381
+  var i i64 = 0
+  while i < n {
+    h = ((h << 5) + h) + load8(p + i)
+    i = i + 1
+  }
+  return h & 262143
+}
+
+func Claim(c *Ch, p i64, n i64) i64 {
+  if n <= 0 {
+    c.idp = 0
+    c.idn = 0
+    Err(c, strptr("missing_id"), strlen("missing_id"), strptr("empty id"), strlen("empty id"))
+    return 0
+  }
+  var slot i64 = HashStr(p, n)
+  var i i64 = 0
+  while i < c.tabsz {
+    var idx i64 = (slot + i) & 262143
+    var rec i64 = c.tab + (idx * 16)
+    var sp i64 = load64(rec)
+    var sn i64 = load64(rec + 8)
+    if sp == 0 {
+      store64(rec, p)
+      store64(rec + 8, n)
+      return 0
+    }
+    if ovid/mem.Eq(sp, sn, p, n) {
+      c.idp = p
+      c.idn = n
+      Err(c, strptr("duplicate_id"), strlen("duplicate_id"), p, n)
+      return 0
+    }
+    i = i + 1
+  }
+  Err(c, strptr("id_table"), strlen("id_table"), strptr("full"), strlen("full"))
+  return 0
+}
+
+func ClaimNode(c *Ch, n i64) i64 {
+  if n == 0 {
+    return 0
+  }
+  var id i64 = SGet(n, strptr("id"), strlen("id"))
+  if id != 0 {
+    Claim(c, JStrP(id), JStrN(id))
+  }
+  ClaimNode(c, SGet(n, strptr("left"), strlen("left")))
+  ClaimNode(c, SGet(n, strptr("right"), strlen("right")))
+  ClaimNode(c, SGet(n, strptr("arg"), strlen("arg")))
+  ClaimNode(c, SGet(n, strptr("base"), strlen("base")))
+  ClaimNode(c, SGet(n, strptr("addr"), strlen("addr")))
+  ClaimNode(c, SGet(n, strptr("val"), strlen("val")))
+  ClaimNode(c, SGet(n, strptr("cond"), strlen("cond")))
+  ClaimArr(c, SGet(n, strptr("args"), strlen("args")))
+  ClaimArr(c, SGet(n, strptr("then"), strlen("then")))
+  ClaimArr(c, SGet(n, strptr("else"), strlen("else")))
+  ClaimArr(c, SGet(n, strptr("body"), strlen("body")))
+  return 0
+}
+
+func ClaimArr(c *Ch, arr i64) i64 {
+  if arr == 0 {
+    return 0
+  }
+  var s i64 = ovid/json.Child(arr)
+  while s != 0 {
+    ClaimNode(c, s)
+    s = ovid/json.Next(s)
+  }
+  return 0
+}
+
+func Push(c *Ch) i64 {
+  if c.nmark >= 256 {
+    Err(c, strptr("scope"), strlen("scope"), strptr("too deep"), strlen("too deep"))
+    return 0
+  }
+  store64(c.mark + (c.nmark * 8), c.nenv)
+  c.nmark = c.nmark + 1
+  return 0
+}
+
+func Pop(c *Ch) i64 {
+  if c.nmark <= 0 {
+    return 0
+  }
+  c.nmark = c.nmark - 1
+  c.nenv = load64(c.mark + (c.nmark * 8))
+  return 0
+}
+
+func Lookup(c *Ch, np i64, nn i64) i64 {
+  var i i64 = c.nenv - 1
+  while i >= 0 {
+    var rec i64 = c.env + (i * 32)
+    if ovid/mem.Eq(load64(rec), load64(rec + 8), np, nn) {
+      return rec
+    }
+    i = i - 1
+  }
+  return 0
+}
+
+func Define(c *Ch, np i64, nn i64, tp i64, tn i64) i64 {
+  if Lookup(c, np, nn) != 0 {
+    Err(c, strptr("duplicate_name"), strlen("duplicate_name"), np, nn)
+  }
+  if c.nenv >= 4096 {
+    return 0
+  }
+  var rec i64 = c.env + (c.nenv * 32)
+  store64(rec, np)
+  store64(rec + 8, nn)
+  store64(rec + 16, tp)
+  store64(rec + 24, tn)
+  c.nenv = c.nenv + 1
+  return 0
+}
+
+func SetTy(c *Ch, p i64, n i64) i64 {
+  c.typ = p
+  c.tyn = n
+  return 0
+}
+
+func SetI64(c *Ch) i64 {
+  return SetTy(c, strptr("i64"), strlen("i64"))
+}
+
+func SetBool(c *Ch) i64 {
+  return SetTy(c, strptr("bool"), strlen("bool"))
+}
+
+func SetBad(c *Ch) i64 {
+  return SetTy(c, strptr("invalid"), strlen("invalid"))
+}
+
+func IsTy(c *Ch, p i64, n i64) bool {
+  return ovid/mem.Eq(c.typ, c.tyn, p, n)
+}
+
+func Bad(c *Ch) bool {
+  return IsTy(c, strptr("invalid"), strlen("invalid"))
+}
+
+func TyEq(p i64, n i64, q i64, m i64) bool {
+  return ovid/mem.Eq(p, n, q, m)
+}
+
+func FindPkg(c *Ch, pp i64, pn i64) i64 {
+  var i i64 = 0
+  while i < c.npkg {
+    var pkg i64 = load64(c.pkgs + (i * 8))
+    var path i64 = SGet(pkg, strptr("path"), strlen("path"))
+    if ovid/json.IsLit(path, pp, pn) {
+      return pkg
+    }
+    i = i + 1
+  }
+  return 0
+}
+
+func FindFunc(c *Ch, pp i64, pn i64, np i64, nn i64) i64 {
+  var pkg i64 = FindPkg(c, pp, pn)
+  if pkg == 0 {
+    return 0
+  }
+  var fns i64 = SGet(pkg, strptr("funcs"), strlen("funcs"))
+  if fns == 0 {
+    return 0
+  }
+  var f i64 = ovid/json.Child(fns)
+  while f != 0 {
+    var nm i64 = SGet(f, strptr("name"), strlen("name"))
+    if ovid/json.IsLit(nm, np, nn) {
+      return f
+    }
+    f = ovid/json.Next(f)
+  }
+  return 0
+}
+
+func FindConst(c *Ch, np i64, nn i64) bool {
+  var arr i64 = SGet(c.pkg, strptr("consts"), strlen("consts"))
+  if arr == 0 {
+    return false
+  }
+  var k i64 = ovid/json.Child(arr)
+  while k != 0 {
+    var nm i64 = SGet(k, strptr("name"), strlen("name"))
+    if ovid/json.IsLit(nm, np, nn) {
+      return true
+    }
+    k = ovid/json.Next(k)
+  }
+  return false
+}
+
+// CheckPkgConst types a reference pkg.NAME to another package's const.
+func CheckPkgConst(c *Ch, pk i64, nm i64) i64 {
+  if !Imported(c, JStrP(pk), JStrN(pk)) {
+    Err(c, strptr("unknown_package"), strlen("unknown_package"), JStrP(pk), JStrN(pk))
+    return SetBad(c)
+  }
+  var pkg i64 = FindPkg(c, JStrP(pk), JStrN(pk))
+  var arr i64 = 0
+  if pkg != 0 {
+    arr = SGet(pkg, strptr("consts"), strlen("consts"))
+  }
+  var k i64 = 0
+  if arr != 0 {
+    k = ovid/json.Child(arr)
+  }
+  while k != 0 {
+    if ovid/json.IsLit(SGet(k, strptr("name"), strlen("name")), JStrP(nm), JStrN(nm)) {
+      return SetI64(c)
+    }
+    k = ovid/json.Next(k)
+  }
+  Err(c, strptr("unknown_name"), strlen("unknown_name"), JStrP(nm), JStrN(nm))
+  return SetBad(c)
+}
+
+func Imported(c *Ch, pp i64, pn i64) bool {
+  if ovid/mem.Eq(c.pathp, c.pathn, pp, pn) {
+    return true
+  }
+  var arr i64 = SGet(c.pkg, strptr("imports"), strlen("imports"))
+  if arr == 0 {
+    return false
+  }
+  var k i64 = ovid/json.Child(arr)
+  while k != 0 {
+    var path i64 = SGet(k, strptr("path"), strlen("path"))
+    if ovid/json.IsLit(path, pp, pn) {
+      return true
+    }
+    k = ovid/json.Next(k)
+  }
+  return false
+}
+
+func FieldTy(c *Ch, tp i64, tn i64, fp i64, fn i64) i64 {
+  if tn < 2 {
+    return -1
+  }
+  if load8(tp) != 42 {
+    return -1
+  }
+  var p i64 = tp + 1
+  var n i64 = tn - 1
+  var dot i64 = -1
+  var i i64 = 0
+  while i < n {
+    if load8(p + i) == 46 {
+      dot = i
+    }
+    i = i + 1
+  }
+  if dot < 1 {
+    return -1
+  }
+  var pkg i64 = FindPkg(c, p, dot)
+  if pkg == 0 {
+    return -1
+  }
+  var tnp i64 = (p + dot) + 1
+  var tnn i64 = (n - dot) - 1
+  var types i64 = SGet(pkg, strptr("types"), strlen("types"))
+  if types == 0 {
+    return -1
+  }
+  var t i64 = ovid/json.Child(types)
+  while t != 0 {
+    var nm i64 = SGet(t, strptr("name"), strlen("name"))
+    if ovid/json.IsLit(nm, tnp, tnn) {
+      var fields i64 = SGet(t, strptr("fields"), strlen("fields"))
+      if fields == 0 {
+        return -1
+      }
+      var f i64 = ovid/json.Child(fields)
+      while f != 0 {
+        var fnm i64 = SGet(f, strptr("name"), strlen("name"))
+        if ovid/json.IsLit(fnm, fp, fn) {
+          var fty i64 = SGet(f, strptr("type"), strlen("type"))
+          SetTy(c, JStrP(fty), JStrN(fty))
+          return 0
+        }
+        f = ovid/json.Next(f)
+      }
+      return -1
+    }
+    t = ovid/json.Next(t)
+  }
+  return -1
+}
+
+func Leaf(op i64) bool {
+  if ovid/json.IsLit(op, strptr("int"), strlen("int")) {
+    return true
+  }
+  if ovid/json.IsLit(op, strptr("strptr"), strlen("strptr")) {
+    return true
+  }
+  if ovid/json.IsLit(op, strptr("strlen"), strlen("strlen")) {
+    return true
+  }
+  return false
+}
+
+func Arith(op i64) bool {
+  if ovid/json.IsLit(op, strptr("add"), strlen("add")) {
+    return true
+  }
+  if ovid/json.IsLit(op, strptr("sub"), strlen("sub")) {
+    return true
+  }
+  if ovid/json.IsLit(op, strptr("mul"), strlen("mul")) {
+    return true
+  }
+  if ovid/json.IsLit(op, strptr("div"), strlen("div")) {
+    return true
+  }
+  if ovid/json.IsLit(op, strptr("mod"), strlen("mod")) {
+    return true
+  }
+  if ovid/json.IsLit(op, strptr("and"), strlen("and")) {
+    return true
+  }
+  if ovid/json.IsLit(op, strptr("or"), strlen("or")) {
+    return true
+  }
+  if ovid/json.IsLit(op, strptr("xor"), strlen("xor")) {
+    return true
+  }
+  if ovid/json.IsLit(op, strptr("shl"), strlen("shl")) {
+    return true
+  }
+  if ovid/json.IsLit(op, strptr("shr"), strlen("shr")) {
+    return true
+  }
+  return false
+}
+
+func CmpEq(op i64) bool {
+  if ovid/json.IsLit(op, strptr("eq"), strlen("eq")) {
+    return true
+  }
+  if ovid/json.IsLit(op, strptr("ne"), strlen("ne")) {
+    return true
+  }
+  return false
+}
+
+func CmpOrd(op i64) bool {
+  if ovid/json.IsLit(op, strptr("lt"), strlen("lt")) {
+    return true
+  }
+  if ovid/json.IsLit(op, strptr("le"), strlen("le")) {
+    return true
+  }
+  if ovid/json.IsLit(op, strptr("gt"), strlen("gt")) {
+    return true
+  }
+  if ovid/json.IsLit(op, strptr("ge"), strlen("ge")) {
+    return true
+  }
+  return false
+}
+
+func CheckExpr(c *Ch, n i64) i64 {
+  if n == 0 {
+    Err(c, strptr("missing_expr"), strlen("missing_expr"), strptr("empty"), strlen("empty"))
+    return SetBad(c)
+  }
+  Here(c, n)
+  var op i64 = SGet(n, strptr("op"), strlen("op"))
+  if Leaf(op) {
+    return SetI64(c)
+  }
+  if ovid/json.IsLit(op, strptr("bool"), strlen("bool")) {
+    return SetBool(c)
+  }
+  if ovid/json.IsLit(op, strptr("name"), strlen("name")) {
+    var nm i64 = SGet(n, strptr("name"), strlen("name"))
+    var pk i64 = SGet(n, strptr("pkg"), strlen("pkg"))
+    if pk != 0 {
+      return CheckPkgConst(c, pk, nm)
+    }
+    var loc i64 = Lookup(c, JStrP(nm), JStrN(nm))
+    if loc != 0 {
+      return SetTy(c, load64(loc + 16), load64(loc + 24))
+    }
+    if FindConst(c, JStrP(nm), JStrN(nm)) {
+      return SetI64(c)
+    }
+    Err(c, strptr("unknown_name"), strlen("unknown_name"), JStrP(nm), JStrN(nm))
+    return SetBad(c)
+  }
+  if Arith(op) {
+    CheckExpr(c, SGet(n, strptr("left"), strlen("left")))
+    var lp i64 = c.typ
+    var ln i64 = c.tyn
+    var lb bool = Bad(c)
+    CheckExpr(c, SGet(n, strptr("right"), strlen("right")))
+    var rb bool = Bad(c)
+    if !lb {
+      if !TyEq(lp, ln, strptr("i64"), strlen("i64")) {
+        Err(c, strptr("type_mismatch"), strlen("type_mismatch"), strptr("arith needs i64"), strlen("arith needs i64"))
+      }
+    }
+    if !rb {
+      if !IsTy(c, strptr("i64"), strlen("i64")) {
+        Err(c, strptr("type_mismatch"), strlen("type_mismatch"), strptr("arith needs i64"), strlen("arith needs i64"))
+      }
+    }
+    return SetI64(c)
+  }
+  if CmpEq(op) {
+    CheckExpr(c, SGet(n, strptr("left"), strlen("left")))
+    var lp i64 = c.typ
+    var ln i64 = c.tyn
+    var lb bool = Bad(c)
+    CheckExpr(c, SGet(n, strptr("right"), strlen("right")))
+    if !lb {
+      if !Bad(c) {
+        if !TyEq(lp, ln, c.typ, c.tyn) {
+          Err(c, strptr("type_mismatch"), strlen("type_mismatch"), strptr("comparison types differ"), strlen("comparison types differ"))
+        }
+      }
+    }
+    return SetBool(c)
+  }
+  if CmpOrd(op) {
+    CheckExpr(c, SGet(n, strptr("left"), strlen("left")))
+    var lb bool = Bad(c)
+    var lp i64 = c.typ
+    var ln i64 = c.tyn
+    CheckExpr(c, SGet(n, strptr("right"), strlen("right")))
+    if !lb {
+      if !TyEq(lp, ln, strptr("i64"), strlen("i64")) {
+        Err(c, strptr("type_mismatch"), strlen("type_mismatch"), strptr("order needs i64"), strlen("order needs i64"))
+      }
+    }
+    if !Bad(c) {
+      if !IsTy(c, strptr("i64"), strlen("i64")) {
+        Err(c, strptr("type_mismatch"), strlen("type_mismatch"), strptr("order needs i64"), strlen("order needs i64"))
+      }
+    }
+    return SetBool(c)
+  }
+  if ovid/json.IsLit(op, strptr("land"), strlen("land")) || ovid/json.IsLit(op, strptr("lor"), strlen("lor")) {
+    CheckExpr(c, SGet(n, strptr("left"), strlen("left")))
+    var lb bool = Bad(c)
+    var lbool bool = IsTy(c, strptr("bool"), strlen("bool"))
+    CheckExpr(c, SGet(n, strptr("right"), strlen("right")))
+    var rb bool = Bad(c)
+    var rbool bool = IsTy(c, strptr("bool"), strlen("bool"))
+    if !lb {
+      if !lbool {
+        Err(c, strptr("type_mismatch"), strlen("type_mismatch"), strptr("logic needs bool"), strlen("logic needs bool"))
+      }
+    }
+    if !rb {
+      if !rbool {
+        Err(c, strptr("type_mismatch"), strlen("type_mismatch"), strptr("logic needs bool"), strlen("logic needs bool"))
+      }
+    }
+    return SetBool(c)
+  }
+  if ovid/json.IsLit(op, strptr("not"), strlen("not")) {
+    CheckExpr(c, SGet(n, strptr("arg"), strlen("arg")))
+    if !Bad(c) {
+      if !IsTy(c, strptr("bool"), strlen("bool")) {
+        Err(c, strptr("type_mismatch"), strlen("type_mismatch"), strptr("not needs bool"), strlen("not needs bool"))
+      }
+    }
+    return SetBool(c)
+  }
+  if ovid/json.IsLit(op, strptr("neg"), strlen("neg")) || ovid/json.IsLit(op, strptr("bnot"), strlen("bnot")) {
+    CheckExpr(c, SGet(n, strptr("arg"), strlen("arg")))
+    if !Bad(c) {
+      if !IsTy(c, strptr("i64"), strlen("i64")) {
+        Err(c, strptr("type_mismatch"), strlen("type_mismatch"), strptr("unary needs i64"), strlen("unary needs i64"))
+      }
+    }
+    return SetI64(c)
+  }
+  if ovid/json.IsLit(op, strptr("load8"), strlen("load8")) || ovid/json.IsLit(op, strptr("load32"), strlen("load32")) || ovid/json.IsLit(op, strptr("load64"), strlen("load64")) {
+    CheckExpr(c, SGet(n, strptr("arg"), strlen("arg")))
+    if !Bad(c) {
+      if !IsTy(c, strptr("i64"), strlen("i64")) {
+        Err(c, strptr("type_mismatch"), strlen("type_mismatch"), strptr("load needs i64"), strlen("load needs i64"))
+      }
+    }
+    return SetI64(c)
+  }
+  if ovid/json.IsLit(op, strptr("sizeof"), strlen("sizeof")) {
+    return SetI64(c)
+  }
+  if ovid/json.IsLit(op, strptr("cast"), strlen("cast")) {
+    CheckExpr(c, SGet(n, strptr("arg"), strlen("arg")))
+    var ty i64 = SGet(n, strptr("type"), strlen("type"))
+    return SetTy(c, JStrP(ty), JStrN(ty))
+  }
+  if ovid/json.IsLit(op, strptr("field"), strlen("field")) {
+    CheckExpr(c, SGet(n, strptr("base"), strlen("base")))
+    if Bad(c) {
+      return SetBad(c)
+    }
+    var tp i64 = c.typ
+    var tn i64 = c.tyn
+    var nm i64 = SGet(n, strptr("name"), strlen("name"))
+    if FieldTy(c, tp, tn, JStrP(nm), JStrN(nm)) != 0 {
+      Err(c, strptr("unknown_field"), strlen("unknown_field"), JStrP(nm), JStrN(nm))
+      return SetBad(c)
+    }
+    return 0
+  }
+  if ovid/json.IsLit(op, strptr("call"), strlen("call")) {
+    var pp i64 = c.pathp
+    var pn i64 = c.pathn
+    var pk i64 = SGet(n, strptr("pkg"), strlen("pkg"))
+    if pk != 0 {
+      pp = JStrP(pk)
+      pn = JStrN(pk)
+      if !Imported(c, pp, pn) {
+        Err(c, strptr("unknown_package"), strlen("unknown_package"), pp, pn)
+      }
+    }
+    var nm i64 = SGet(n, strptr("func"), strlen("func"))
+    var fn i64 = FindFunc(c, pp, pn, JStrP(nm), JStrN(nm))
+    var args i64 = SGet(n, strptr("args"), strlen("args"))
+    var nargs i64 = 0
+    if args != 0 {
+      nargs = ovid/json.Count(args)
+    }
+    if fn == 0 {
+      Err(c, strptr("unknown_name"), strlen("unknown_name"), JStrP(nm), JStrN(nm))
+      var a i64 = 0
+      if args != 0 {
+        a = ovid/json.Child(args)
+      }
+      while a != 0 {
+        CheckExpr(c, a)
+        a = ovid/json.Next(a)
+      }
+      return SetBad(c)
+    }
+    var params i64 = SGet(fn, strptr("params"), strlen("params"))
+    var nparam i64 = 0
+    if params != 0 {
+      nparam = ovid/json.Count(params)
+    }
+    if nargs != nparam {
+      Err(c, strptr("arity"), strlen("arity"), JStrP(nm), JStrN(nm))
+    }
+    var i i64 = 0
+    var a i64 = 0
+    if args != 0 {
+      a = ovid/json.Child(args)
+    }
+    var p i64 = 0
+    if params != 0 {
+      p = ovid/json.Child(params)
+    }
+    while a != 0 {
+      CheckExpr(c, a)
+      if p != 0 {
+        if !Bad(c) {
+          var ty i64 = SGet(p, strptr("type"), strlen("type"))
+          if !IsTy(c, JStrP(ty), JStrN(ty)) {
+            Err(c, strptr("type_mismatch"), strlen("type_mismatch"), JStrP(nm), JStrN(nm))
+          }
+        }
+        p = ovid/json.Next(p)
+      }
+      i = i + 1
+      a = ovid/json.Next(a)
+    }
+    var rs i64 = SGet(fn, strptr("result"), strlen("result"))
+    return SetTy(c, JStrP(rs), JStrN(rs))
+  }
+  if ovid/json.IsLit(op, strptr("syscall"), strlen("syscall")) {
+    if !ovid/mem.Eq(c.pathp, c.pathn, strptr("ovid/io"), strlen("ovid/io")) {
+      Err(c, strptr("syscall_forbidden"), strlen("syscall_forbidden"), strptr("only ovid/io"), strlen("only ovid/io"))
+    }
+    var args i64 = SGet(n, strptr("args"), strlen("args"))
+    var nargs i64 = 0
+    if args != 0 {
+      nargs = ovid/json.Count(args)
+    }
+    if nargs != 7 {
+      Err(c, strptr("arity"), strlen("arity"), strptr("syscall"), strlen("syscall"))
+    }
+    var a i64 = 0
+    if args != 0 {
+      a = ovid/json.Child(args)
+    }
+    while a != 0 {
+      CheckExpr(c, a)
+      if !Bad(c) {
+        if !IsTy(c, strptr("i64"), strlen("i64")) {
+          Err(c, strptr("type_mismatch"), strlen("type_mismatch"), strptr("syscall arg"), strlen("syscall arg"))
+        }
+      }
+      a = ovid/json.Next(a)
+    }
+    return SetI64(c)
+  }
+  Err(c, strptr("bad_op"), strlen("bad_op"), strptr("expr"), strlen("expr"))
+  return SetBad(c)
+}
+
+func Paths(arr i64) bool {
+  if arr == 0 {
+    return false
+  }
+  if ovid/json.Count(arr) == 0 {
+    return false
+  }
+  var last i64 = 0
+  var s i64 = ovid/json.Child(arr)
+  while s != 0 {
+    last = s
+    s = ovid/json.Next(s)
+  }
+  var op i64 = SGet(last, strptr("op"), strlen("op"))
+  if ovid/json.IsLit(op, strptr("return"), strlen("return")) {
+    return true
+  }
+  if ovid/json.IsLit(op, strptr("if"), strlen("if")) {
+    var el i64 = SGet(last, strptr("else"), strlen("else"))
+    if el == 0 {
+      return false
+    }
+    if ovid/json.Count(el) == 0 {
+      return false
+    }
+    if Paths(SGet(last, strptr("then"), strlen("then"))) {
+      if Paths(el) {
+        return true
+      }
+    }
+    return false
+  }
+  return false
+}
+
+func CheckStmts(c *Ch, arr i64) i64 {
+  if arr == 0 {
+    return 0
+  }
+  var s i64 = ovid/json.Child(arr)
+  while s != 0 {
+    CheckStmt(c, s)
+    s = ovid/json.Next(s)
+  }
+  return 0
+}
+
+func CheckStmt(c *Ch, s i64) i64 {
+  if s == 0 {
+    return 0
+  }
+  Here(c, s)
+  var op i64 = SGet(s, strptr("op"), strlen("op"))
+  if ovid/json.IsLit(op, strptr("var"), strlen("var")) {
+    var nm i64 = SGet(s, strptr("name"), strlen("name"))
+    var ty i64 = SGet(s, strptr("type"), strlen("type"))
+    var tp i64 = JStrP(ty)
+    var tn i64 = JStrN(ty)
+    var ok bool = false
+    if TyEq(tp, tn, strptr("i64"), strlen("i64")) {
+      ok = true
+    }
+    if TyEq(tp, tn, strptr("bool"), strlen("bool")) {
+      ok = true
+    }
+    if tn > 0 {
+      if load8(tp) == 42 {
+        ok = true
+      }
+    }
+    if !ok {
+      Err(c, strptr("struct_value"), strlen("struct_value"), JStrP(nm), JStrN(nm))
+    }
+    Define(c, JStrP(nm), JStrN(nm), tp, tn)
+    var val i64 = SGet(s, strptr("val"), strlen("val"))
+    if val != 0 {
+      CheckExpr(c, val)
+      if !Bad(c) {
+        if !IsTy(c, tp, tn) {
+          Err(c, strptr("type_mismatch"), strlen("type_mismatch"), JStrP(nm), JStrN(nm))
+        }
+      }
+    }
+    return 0
+  }
+  if ovid/json.IsLit(op, strptr("assign"), strlen("assign")) {
+    var nm i64 = SGet(s, strptr("name"), strlen("name"))
+    var loc i64 = Lookup(c, JStrP(nm), JStrN(nm))
+    if loc == 0 {
+      Err(c, strptr("unknown_name"), strlen("unknown_name"), JStrP(nm), JStrN(nm))
+      CheckExpr(c, SGet(s, strptr("val"), strlen("val")))
+      return 0
+    }
+    var tp i64 = load64(loc + 16)
+    var tn i64 = load64(loc + 24)
+    CheckExpr(c, SGet(s, strptr("val"), strlen("val")))
+    if !Bad(c) {
+      if !IsTy(c, tp, tn) {
+        Err(c, strptr("type_mismatch"), strlen("type_mismatch"), JStrP(nm), JStrN(nm))
+      }
+    }
+    return 0
+  }
+  if ovid/json.IsLit(op, strptr("setfield"), strlen("setfield")) {
+    var base i64 = SGet(s, strptr("base"), strlen("base"))
+    CheckExpr(c, base)
+    var tp i64 = c.typ
+    var tn i64 = c.tyn
+    var was bool = Bad(c)
+    var nm i64 = SGet(s, strptr("name"), strlen("name"))
+    var fp i64 = 0
+    var fn i64 = 0
+    if !was {
+      if FieldTy(c, tp, tn, JStrP(nm), JStrN(nm)) != 0 {
+        Err(c, strptr("unknown_field"), strlen("unknown_field"), JStrP(nm), JStrN(nm))
+        was = true
+      } else {
+        fp = c.typ
+        fn = c.tyn
+      }
+    }
+    CheckExpr(c, SGet(s, strptr("val"), strlen("val")))
+    if !was {
+      if !Bad(c) {
+        if !IsTy(c, fp, fn) {
+          Err(c, strptr("type_mismatch"), strlen("type_mismatch"), JStrP(nm), JStrN(nm))
+        }
+      }
+    }
+    return 0
+  }
+  if ovid/json.IsLit(op, strptr("store8"), strlen("store8")) || ovid/json.IsLit(op, strptr("store64"), strlen("store64")) {
+    CheckExpr(c, SGet(s, strptr("addr"), strlen("addr")))
+    if !Bad(c) {
+      if !IsTy(c, strptr("i64"), strlen("i64")) {
+        Err(c, strptr("type_mismatch"), strlen("type_mismatch"), strptr("store address"), strlen("store address"))
+      }
+    }
+    CheckExpr(c, SGet(s, strptr("val"), strlen("val")))
+    if !Bad(c) {
+      if !IsTy(c, strptr("i64"), strlen("i64")) {
+        Err(c, strptr("type_mismatch"), strlen("type_mismatch"), strptr("store value"), strlen("store value"))
+      }
+    }
+    return 0
+  }
+  if ovid/json.IsLit(op, strptr("expr"), strlen("expr")) {
+    CheckExpr(c, SGet(s, strptr("val"), strlen("val")))
+    return 0
+  }
+  if ovid/json.IsLit(op, strptr("return"), strlen("return")) {
+    var val i64 = SGet(s, strptr("val"), strlen("val"))
+    if val == 0 {
+      Err(c, strptr("type_mismatch"), strlen("type_mismatch"), strptr("missing return value"), strlen("missing return value"))
+      return 0
+    }
+    CheckExpr(c, val)
+    if !Bad(c) {
+      if !IsTy(c, c.resp, c.resn) {
+        Err(c, strptr("type_mismatch"), strlen("type_mismatch"), strptr("return type"), strlen("return type"))
+      }
+    }
+    return 0
+  }
+  if ovid/json.IsLit(op, strptr("if"), strlen("if")) {
+    CheckExpr(c, SGet(s, strptr("cond"), strlen("cond")))
+    if !Bad(c) {
+      if !IsTy(c, strptr("bool"), strlen("bool")) {
+        Err(c, strptr("type_mismatch"), strlen("type_mismatch"), strptr("if needs bool"), strlen("if needs bool"))
+      }
+    }
+    Push(c)
+    CheckStmts(c, SGet(s, strptr("then"), strlen("then")))
+    Pop(c)
+    Push(c)
+    CheckStmts(c, SGet(s, strptr("else"), strlen("else")))
+    Pop(c)
+    return 0
+  }
+  if ovid/json.IsLit(op, strptr("while"), strlen("while")) {
+    CheckExpr(c, SGet(s, strptr("cond"), strlen("cond")))
+    if !Bad(c) {
+      if !IsTy(c, strptr("bool"), strlen("bool")) {
+        Err(c, strptr("type_mismatch"), strlen("type_mismatch"), strptr("while needs bool"), strlen("while needs bool"))
+      }
+    }
+    Push(c)
+    CheckStmts(c, SGet(s, strptr("body"), strlen("body")))
+    Pop(c)
+    return 0
+  }
+  Err(c, strptr("bad_op"), strlen("bad_op"), strptr("stmt"), strlen("stmt"))
+  return 0
+}
+
+func CheckFunc(c *Ch, fn i64) i64 {
+  c.nenv = 0
+  c.nmark = 0
+  var nm i64 = SGet(fn, strptr("name"), strlen("name"))
+  c.fnp = JStrP(nm)
+  c.fnn = JStrN(nm)
+  var rs i64 = SGet(fn, strptr("result"), strlen("result"))
+  c.resp = JStrP(rs)
+  c.resn = JStrN(rs)
+  Here(c, fn)
+  Push(c)
+  var params i64 = SGet(fn, strptr("params"), strlen("params"))
+  var nparam i64 = 0
+  if params != 0 {
+    nparam = ovid/json.Count(params)
+  }
+  if nparam > 6 {
+    Err(c, strptr("arity"), strlen("arity"), strptr("more than 6 params"), strlen("more than 6 params"))
+  }
+  var p i64 = 0
+  if params != 0 {
+    p = ovid/json.Child(params)
+  }
+  while p != 0 {
+    Here(c, p)
+    var pnm i64 = SGet(p, strptr("name"), strlen("name"))
+    var ty i64 = SGet(p, strptr("type"), strlen("type"))
+    Define(c, JStrP(pnm), JStrN(pnm), JStrP(ty), JStrN(ty))
+    p = ovid/json.Next(p)
+  }
+  Here(c, fn)
+  var body i64 = SGet(fn, strptr("body"), strlen("body"))
+  CheckStmts(c, body)
+  if !Paths(body) {
+    Err(c, strptr("missing_return"), strlen("missing_return"), c.fnp, c.fnn)
+  }
+  Pop(c)
+  c.nfunc = c.nfunc + 1
+  return 0
+}
+
+func Join(io *ovid/io.Cap, dir i64, dirn i64, suf i64, sufn i64) i64 {
+  var n i64 = (dirn + 1) + sufn
+  var p i64 = ovid/io.Alloc(io, n + 1)
+  ovid/mem.Copy(p, dir, dirn)
+  store8(p + dirn, 47)
+  ovid/mem.Copy(p + dirn + 1, suf, sufn)
+  store8(p + n, 0)
+  return p
+}
+
+func CheckMain(c *Ch) i64 {
+  var ent i64 = SGet(c.root, strptr("entry"), strlen("entry"))
+  var pkg i64 = FindPkg(c, JStrP(ent), JStrN(ent))
+  if pkg == 0 {
+    c.pathp = JStrP(ent)
+    c.pathn = JStrN(ent)
+    c.fnp = 0
+    c.fnn = 0
+    c.idp = 0
+    c.idn = 0
+    Err(c, strptr("bad_main"), strlen("bad_main"), strptr("missing entry package"), strlen("missing entry package"))
+    return 0
+  }
+  var fn i64 = FindFunc(c, JStrP(ent), JStrN(ent), strptr("main"), strlen("main"))
+  if fn == 0 {
+    c.pathp = JStrP(ent)
+    c.pathn = JStrN(ent)
+    Err(c, strptr("bad_main"), strlen("bad_main"), strptr("entry package has no main"), strlen("entry package has no main"))
+    return 0
+  }
+  var params i64 = SGet(fn, strptr("params"), strlen("params"))
+  var nparam i64 = 0
+  if params != 0 {
+    nparam = ovid/json.Count(params)
+  }
+  var rs i64 = SGet(fn, strptr("result"), strlen("result"))
+  var ok bool = false
+  if nparam == 1 {
+    var p i64 = ovid/json.Child(params)
+    var ty i64 = SGet(p, strptr("type"), strlen("type"))
+    if ovid/json.IsLit(ty, strptr("*ovid/io.Cap"), strlen("*ovid/io.Cap")) {
+      if ovid/json.IsLit(rs, strptr("i64"), strlen("i64")) {
+        ok = true
+      }
+    }
+  }
+  if !ok {
+    c.pathp = JStrP(ent)
+    c.pathn = JStrN(ent)
+    c.fnp = strptr("main")
+    c.fnn = strlen("main")
+    Here(c, fn)
+    Err(c, strptr("bad_main"), strlen("bad_main"), strptr("main must be (io *ovid/io.Cap) i64"), strlen("main must be (io *ovid/io.Cap) i64"))
+  }
+  return 0
+}
+
+// Run type-checks the program tree root (parsed from m.json) and prints
+// error lines and a summary. It returns the error count.
+func Run(io *ovid/io.Cap, root i64, m *ovid/parse.Mod) i64 {
+  var raw i64 = ovid/io.Alloc(io, sizeof(Ch))
+  Zero(raw, sizeof(Ch))
+  var c *Ch = raw as *Ch
+  c.io = io
+  c.root = root
+  c.mod = m
+  c.tabsz = 262144
+  c.b = ovid/mem.New(io, 4096)
+  c.env = ovid/io.Alloc(io, 4096 * 32)
+  c.mark = ovid/io.Alloc(io, 256 * 8)
+  c.tab = ovid/io.Alloc(io, c.tabsz * 16)
+  Zero(c.tab, c.tabsz * 16)
+  var pkgs i64 = SGet(root, strptr("packages"), strlen("packages"))
+  if pkgs != 0 {
+    c.npkg = ovid/json.Count(pkgs)
+  }
+  c.pkgs = ovid/io.Alloc(io, (c.npkg + 1) * 8)
+  var fi i64 = 0
+  var fp i64 = 0
+  if pkgs != 0 {
+    fp = ovid/json.Child(pkgs)
+  }
+  while fp != 0 {
+    store64(c.pkgs + (fi * 8), fp)
+    fi = fi + 1
+    fp = ovid/json.Next(fp)
+  }
+  var i i64 = 0
+  var p i64 = 0
+  if pkgs != 0 {
+    p = ovid/json.Child(pkgs)
+  }
+  while p != 0 {
+    store64(c.pkgs + (i * 8), p)
+    var id i64 = SGet(p, strptr("id"), strlen("id"))
+    Claim(c, JStrP(id), JStrN(id))
+    var path i64 = SGet(p, strptr("path"), strlen("path"))
+    var ims i64 = SGet(p, strptr("imports"), strlen("imports"))
+    if ims != 0 {
+      var im i64 = ovid/json.Child(ims)
+      while im != 0 {
+        var iid i64 = SGet(im, strptr("id"), strlen("id"))
+        Claim(c, JStrP(iid), JStrN(iid))
+        var ip i64 = SGet(im, strptr("path"), strlen("path"))
+        if ovid/json.IsLit(ip, JStrP(path), JStrN(path)) {
+          c.pathp = JStrP(path)
+          c.pathn = JStrN(path)
+          c.idp = JStrP(iid)
+          c.idn = JStrN(iid)
+          Err(c, strptr("import_self"), strlen("import_self"), JStrP(ip), JStrN(ip))
+        }
+        if FindPkg(c, JStrP(ip), JStrN(ip)) == 0 {
+          c.pathp = JStrP(path)
+          c.pathn = JStrN(path)
+          c.idp = JStrP(iid)
+          c.idn = JStrN(iid)
+          Err(c, strptr("unknown_package"), strlen("unknown_package"), JStrP(ip), JStrN(ip))
+        }
+        im = ovid/json.Next(im)
+      }
+    }
+    var tys i64 = SGet(p, strptr("types"), strlen("types"))
+    if tys != 0 {
+      var t i64 = ovid/json.Child(tys)
+      while t != 0 {
+        var tid i64 = SGet(t, strptr("id"), strlen("id"))
+        Claim(c, JStrP(tid), JStrN(tid))
+        var fields i64 = SGet(t, strptr("fields"), strlen("fields"))
+        if fields != 0 {
+          var f i64 = ovid/json.Child(fields)
+          while f != 0 {
+            var fid i64 = SGet(f, strptr("id"), strlen("id"))
+            Claim(c, JStrP(fid), JStrN(fid))
+            f = ovid/json.Next(f)
+          }
+        }
+        t = ovid/json.Next(t)
+      }
+    }
+    var cs i64 = SGet(p, strptr("consts"), strlen("consts"))
+    if cs != 0 {
+      var k i64 = ovid/json.Child(cs)
+      while k != 0 {
+        var cid i64 = SGet(k, strptr("id"), strlen("id"))
+        Claim(c, JStrP(cid), JStrN(cid))
+        k = ovid/json.Next(k)
+      }
+    }
+    var fns i64 = SGet(p, strptr("funcs"), strlen("funcs"))
+    if fns != 0 {
+      var f i64 = ovid/json.Child(fns)
+      while f != 0 {
+        var fid i64 = SGet(f, strptr("id"), strlen("id"))
+        Claim(c, JStrP(fid), JStrN(fid))
+        var params i64 = SGet(f, strptr("params"), strlen("params"))
+        if params != 0 {
+          var pa i64 = ovid/json.Child(params)
+          while pa != 0 {
+            var pid i64 = SGet(pa, strptr("id"), strlen("id"))
+            Claim(c, JStrP(pid), JStrN(pid))
+            pa = ovid/json.Next(pa)
+          }
+        }
+        ClaimArr(c, SGet(f, strptr("body"), strlen("body")))
+        f = ovid/json.Next(f)
+      }
+    }
+    i = i + 1
+    p = ovid/json.Next(p)
+  }
+  CheckMain(c)
+  i = 0
+  while i < c.npkg {
+    var pkg i64 = load64(c.pkgs + (i * 8))
+    c.pkg = pkg
+    var path i64 = SGet(pkg, strptr("path"), strlen("path"))
+    c.pathp = JStrP(path)
+    c.pathn = JStrN(path)
+    var fns i64 = SGet(pkg, strptr("funcs"), strlen("funcs"))
+    if fns != 0 {
+      var f i64 = ovid/json.Child(fns)
+      while f != 0 {
+        CheckFunc(c, f)
+        f = ovid/json.Next(f)
+      }
+    }
+    i = i + 1
+  }
+  WLit(c, strptr("{\"fact\":\"summary\",\"ok\":"), strlen("{\"fact\":\"summary\",\"ok\":"))
+  if c.errs == 0 {
+    WLit(c, strptr("true"), strlen("true"))
+  } else {
+    WLit(c, strptr("false"), strlen("false"))
+  }
+  WLit(c, strptr(",\"errors\":"), strlen(",\"errors\":"))
+  WNum(c, c.errs)
+  WLit(c, strptr(",\"packages\":"), strlen(",\"packages\":"))
+  WNum(c, c.npkg)
+  WLit(c, strptr(",\"funcs\":"), strlen(",\"funcs\":"))
+  WNum(c, c.nfunc)
+  WLit(c, strptr(",\"revision\":\""), strlen(",\"revision\":\""))
+  ovid/mem.WBytes(c.io, c.b, m.rev, 16)
+  ovid/mem.WByte(c.io, c.b, 34)
+  ovid/mem.WByte(c.io, c.b, 125)
+  Line(c)
+  return c.errs
+}

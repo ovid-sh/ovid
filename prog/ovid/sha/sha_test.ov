@@ -1,0 +1,47 @@
+package ovid/sha
+
+import ovid/io
+import ovid/mem
+import ovid/test
+
+// HexIs hashes n bytes at p and compares the hex digest with want.
+func HexIs(io *ovid/io.Cap, p i64, n i64, want i64) bool {
+  var raw i64 = ovid/io.Alloc(io, 32)
+  var hex i64 = ovid/io.Alloc(io, 64)
+  Sum(io, p, n, raw)
+  Hex(hex, raw)
+  if ovid/mem.Eq(hex, 64, want, 64) {
+    return true
+  }
+  ovid/io.Stderr(strptr("got  "), 5)
+  ovid/io.Stderr(hex, 64)
+  ovid/io.Stderr(strptr("\nwant "), 6)
+  ovid/io.Stderr(want, 64)
+  ovid/io.Stderr(strptr("\n"), 1)
+  return false
+}
+
+// The FIPS 180-2 examples: one block, an empty message, and a 56-byte
+// message whose padding spills into a second block.
+func TestSum(io *ovid/io.Cap) i64 {
+  if !HexIs(io, strptr("abc"), 3, strptr("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")) {
+    return 1
+  }
+  if !HexIs(io, strptr(""), 0, strptr("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")) {
+    return 2
+  }
+  if !HexIs(io, strptr("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"), 56, strptr("248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1")) {
+    return 3
+  }
+  return 0
+}
+
+func TestRotr(io *ovid/io.Cap) i64 {
+  if !ovid/test.Eq(io, Rotr(1, 1), 0x80000000) {
+    return 1
+  }
+  if !ovid/test.Eq(io, Rotr(0x12345678, 8), 0x78123456) {
+    return 2
+  }
+  return 0
+}
