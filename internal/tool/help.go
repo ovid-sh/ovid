@@ -168,12 +168,12 @@ ovid refs <id|name>          {id,kind,in,file,line,col,source} per use; last:
   {"ok":true,target,count,files,by_pkg:{package: n},external}
 ovid grep <regexp> [--pkg P] [--std]
   {file,line,col,match,source,decl,stmt} per match (RE2 syntax).
-ovid edit <file|-> [--dry-run] [--require-clean|--allow-broken] [--show]   see: ovid help edit
+ovid edit <file|-> [--dry-run] [--require-clean|--allow-broken] [--show] [--force]   see: ovid help edit
 ovid replace <id> | insert --after <id> | insert --before <id> | append <id>
   | delete <id>   [--expect H] [--text-file F] [--dry-run] [--require-clean|--allow-broken]
-  [--show]
+  [--show] [--force]
   One edit op; the text is read from stdin (or F), so a heredoc works:
-    ovid replace st:app.main:3 <<'EOF'
+    ovid replace st:app.main:3 --expect 1f0c9a2b7d4e <<'EOF'
     ovid/io.Stdout(strptr("a \"quoted\" line\n"), strlen("a \"quoted\" line\n"))
     EOF
   Same checks and result as ovid edit.
@@ -206,6 +206,10 @@ Input (a file, or - for stdin) is {"ops":[...]} or a bare list of ops:
 Any op may carry "expect":HASH (from outline/show); if that node's text has
 changed the edit is refused with exit 2 and the current hash and text.
 A top-level "revision" (from check/outline) guards the whole module instead.
+An op on a st:/ex: id must carry one: those ids are positions, renumbered
+by any insert above them. The node's own hash or its decl's (the one in
+the header ovid show prints) both work; a hash that now belongs to another
+node of the decl is refused and names that node. --force skips expect.
 
 ID may be a full id or a decl name (Sum, util.Sum). Text is plain Ovid; its
 indentation is normalised to the target's. insert anchors on statements and
@@ -219,8 +223,8 @@ top-level decls it touched with their new hashes (--show adds "text"), so a
 follow-up edit can "expect" them without reading again.
 
 Examples:
-  fix one argument:   {"op":"replace","id":"ex:app.main:2","text":"2"}
-  rewrite a statement: {"op":"replace","id":"st:app.main:3",
+  fix one argument:   {"op":"replace","id":"ex:app.main:2","expect":H,"text":"2"}
+  rewrite a statement: {"op":"replace","id":"st:app.main:3","expect":H,
                         "text":"if n > 0 {\n  return n\n}"}
   replace a whole func by name, guarded:
     {"op":"replace","id":"Sum","expect":"c67681b88f86","text":"func Sum(...) i64 {...}"}
@@ -245,7 +249,8 @@ so get fresh ones after edits (edit returns the new ones).
 Commands that take an id also take a name: Sum, util.Sum (a trailing part of
 the package path), app/util.Sum, Pair.next (a field), Sum.n (a param).
 A hash is a short digest of a node's source text: edits use it to refuse
-writing over text that changed since it was read.
+writing over text that changed since it was read. A st:/ex: id is a
+position, so an edit to one must carry the hash (see ovid help edit).
 `
 
 // Help prints a help topic as plain text.

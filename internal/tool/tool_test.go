@@ -353,6 +353,45 @@ func editJSON(t *testing.T, dir string, req any, flags ...string) (map[string]an
 	return last(t, b.String()), code
 }
 
+// hashOf is the hash `ovid show` would print for id now.
+func hashOf(t *testing.T, dir, id string) string {
+	t.Helper()
+	m, err := module.Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m.Hash(id)
+}
+
+// TestPositionalIDsNeedExpect is the stale-id case: after an insert, st:1
+// is a different statement, and an edit that read the old one must not
+// land on the new one.
+func TestPositionalIDsNeedExpect(t *testing.T) {
+	dir := mkmod(t, demo("package demo\n\nimport ovid/io\n\nfunc main(io *ovid/io.Cap) i64 {\n  var x i64 = 1\n  return x\n}\n"))
+	read := hashOf(t, dir, "st:demo.main:1") // an agent reads `var x i64 = 1`
+	var b bytes.Buffer
+	del := EditOp{Op: "delete", ID: "st:demo.main:1"}
+	if code := runEdit(dir, &EditReq{Ops: []EditOp{del}}, EditOpts{}, &b); code != ExitFail || last(t, b.String())["error"] != "expect_required" {
+		t.Fatalf("no expect: %d %s", code, b.String())
+	}
+	// Someone else inserts before it.
+	b.Reset()
+	ins := EditOp{Op: "insert", Before: "st:demo.main:1", Expect: hashOf(t, dir, "fn:demo.main"), Text: "var y i64 = 2"}
+	if code := runEdit(dir, &EditReq{Ops: []EditOp{ins}}, EditOpts{}, &b); code != 0 {
+		t.Fatalf("insert: %d %s", code, b.String())
+	}
+	b.Reset()
+	del.Expect = read
+	if code := runEdit(dir, &EditReq{Ops: []EditOp{del}}, EditOpts{}, &b); code != ExitStale ||
+		!strings.Contains(fmt.Sprint(last(t, b.String())["message"]), "belongs to st:demo.main:2") {
+		t.Fatalf("stale id: %d %s", code, b.String())
+	}
+	b.Reset()
+	if code := runEdit(dir, &EditReq{Ops: []EditOp{del}}, EditOpts{Force: true, AllowBroken: true}, &b); code != 0 {
+		t.Fatalf("force: %d %s", code, b.String())
+	}
+}
+
 func contains(xs []string, s string) bool {
 	for _, x := range xs {
 		if x == s {
@@ -370,7 +409,7 @@ func TestEditFixAndStale(t *testing.T) {
 
 	// Fix the bad argument by replacing the expression.
 	r, code := editJSON(t, dir, map[string]any{"ops": []any{
-		map[string]any{"op": "replace", "id": "ex:demo.main:2", "text": "2"},
+		map[string]any{"op": "replace", "id": "ex:demo.main:2", "expect": h, "text": "2"},
 	}}, "clean", "show")
 	if code != 0 || r["check_ok"] != true {
 		t.Fatalf("edit %d %v", code, r)
@@ -407,7 +446,7 @@ func buildRunDir(t *testing.T, dir string) (string, int) {
 func TestEditInsertAppend(t *testing.T) {
 	dir := mkmod(t, demo("package demo\n\nimport ovid/io\n\nfunc main(io *ovid/io.Cap) i64 {\n  var x i64 = 1\n  return x\n}\n"))
 	r, code := editJSON(t, dir, map[string]any{"ops": []any{
-		map[string]any{"op": "insert", "after": "st:demo.main:1", "text": "x = Triple(x)\nwhile x < 20 {\n  x = x + 1\n}"},
+		map[string]any{"op": "insert", "after": "st:demo.main:1", "expect": hashOf(t, dir, "fn:demo.main"), "text": "x = Triple(x)\nwhile x < 20 {\n  x = x + 1\n}"},
 		map[string]any{"op": "append", "into": "demo", "text": "  func Triple(v i64) i64 {\n    return v * 3\n  }"},
 	}}, "clean")
 	if code != 0 {
@@ -723,11 +762,11 @@ func TestEditOne(t *testing.T) {
 	// Quotes and newlines need no escaping; the trailing newline is dropped.
 	os.WriteFile(text, []byte("ovid/io.Stdout(strptr(\"a \\\"b\\\"\\n\"), strlen(\"a \\\"b\\\"\\n\"))\n"), 0o644)
 	var b bytes.Buffer
-	if code := EditOne(dir, EditOp{Op: "insert", Before: "st:demo.main:1"}, text, EditOpts{RequireClean: true}, &b); code != 0 {
+	if code := EditOne(dir, EditOp{Op: "insert", Before: "st:demo.main:1", Expect: hashOf(t, dir, "fn:demo.main")}, text, EditOpts{RequireClean: true}, &b); code != 0 {
 		t.Fatalf("insert %d %s", code, b.String())
 	}
 	b.Reset()
-	if code := EditOne(dir, EditOp{Op: "delete", ID: "st:demo.main:1"}, "", EditOpts{DryRun: true}, &b); code != 0 || last(t, b.String())["written"] != false {
+	if code := EditOne(dir, EditOp{Op: "delete", ID: "st:demo.main:1", Expect: hashOf(t, dir, "st:demo.main:1")}, "", EditOpts{DryRun: true}, &b); code != 0 || last(t, b.String())["written"] != false {
 		t.Fatalf("delete dry-run %d %s", code, b.String())
 	}
 	if out, code := buildRunDir(t, dir); code != 1 || out != "a \"b\"\n" {
@@ -779,18 +818,18 @@ func TestEditFailsClosed(t *testing.T) {
 	dir := mkmod(t, demo(src))
 	op := EditOp{Op: "replace", ID: "st:demo.main:1", Text: "return true"}
 	var b bytes.Buffer
-	if code := runEdit(dir, &EditReq{Ops: []EditOp{op}}, EditOpts{}, &b); code != ExitFail || last(t, b.String())["error"] != "check" {
+	if code := runEdit(dir, &EditReq{Ops: []EditOp{op}}, EditOpts{Force: true}, &b); code != ExitFail || last(t, b.String())["error"] != "check" {
 		t.Fatalf("default: %d %s", code, b.String())
 	}
 	b.Reset()
-	if code := runEdit(dir, &EditReq{Ops: []EditOp{op}}, EditOpts{AllowBroken: true, DryRun: true}, &b); code != ExitFail || last(t, b.String())["ok"] != false {
+	if code := runEdit(dir, &EditReq{Ops: []EditOp{op}}, EditOpts{AllowBroken: true, DryRun: true, Force: true}, &b); code != ExitFail || last(t, b.String())["ok"] != false {
 		t.Fatalf("dry run: %d %s", code, b.String())
 	}
 	if got, _ := os.ReadFile(filepath.Join(dir, "demo/main.ov")); string(got) != src {
 		t.Fatalf("written:\n%s", got)
 	}
 	b.Reset()
-	if code := runEdit(dir, &EditReq{Ops: []EditOp{op}}, EditOpts{AllowBroken: true}, &b); code != 0 || last(t, b.String())["check_ok"] != false {
+	if code := runEdit(dir, &EditReq{Ops: []EditOp{op}}, EditOpts{AllowBroken: true, Force: true}, &b); code != 0 || last(t, b.String())["check_ok"] != false {
 		t.Fatalf("allow-broken: %d %s", code, b.String())
 	}
 }
@@ -802,7 +841,7 @@ func TestEditGuardComparesErrors(t *testing.T) {
 	dir := mkmod(t, demo(src))
 	var b bytes.Buffer
 	op := EditOp{Op: "replace", ID: "st:demo.main:1", Text: "return nope"}
-	if code := runEdit(dir, &EditReq{Ops: []EditOp{op}}, EditOpts{}, &b); code != ExitFail {
+	if code := runEdit(dir, &EditReq{Ops: []EditOp{op}}, EditOpts{Force: true}, &b); code != ExitFail {
 		t.Fatalf("swap accepted: %d %s", code, b.String())
 	}
 	if rs := lines(t, b.String()); len(rs) != 2 || !strings.Contains(fmt.Sprint(rs[0]["message"]), "nope") {
@@ -810,7 +849,7 @@ func TestEditGuardComparesErrors(t *testing.T) {
 	}
 	b.Reset()
 	op.Text = "return 0"
-	if code := runEdit(dir, &EditReq{Ops: []EditOp{op}}, EditOpts{}, &b); code != 0 || last(t, b.String())["check_ok"] != true {
+	if code := runEdit(dir, &EditReq{Ops: []EditOp{op}}, EditOpts{Force: true}, &b); code != 0 || last(t, b.String())["check_ok"] != true {
 		t.Fatalf("fix refused: %d %s", code, b.String())
 	}
 }

@@ -22,8 +22,11 @@ import (
 //	append   into, text     append statements to a func/while/if body, or
 //	                        decls to a package (into = package path; file optional)
 //
-// expect, when set, must equal the hash of the id the op addresses
-// (`ovid show`/`outline` print it); otherwise the edit is stale.
+// expect must equal the hash of the id the op addresses or, for a
+// statement or expression, of its enclosing declaration (`ovid show` prints
+// it in its header); otherwise the edit is stale. It is optional for
+// declaration ids, which are names, and required for st:/ex: ids, which
+// are positions: an insert renumbers everything after it. Force skips it.
 type EditOp struct {
 	Op     string `json:"op"`
 	ID     string `json:"id,omitempty"`
@@ -94,7 +97,7 @@ func parseEditReq(raw []byte) (*EditReq, error) {
 // writes it anyway (a step in a multi-edit change). Show adds each changed
 // decl's new source to the result.
 type EditOpts struct {
-	DryRun, RequireClean, AllowBroken, Show bool
+	DryRun, RequireClean, AllowBroken, Show, Force bool
 }
 
 // Edit applies a batch of ops atomically: all of them or none.
@@ -152,7 +155,7 @@ func runEdit(dir string, req *EditReq, o EditOpts, w io.Writer) int {
 	}
 	var sps []*splice
 	for i, op := range req.Ops {
-		s, e := planOp(m, i, op)
+		s, e := planOp(m, i, op, o.Force)
 		if e != nil {
 			r := map[string]any{"ok": false, "error": e.code, "message": e.msg, "op": i}
 			if e.hint != "" {
@@ -341,6 +344,35 @@ func declOfID(id string) string {
 	return rest
 }
 
+// checkExpect guards an op on l with the hash the caller read.
+func checkExpect(m *module.Module, l *module.Loc, expect string, force bool) *editErr {
+	positional := l.Kind == "stmt" || l.Kind == "expr"
+	if force || (expect == "" && !positional) {
+		return nil
+	}
+	if expect == "" {
+		return &editErr{code: "expect_required", msg: l.ID + " is a position, so an edit to it needs --expect: the hash of " + l.Decl + " (in the header `ovid show` printed) or of the node",
+			hint: "ids after an insert are renumbered; the hash proves the id still means what you read. --force skips the check"}
+	}
+	if expect == m.Hash(l.ID) || (positional && expect == m.Hash(l.Decl)) {
+		return nil
+	}
+	extra := map[string]any{"id": l.ID, "hash": m.Hash(l.ID), "text": m.Text(l.Span)}
+	if positional {
+		extra["decl"], extra["decl_hash"] = l.Decl, m.Hash(l.Decl)
+		// A hash of a neighbour means the id moved, not that the code did.
+		for _, id := range m.Order {
+			if o := m.Index[id]; o.Decl == l.Decl && o.ID != l.ID && m.Hash(id) == expect {
+				return &editErr{code: "stale", exit: ExitStale, extra: extra,
+					msg:  "that hash belongs to " + id + ", not " + l.ID + "; statement ids are renumbered when statements are added or removed",
+					hint: "edit " + id + " if that is the node you read, or re-read with `ovid show " + l.Decl + "`"}
+			}
+		}
+	}
+	return &editErr{code: "stale", msg: l.ID + " changed since you read it", exit: ExitStale, extra: extra,
+		hint: "re-read with `ovid show`; text has the current source"}
+}
+
 func rel(m *module.Module, abs string) string {
 	return m.DisplayPath(&module.File{Abs: abs})
 }
@@ -407,7 +439,7 @@ func newIDs(m *module.Module, sps []*splice, nops int, show bool) []map[string]a
 	return out
 }
 
-func planOp(m *module.Module, i int, op EditOp) ([]*splice, *editErr) {
+func planOp(m *module.Module, i int, op EditOp, force bool) ([]*splice, *editErr) {
 	target := op.ID
 	switch op.Op {
 	case "insert":
@@ -448,9 +480,8 @@ func planOp(m *module.Module, i int, op EditOp) ([]*splice, *editErr) {
 	if m.IsStd(l.Span.File) {
 		return nil, &editErr{code: "std", msg: target + " is in a shipped package", hint: "copy the package into the module to change it"}
 	}
-	if op.Expect != "" && op.Expect != m.Hash(l.ID) {
-		return nil, &editErr{code: "stale", msg: target + " changed since you read it", exit: ExitStale,
-			extra: map[string]any{"id": l.ID, "hash": m.Hash(l.ID), "text": m.Text(l.Span)}}
+	if e := checkExpect(m, l, op.Expect, force); e != nil {
+		return nil, e
 	}
 	f := m.Files[l.Span.File]
 	src := f.Src
