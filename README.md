@@ -24,13 +24,16 @@ ovid help           # overview; `ovid help language` is the full language
 ## A module
 
 ```text
-ovid.mod              module <name> / entry <pkg> / optional std <dir>
+ovid.mod              module <name> / entry <pkg>
 <pkg path>/*.ov       one directory per package; any number of files
 ```
 
 The package path is the directory path. `ovid/io`, `ovid/mem`, and `ovid/test` (`Eq`, `True`: a failing check prints got/want) ship with
-the toolchain (`std/`, embedded in the binary) and are used unless the module
-has its own copy or names a `std` directory.
+the toolchain (`std/`, embedded in the binary). A module cannot replace them:
+a package of its own with one of those paths is an error (`reserved_path`),
+and `ovid.mod` has no way to name another standard library. Only the shipped
+`ovid/io` may call `syscall`, so what a checked program can ask of the kernel
+is what `std/ovid/io` asks.
 
 ## Commands
 

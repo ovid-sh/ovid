@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"ovid/internal/check"
 	"ovid/internal/module"
 	"path/filepath"
 	"reflect"
@@ -1576,23 +1577,11 @@ func TestSelfHostLarge(t *testing.T) {
 	}
 }
 
-// TestRevisionCoversBuild: the revision moves when ovid.mod or a loaded std
-// file changes, not only when a module file does.
+// TestRevisionCoversBuild: the revision moves when ovid.mod changes, not
+// only when a module file does.
 func TestRevisionCoversBuild(t *testing.T) {
-	stdDir := t.TempDir()
-	for _, rel := range []string{"ovid/io/io.ov", "ovid/mem/mem.ov"} {
-		src, err := os.ReadFile(filepath.Join(repo(t), "std", rel))
-		if err != nil {
-			t.Fatal(err)
-		}
-		os.MkdirAll(filepath.Dir(filepath.Join(stdDir, rel)), 0o755)
-		if err := os.WriteFile(filepath.Join(stdDir, rel), src, 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
 	files := demo("package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  return 0\n}\n")
 	files["alt/main.ov"] = "package alt\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  return 2\n}\n"
-	files["ovid.mod"] = "module demo\nentry demo\nstd " + stdDir + "\n"
 	dir := mkmod(t, files)
 	rev := func() string {
 		t.Helper()
@@ -1610,28 +1599,144 @@ func TestRevisionCoversBuild(t *testing.T) {
 	if rev() != r0 {
 		t.Fatal("the revision is not stable")
 	}
-	if err := os.WriteFile(filepath.Join(dir, "ovid.mod"), []byte("module demo\nentry alt\nstd "+stdDir+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "ovid.mod"), []byte("module demo\nentry alt\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	r1 := rev()
-	if r1 == r0 {
+	if rev() == r0 {
 		t.Fatal("changing the entry in ovid.mod kept the revision")
 	}
+}
+
+// stdCopy copies the shipped packages a hello-sized program loads into a
+// fresh directory, for the self-hosted compiler's --std.
+func stdCopy(t *testing.T) string {
+	t.Helper()
+	stdDir := t.TempDir()
+	for _, rel := range []string{"ovid/io/io.ov", "ovid/mem/mem.ov"} {
+		src, err := os.ReadFile(filepath.Join(repo(t), "std", rel))
+		if err != nil {
+			t.Fatal(err)
+		}
+		os.MkdirAll(filepath.Dir(filepath.Join(stdDir, rel)), 0o755)
+		if err := os.WriteFile(filepath.Join(stdDir, rel), src, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return stdDir
+}
+
+// TestRevisionCoversStd: the revision also moves when a loaded file of the
+// standard library changes. The Go toolchain's is built in, so this is
+// shown with the self-hosted compiler, whose --std is a directory.
+func TestRevisionCoversStd(t *testing.T) {
+	needExec(t)
+	self := mustBuild(t, filepath.Join(repo(t), "prog"))
+	stdDir := stdCopy(t)
+	dir := mkmod(t, demo("package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  return 0\n}\n"))
+	rev := func() string {
+		t.Helper()
+		out, code := run(t, self, "check", dir, "--std", stdDir)
+		r, _ := last(t, out)["revision"].(string)
+		if code != 0 || len(r) != 16 {
+			t.Fatalf("check %d: %s", code, out)
+		}
+		return r
+	}
+	r1 := rev()
 	io := filepath.Join(stdDir, "ovid/io/io.ov")
 	src, _ := os.ReadFile(io)
 	if err := os.WriteFile(io, append(src, []byte("\n// changed\n")...), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if rev() == r1 {
+	r2 := rev()
+	if r2 == r1 {
 		t.Fatal("changing a loaded std file kept the revision")
 	}
 	// A std file that is not loaded does not count.
-	r2 := rev()
 	mem := filepath.Join(stdDir, "ovid/mem/mem.ov")
 	src, _ = os.ReadFile(mem)
 	os.WriteFile(mem, append(src, []byte("\n// changed\n")...), 0o644)
 	if rev() != r2 {
 		t.Fatal("changing a std file that is not loaded moved the revision")
+	}
+}
+
+// TestSyscallNeedsShippedPackage: the checker allows syscall by where
+// ovid/io came from, not by its name alone. A package with the name and
+// without the origin cannot be loaded today (reserved_path), so the origin
+// is cleared by hand here.
+func TestSyscallNeedsShippedPackage(t *testing.T) {
+	dir := mkmod(t, demo("package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  ovid/io.Alloc(io, 8)\n  return 0\n}\n"))
+	m, err := module.Load(dir)
+	if err != nil || len(m.Errors) != 0 {
+		t.Fatal(err, m.Errors)
+	}
+	count := func() int {
+		n := 0
+		for _, is := range check.Run(m.Prog).Issues {
+			if is.Code == "syscall_forbidden" {
+				n++
+			}
+		}
+		return n
+	}
+	if n := count(); n != 0 {
+		t.Fatalf("%d syscall_forbidden in the shipped ovid/io", n)
+	}
+	for i := range m.Prog.Packages {
+		if p := &m.Prog.Packages[i]; p.Path == "ovid/io" {
+			if !p.Sys {
+				t.Fatal("the shipped ovid/io is not marked as the toolchain's")
+			}
+			p.Sys = false
+		} else if p.Sys && p.Path == "demo" {
+			t.Fatal("a module package is marked as the toolchain's")
+		}
+	}
+	if count() == 0 {
+		t.Fatal("an ovid/io that is not the toolchain's may call syscall")
+	}
+}
+
+// TestModuleCannotChooseStd: the right to call syscall belongs to the
+// standard library the toolchain brings, and a module has no way to supply
+// one: not by a std line in ovid.mod, and not by a package of the same path
+// (tests/fail/reserved_path). Both compilers refuse the std line.
+func TestModuleCannotChooseStd(t *testing.T) {
+	evil := t.TempDir()
+	os.MkdirAll(filepath.Join(evil, "ovid/io"), 0o755)
+	os.WriteFile(filepath.Join(evil, "ovid/io/io.ov"), []byte("package ovid/io\ntype Cap struct {\n  argc i64\n  argv i64\n  heap i64\n  used i64\n  size i64\n}\nfunc Pwn() i64 {\n  return syscall(60, 42, 0, 0, 0, 0, 0)\n}\n"), 0o644)
+	files := demo("package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  return ovid/io.Pwn()\n}\n")
+	files["ovid.mod"] = "module demo\nentry demo\nstd " + evil + "\n"
+	dir := mkmod(t, files)
+	var b bytes.Buffer
+	if code := Check(dir, false, &b); code != ExitFail {
+		t.Fatalf("check exit %d: %s", code, b.String())
+	}
+	if r := last(t, b.String()); r["ok"] != false || r["error"] != "load" || !strings.Contains(r["message"].(string), "std line is no longer supported") {
+		t.Fatalf("%v", r)
+	}
+	b.Reset()
+	if code := Build(dir, filepath.Join(t.TempDir(), "x"), &b); code == ExitOK {
+		t.Fatalf("build succeeded: %s", b.String())
+	}
+
+	needExec(t)
+	self := mustBuild(t, filepath.Join(repo(t), "prog"))
+	out, code := run(t, self, "check", dir, "--std", filepath.Join(repo(t), "std"))
+	if rs := lines(t, out); code != 1 || rs[0]["code"] != "mod" || !strings.Contains(rs[0]["message"].(string), "std line is no longer supported") ||
+		!strings.Contains(rs[0]["message"].(string), "--std") || strings.Contains(rs[0]["message"].(string), "built into") {
+		t.Fatalf("self-hosted check %d: %s", code, out)
+	}
+	// An operator who points --std at a library whose Cap is not the
+	// runtime's is told so; a module can no longer reach this.
+	short := t.TempDir()
+	os.MkdirAll(filepath.Join(short, "ovid/io"), 0o755)
+	os.WriteFile(filepath.Join(short, "ovid/io/io.ov"), []byte("package ovid/io\ntype Cap struct {\n  argc i64\n  heap i64\n}\n"), 0o644)
+	plain := mkmod(t, demo("package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  return 0\n}\n"))
+	out, code = run(t, self, "check", plain, "--std", short)
+	if rs := lines(t, out); code != 1 || rs[0]["code"] != "bad_abi" {
+		t.Fatalf("self-hosted check with a short Cap %d: %s", code, out)
 	}
 }
 

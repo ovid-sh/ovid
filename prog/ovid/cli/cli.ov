@@ -34,7 +34,7 @@ func Usage(io *ovid/io.Cap, msg i64, msgn i64) i64 {
   var b *ovid/mem.Buf = ovid/mem.New(io, 1024)
   ovid/mem.WBytes(io, b, strptr("{\"ok\":false,\"error\":\"usage\",\"message\":"), strlen("{\"ok\":false,\"error\":\"usage\",\"message\":"))
   ovid/parse.WStr(io, b, msg, msgn)
-  ovid/mem.WBytes(io, b, strptr(",\"usage\":\"ovid check [dir] [--std dir] | ovid build [dir] [-o out] [--std dir] | ovid dump [dir] [--std dir]; dir defaults to . and may also be given as -C dir; out defaults to <dir>/bin/<module name>; --std names the directory holding the shipped packages (ovid/io, ovid/mem) and overrides the std line in ovid.mod\"}\n"), strlen(",\"usage\":\"ovid check [dir] [--std dir] | ovid build [dir] [-o out] [--std dir] | ovid dump [dir] [--std dir]; dir defaults to . and may also be given as -C dir; out defaults to <dir>/bin/<module name>; --std names the directory holding the shipped packages (ovid/io, ovid/mem) and overrides the std line in ovid.mod\"}\n"))
+  ovid/mem.WBytes(io, b, strptr(",\"usage\":\"ovid check [dir] [--std dir] | ovid build [dir] [-o out] [--std dir] | ovid dump [dir] [--std dir]; dir defaults to . and may also be given as -C dir; out defaults to <dir>/bin/<module name>; --std names the directory holding the shipped packages (ovid/io, ovid/mem)\"}\n"), strlen(",\"usage\":\"ovid check [dir] [--std dir] | ovid build [dir] [-o out] [--std dir] | ovid dump [dir] [--std dir]; dir defaults to . and may also be given as -C dir; out defaults to <dir>/bin/<module name>; --std names the directory holding the shipped packages (ovid/io, ovid/mem)\"}\n"))
   ovid/io.Stdout(b.data, b.len)
   return 64
 }

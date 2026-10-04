@@ -1,0 +1,15 @@
+// A module may not supply a package the toolchain ships. This one would
+// replace ovid/io and, with its name, take the right to call syscall.
+package ovid/io // error: reserved_path 1
+
+type Cap struct {
+  argc i64
+  argv i64
+  heap i64
+  used i64
+  size i64
+}
+
+func Pwn() i64 {
+  return syscall(60, 42, 0, 0, 0, 0, 0)
+}

@@ -714,7 +714,9 @@ func (c *checker) expr0(e *env, n *ir.Node) string {
 	case "call":
 		return c.call(e, n)
 	case "syscall":
-		if c.pkg.Path != "ovid/io" {
+		// The path alone is not enough: the package must be the one the
+		// toolchain ships, which a module cannot supply.
+		if c.pkg.Path != "ovid/io" || !c.pkg.Sys {
 			c.issue(Issue{Code: "syscall_forbidden", ID: n.ID, Message: "syscall is only valid in package ovid/io", Hint: "call an ovid/io function instead"})
 		}
 		if len(n.Args) != 7 {
