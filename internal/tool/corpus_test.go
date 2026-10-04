@@ -222,6 +222,8 @@ func TestCorpusFail(t *testing.T) {
 					t.Fatalf("tests/%s: more than %d errors", c.name, maxErrors)
 				}
 				if d.Fact == "error" {
+					// Diagnostics name files with the host's separators.
+					d.File = filepath.ToSlash(d.File)
 					got = append(got, d)
 				}
 			}
