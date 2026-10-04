@@ -82,6 +82,7 @@ type Module struct {
 	Errors []Diag
 	Index  map[string]*Loc
 	Order  []string
+	hashes map[string]string // filled on first Hash
 }
 
 // Diag is one error with its location resolved.
@@ -407,14 +408,29 @@ func (m *Module) Text(s ir.Span) string {
 }
 
 // Hash is a short content hash of an id's source text. Edits that name it
-// are rejected when the text has changed.
+// are rejected when the text has changed. A declaration's text includes its
+// name, so its hash is the text's alone. A statement's or expression's also
+// covers the declaration it is in and which of the identical-text nodes
+// there it is, so a stale st:/ex: id that now lands on a text-identical
+// sibling does not match. It is a staleness check, not a cache key.
 func (m *Module) Hash(id string) string {
-	l := m.Index[id]
-	if l == nil {
-		return ""
+	if m.hashes == nil {
+		m.hashes = map[string]string{}
+		seen := map[string]int{}
+		for _, oid := range m.Order {
+			l := m.Index[oid]
+			text := m.Text(l.Span)
+			in := text
+			if l.Kind == "stmt" || l.Kind == "expr" {
+				k := l.Kind + "\x00" + l.Decl + "\x00" + text
+				in = fmt.Sprintf("%s\x00%d", k, seen[k])
+				seen[k]++
+			}
+			sum := sha256.Sum256([]byte(in))
+			m.hashes[oid] = hex.EncodeToString(sum[:6])
+		}
 	}
-	sum := sha256.Sum256([]byte(m.Text(l.Span)))
-	return hex.EncodeToString(sum[:6])
+	return m.hashes[id]
 }
 
 // Revision hashes every module file (not std): path and contents.

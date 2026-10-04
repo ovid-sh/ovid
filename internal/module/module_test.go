@@ -33,3 +33,22 @@ func TestWriteFiles(t *testing.T) {
 		}
 	}
 }
+
+func TestHashTellsTwinsApart(t *testing.T) {
+	d := t.TempDir()
+	os.WriteFile(filepath.Join(d, "ovid.mod"), []byte("module m\nentry m\n"), 0o644)
+	os.MkdirAll(filepath.Join(d, "m"), 0o755)
+	src := "package m\n\nimport ovid/io\n\nfunc main(io *ovid/io.Cap) i64 {\n  var x i64 = 0\n  x = x + 1\n  x = x + 1\n  return x\n}\n"
+	os.WriteFile(filepath.Join(d, "m", "m.ov"), []byte(src), 0o644)
+	m, err := Load(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l := m.Index["st:m.main:2"]; l == nil || l.Decl != "fn:m.main" {
+		t.Fatalf("loc %+v", l)
+	}
+	a, b := m.Hash("st:m.main:2"), m.Hash("st:m.main:3")
+	if a == "" || a == b {
+		t.Fatalf("identical statements share hash %q", a)
+	}
+}
