@@ -10,7 +10,8 @@ import (
 )
 
 // writer writes "new\n" to the path in its second argument, with mode
-// 0755: "a" through WriteFileAtomic, "d" through WriteFileDurable. It waits
+// 0755, or 0200 when there is a third argument: "a" through
+// WriteFileAtomic, "d" through WriteFileDurable. It waits
 // for standard input to end first, so a test can act once its pid is known.
 const writer = `package demo
 import ovid/io
@@ -19,11 +20,15 @@ func main(io *ovid/io.Cap) i64 {
   }
   var path i64 = ovid/io.Arg(io, 2)
   var n i64 = ovid/io.CLen(path)
+  var mode i64 = 493
+  if ovid/io.Argc(io) > 3 {
+    mode = 128
+  }
   var r i64 = 0
   if load8(ovid/io.Arg(io, 1)) == 97 {
-    r = ovid/io.WriteFileAtomic(io, path, n, strptr("new\n"), 4, 493)
+    r = ovid/io.WriteFileAtomic(io, path, n, strptr("new\n"), 4, mode)
   } else {
-    r = ovid/io.WriteFileDurable(io, path, n, strptr("new\n"), 4, 493)
+    r = ovid/io.WriteFileDurable(io, path, n, strptr("new\n"), 4, mode)
   }
   if r != 0 {
     return 1
@@ -86,6 +91,18 @@ func TestWriteFileAtomic(t *testing.T) {
 			}
 			replaced(filepath.Join(cwd, rel))
 		}
+		// A mode its owner cannot read: the file is still written and synced.
+		wo := filepath.Join(work, "wo", "f")
+		os.MkdirAll(filepath.Dir(wo), 0o755)
+		cmd := exec.Command(bin, how, wo, "0200")
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("%s with mode 0200: %v", how, err)
+		}
+		if st, _ := os.Stat(wo); st.Mode().Perm() != 0o200 {
+			t.Fatalf("%s with mode 0200: mode %o", how, st.Mode().Perm())
+		}
+		os.Chmod(wo, 0o755)
+		replaced(wo)
 		// A directory that does not exist: an error, and nothing appears.
 		if code := write(work, how, filepath.Join(work, "missing", "f")); code != 1 {
 			t.Fatalf("%s into a missing directory: exit %d", how, code)
