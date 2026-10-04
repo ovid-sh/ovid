@@ -3,6 +3,7 @@ package tool
 import (
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"sort"
 	"syscall"
@@ -27,15 +28,22 @@ type procResult struct {
 	err      error
 }
 
-// procIO is a program's stdio; a nil field is /dev/null.
+// procIO is a program's stdio and any further files; a nil stdio field is
+// /dev/null.
 type procIO struct {
 	stdin          io.Reader
 	stdout, stderr io.Writer
+	extra          []*os.File // fd 3 and up
+	argv0          string     // the program's name for itself, when it is not bin
 }
 
 func (pio procIO) command(bin string, args []string) *exec.Cmd {
 	cmd := exec.Command(bin, args...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = pio.stdin, pio.stdout, pio.stderr
+	cmd.ExtraFiles = pio.extra
+	if pio.argv0 != "" {
+		cmd.Args[0] = pio.argv0
+	}
 	return cmd
 }
 
@@ -113,8 +121,9 @@ func crashStack(m *module.Module, marks []compile.Mark, r procResult) []map[stri
 
 // describeCrash adds to r what is known about a program killed by a
 // signal: the signal, the statement it died in and the calls that led
-// there, the faulting address, and a hint for the common causes.
-func describeCrash(m *module.Module, marks []compile.Mark, pr procResult, r map[string]any) {
+// there, the faulting address, and a hint for the common causes. exe is the
+// program's image.
+func describeCrash(m *module.Module, exe []byte, marks []compile.Mark, pr procResult, r map[string]any) {
 	r["signal"] = pr.signal.String()
 	if st := crashStack(m, marks, pr); len(st) > 0 {
 		r["at"] = st[0]
@@ -125,8 +134,10 @@ func describeCrash(m *module.Module, marks []compile.Mark, pr procResult, r map[
 	}
 	if pr.hasAddr {
 		r["fault_addr"] = fmt.Sprintf("%#x", pr.addr)
-		if pr.addr < 4096 {
+		if lo, hi := elf.Rodata(exe); pr.addr < 4096 {
 			r["hint"] = "a load or store through a null pointer (or a field of one): check for 0 as *T before use"
+		} else if pr.addr >= lo && pr.addr < hi {
+			r["hint"] = "a store into a string literal, which is read-only: copy it into ovid/io.Alloc memory (ovid/mem.Copy) and write there"
 		}
 	}
 }

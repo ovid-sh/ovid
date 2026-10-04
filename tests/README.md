@@ -11,6 +11,11 @@ A case is either
 - a directory with its own `ovid.mod`, for programs that need several files
   or packages. Its comments may sit in any of its `.ov` files.
 
+On Linux x86-64 every case also goes through the self-hosted compiler
+(`TestCorpusSelfHost`): a `run/` program must come out byte-identical from
+both compilers, and a `fail/` program must get the same errors (code, file,
+line, column) from both checkers.
+
 ## `run/`: programs that must build and run
 
 The program must check and build. On Linux x86-64 it is then run and
@@ -52,9 +57,6 @@ in the case.
 `go test ./internal/tool -run TestCorpusFail -v` prints what each case
 reports in the form a comment takes, ready to paste.
 
-Each diagnostic code has at least one case here, with four exceptions.
-`duplicate_package`, `bad_op`, and `missing_expr` guard the program tree
-itself, and no source text is known to produce them. `duplicate_id` is
-reported today only as a side effect of a repeated func, field, or
-parameter, which is a bug (#26); it has no case so that the corpus does not
-record it.
+Each diagnostic code has at least one case here, with four exceptions:
+`duplicate_id`, `duplicate_package`, `bad_op`, and `missing_expr` guard the
+program tree itself, and no source text is known to produce them.

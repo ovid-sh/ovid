@@ -35,13 +35,14 @@ has its own copy or names a `std` directory.
 ## Commands
 
 Every command prints JSON lines and the last line has `"ok"`. Exit codes:
-0 ok, 1 errors, 2 stale edit, 64 usage, 125 `run` could not build.
+0 ok, 1 errors, 2 stale edit, 64 usage, 124 `run --timeout` ended the program, 125 `run` could not build or start it.
 
 | command | what |
 |---|---|
 | `ovid init <dir>` | new module with a main and a test |
 | `ovid check [--facts]` | errors, then a summary with the module revision |
-| `ovid build [-o out]` / `ovid run [-- args]` | compile; run passes stdio and the exit code through and reports a death by signal on stderr, on Linux with the statement and call stack |
+| `ovid build [-o out]` / `ovid run [-- args]` | compile, leaving out `_test.ov` files; run passes stdio and the exit code through and reports a death by signal on stderr, on Linux with the statement and call stack |
+| `ovid run --json [--timeout 5s] [--max-output N]` | run with the output captured: one last line with `exit` or `signal`, `stdout`, `stderr`, and `truncated` |
 | `ovid test [--run substr] [--list]` | each `TestX(io *ovid/io.Cap) i64` in its own process; 0 passes; a failure names the `return` that produced it, a crash its signal (on Linux, the statement and call stack) |
 | `ovid outline [--pkg P]` | packages, or a package's decls with signature, doc, struct size, lines, hash |
 | `ovid show <id\|name>... [--plain] [--exprs]` | source of a node, each statement line tagged with its id; a statement's expressions listed with ids and hashes |
@@ -84,7 +85,7 @@ re-read).
 No struct values, globals, function pointers, methods, generics, or implicit
 allocation. At most six parameters, one result. Operators follow Go
 precedence; `>>` is arithmetic. String literals exist only as `strptr("…")`
-and `strlen("…")`. Memory is `load8/32/64`, `store8/64`, and
+and `strlen("…")`, and are read-only. Memory is `load8/32/64`, `store8/64`, and
 `ovid/io.Alloc`. `main` is `func main(io *ovid/io.Cap) i64`; `io` is the
 capability for argv, the heap, and syscalls, and `syscall` is only allowed in
 `ovid/io`. Other packages' funcs and consts spell the import path:
@@ -93,9 +94,8 @@ written `util.F()`.
 
 ## Self-hosting
 
-`prog/` is the compiler again, written in Ovid (about 7,200 lines across eight
-packages, including a JSON parser, SHA-256, an x86-64 assembler, and an ELF
-writer). It reads `ovid.mod` and `.ov` files itself and offers only
+`prog/` is the compiler again, written in Ovid (about 6,200 lines across seven
+packages, including SHA-256, an x86-64 assembler, and an ELF writer). It reads `ovid.mod` and `.ov` files itself and offers only
 `check`, `build`, and `dump`; give it the standard library with
 `--std <dir>`, since only the Go binary embeds it. The agent commands
 (`show`, `refs`, `grep`, `edit`, `rename`, `move`, `test`) exist only in the
@@ -109,7 +109,7 @@ cmp /tmp/s1 /tmp/s2                        # byte-identical
 
 The two compilers emit byte-identical binaries for the same source, and
 `go test ./internal/tool -run TestSelfHost` checks it. The self-hosted
-compiler is about 190 KB. On an idle starship (Ryzen 7 8745HS, 2026-10-03)
+compiler is about 200 KB. On an idle starship (Ryzen 7 8745HS, 2026-10-03)
 it built `prog/` in 13 ms, against 21 ms for the Go one, and a
 generated program of 100,000 funcs (1.9 million lines) in 3.6 s against
 9.7 s.

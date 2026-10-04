@@ -14,7 +14,7 @@ Ovid is a small compiled language whose toolchain is built for agents: commands 
 ```sh
 go build -o bin/ovid ./cmd/ovid        # bin/ is gitignored
 go vet ./...
-go test ./...                           # everything, well under a second
+go test ./...                           # everything, a few seconds (most of it internal/tool)
 go test ./internal/tool -run TestCorpus                 # the tests/ corpus
 go test ./internal/tool -run TestCorpusRun/run/hello    # one corpus case
 go test ./internal/tool -run TestSelfHost               # Go and Ovid compilers agree byte for byte
@@ -33,7 +33,7 @@ bin/ovid build -C prog -o /tmp/s1          # Go compiles the Ovid compiler
 cmp /tmp/s1 /tmp/s2                        # must be byte-identical
 ```
 
-No third-party Go dependencies (`go.mod` has none). Built binaries only execute on Linux x86-64. Only the corpus adapts to other hosts (it builds each `run/` case and skips running it); the other tests that execute compiled programs (`internal/asm`, `internal/compile`, most of `internal/tool`) assume a Linux x86-64 host.
+No third-party Go dependencies (`go.mod` has none). Built binaries only execute on Linux x86-64. On other hosts, tests that execute compiled programs (the corpus, `internal/asm`, `internal/compile`, `internal/tool`) still build and check, then skip the run; the `*_linux_amd64_test.go` files build only on Linux x86-64.
 
 ## Architecture
 
@@ -50,7 +50,7 @@ The Go pipeline, one package per stage under `internal/`:
 
 ### Two compilers that must stay identical
 
-`prog/ovid/{parse,check,cg,asm,elf}` mirror `internal/{syntax,check,compile,asm,elf}` (plus `json`, `sha`, `cli`). `TestSelfHost` requires the two to emit **byte-identical** binaries for the same source and compares the self-hosted checker's diagnostics. So a change to the language, the checker's diagnostics, codegen, the assembler, or the ELF layout must be made in both `internal/` and `prog/`, and `std/` changes affect both. The README also describes the language and commands; keep it in step. It gives the self-hosted compiler's size and build time only roughly and dated: do not update them for an ordinary change, since every PR editing that line conflicts with every other. Exact numbers belong to the bench (#11).
+`prog/ovid/{parse,check,cg,asm,elf}` mirror `internal/{syntax,check,compile,asm,elf}` (plus `sha`, `cli`). `TestSelfHost` requires the two to emit **byte-identical** binaries for the same source and compares the self-hosted checker's diagnostics. So a change to the language, the checker's diagnostics, codegen, the assembler, or the ELF layout must be made in both `internal/` and `prog/`, and `std/` changes affect both. The README also describes the language and commands; keep it in step. It gives the self-hosted compiler's size and build time only roughly and dated: do not update them for an ordinary change, since every PR editing that line conflicts with every other. Exact numbers belong to the bench (#11).
 
 ### The output contract
 

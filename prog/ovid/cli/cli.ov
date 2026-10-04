@@ -128,7 +128,7 @@ func LoadArgs(io *ovid/io.Cap, a *Args, build bool) *ovid/parse.Mod {
   while dn > 1 && load8((a.dir + dn) - 1) == 47 {
     dn = dn - 1
   }
-  var m *ovid/parse.Mod = ovid/parse.Load(io, a.dir, dn, a.std, stdn)
+  var m *ovid/parse.Mod = ovid/parse.Load(io, a.dir, dn, a.std, stdn, build)
   if m.nerr != 0 {
     LoadFailed(io, m, build)
     return 0 as *ovid/parse.Mod
@@ -191,7 +191,7 @@ func CmdBuild(io *ovid/io.Cap) i64 {
     return Fail(io, strptr("compile"), strlen("compile"), tmp, en)
   }
   MkParent(io, out)
-  if ovid/io.WriteFile(io, out, ovid/io.CLen(out), b.data, b.len, 493) != 0 {
+  if ovid/io.WriteFileAtomic(io, out, ovid/io.CLen(out), b.data, b.len, 493) != 0 {
     return Fail(io, strptr("write"), strlen("write"), out, ovid/io.CLen(out))
   }
   var qb *ovid/mem.Buf = ovid/mem.New(io, 1024)

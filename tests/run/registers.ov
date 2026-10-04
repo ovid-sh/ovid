@@ -1,0 +1,187 @@
+// stdout: "leaf 4512\nbytes 2814\nwords 4950\ncmp 9\nshift 119\ndiv -26\ncalls 1817\ncond 10\n"
+// exit: 0
+package demo
+import ovid/io
+
+// Leaf6 calls nothing, so its six params stay in registers (two of them
+// moved out of rdx and rcx) and its locals take the rest, then the
+// callee-saved ones: every register a local can live in is used as a
+// base, an index, a source, and a destination.
+func Leaf6(a i64, b i64, c i64, d i64, e i64, f i64) i64 {
+  var s i64 = a + b
+  var t i64 = c * d
+  var u i64 = e - f
+  var v i64 = s ^ t
+  var w i64 = u | 1
+  var x i64 = 0
+  var i i64 = 0
+  while i < 10 {
+    s = s + i
+    t = t - s
+    u = u + t
+    v = v ^ u
+    w = w + (v & 255)
+    x = x + w
+    i = i + 1
+  }
+  return ((((s + t) + u) + v) + w) + x
+}
+
+// Bytes stores and loads single bytes through locals in registers: the
+// value from each kind of register, the address as base, base + index,
+// and base + index + constant.
+func Bytes(p i64, n i64) i64 {
+  var i i64 = 0
+  var q i64 = p + 64
+  var k i64 = 7
+  while i < n {
+    store8(p + i, i)
+    store8(q + i, k)
+    store8((p + i) + 128, 200 + i)
+    k = k + 3
+    i = i + 1
+  }
+  var sum i64 = 0
+  i = 0
+  while i < n {
+    sum = ((sum + load8(p + i)) + load8(q + i)) + load8((p + i) + 128)
+    i = i + 1
+  }
+  return sum
+}
+
+// Words needs more locals than there are registers, and keeps a pointer
+// in each callee-saved one across a call.
+func Words(io *ovid/io.Cap, n i64) i64 {
+  var a i64 = ovid/io.Alloc(io, n * 8)
+  var b i64 = ovid/io.Alloc(io, n * 8)
+  var c i64 = ovid/io.Alloc(io, n * 8)
+  var d i64 = ovid/io.Alloc(io, n * 8)
+  var e i64 = ovid/io.Alloc(io, n * 8)
+  var i i64 = 0
+  while i < n {
+    store64(a + (i * 8), i)
+    store64(b + (i * 8), load64(a + (i * 8)) + Id(1))
+    store64(c + (i * 8), load64(b + (i * 8)) + Id(1))
+    store64(d + (i * 8), load64(c + (i * 8)) + Id(1))
+    store64(e + (i * 8), load64(d + (i * 8)) - 3)
+    i = i + 1
+  }
+  var sum i64 = 0
+  i = 0
+  while i < n {
+    sum = sum + load64(e + (i * 8))
+    i = i + 1
+  }
+  return sum
+}
+
+func Id(x i64) i64 {
+  return x
+}
+
+// Cmp compares a local with a constant, a local, and an expression, from
+// both sides.
+func Cmp(a i64, b i64) i64 {
+  var n i64 = 0
+  if a < b {
+    n = n + 1
+  }
+  if 5 > a {
+    n = n + 1
+  }
+  if (a + 1) <= b {
+    n = n + 1
+  }
+  if b >= (a * 2) {
+    n = n + 1
+  }
+  if (a * 3) != (b * 2) {
+    n = n + 1
+  }
+  if a == 3 && b == 7 {
+    n = n + 1
+  }
+  if a == 4 || b == 7 {
+    n = n + 1
+  }
+  if !(a > b) {
+    n = n + 1
+  }
+  var eq bool = (a < b) && !(b < a)
+  if eq {
+    n = n + 1
+  }
+  return n
+}
+
+// Shift counts wrap at 64, whether the count is a constant or a local.
+func Shift(a i64, k i64) i64 {
+  var x i64 = a << 4
+  x = x + (a << 68)
+  x = x + (a << k)
+  x = x + ((0 - a) >> 62)
+  return x
+}
+
+func Div(a i64, b i64) i64 {
+  var q i64 = a / b
+  var r i64 = a % b
+  var c i64 = (0 - a) / 7
+  return (q + r) + (c * 3)
+}
+
+// Calls passes operands and computed values in every argument position.
+func Calls(a i64, b i64) i64 {
+  return Six(a, b + 1, 3, a * b, b, Id(a) + Id(b))
+}
+
+func Six(a i64, b i64, c i64, d i64, e i64, f i64) i64 {
+  return ((((a + (b * 10)) + (c * 100)) + (d * 3)) + (e * 5)) + (f * 200)
+}
+
+type Box struct {
+  a i64
+  b i64
+  next *Box
+}
+
+// Cond walks a list through a pointer in a register.
+func Cond(io *ovid/io.Cap) i64 {
+  var head *Box = 0 as *Box
+  var i i64 = 0
+  while i < 4 {
+    var x *Box = ovid/io.Alloc(io, sizeof(Box)) as *Box
+    x.a = i
+    x.b = i + 1
+    x.next = head
+    head = x
+    i = i + 1
+  }
+  var sum i64 = 0
+  while head != 0 as *Box {
+    sum = sum + head.b
+    head.a = head.a + sum
+    head = head.next
+  }
+  return sum
+}
+
+func Line(io *ovid/io.Cap, name i64, v i64) i64 {
+  ovid/io.Print(name)
+  ovid/io.PrintInt(io, v)
+  ovid/io.Print(strptr("\n"))
+  return 0
+}
+
+func main(io *ovid/io.Cap) i64 {
+  Line(io, strptr("leaf "), Leaf6(1, 2, 3, 4, 5, 6))
+  Line(io, strptr("bytes "), Bytes(ovid/io.Alloc(io, 256), 12))
+  Line(io, strptr("words "), Words(io, 100))
+  Line(io, strptr("cmp "), Cmp(3, 7))
+  Line(io, strptr("shift "), Shift(3, 3))
+  Line(io, strptr("div "), Div(100, 7))
+  Line(io, strptr("calls "), Calls(2, 5))
+  Line(io, strptr("cond "), Cond(io))
+  return 0
+}

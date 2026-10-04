@@ -23,12 +23,12 @@ func BytesAre(io *ovid/io.Cap, c *Code, want i64, n i64) bool {
 
 func TestMovRegImm(io *ovid/io.Cap) i64 {
   var c *Code = New(io)
-  MovRegImm(c, 0, 1)
+  MovRegImm64(c, 0, 1)
   if !BytesAre(io, c, strptr("\x48\xb8\x01\x00\x00\x00\x00\x00\x00\x00"), 10) {
     return 1
   }
   c = New(io)
-  MovRegImm(c, 9, -1)
+  MovRegImm64(c, 9, -1)
   if !BytesAre(io, c, strptr("\x49\xb9\xff\xff\xff\xff\xff\xff\xff\xff"), 10) {
     return 2
   }
