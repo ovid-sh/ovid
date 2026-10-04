@@ -21,9 +21,9 @@ import (
 // files gain the imports they now need. Like rename, it refuses a change
 // that adds check errors.
 func Move(dir, q, to, file string, dryRun bool, w io.Writer) int {
-	unlock, err := lockModule(dir)
-	if err != nil {
-		return fail(w, "load", err.Error(), "")
+	unlock, code := lockModule(dir, w)
+	if unlock == nil {
+		return code
 	}
 	defer unlock()
 	return move(dir, q, to, file, dryRun, w)
@@ -367,9 +367,9 @@ func pkgsUsed(l *module.Loc) []string {
 // move or the module's .ov files are put back as they were; dry-run moves
 // for real and then restores, so later moves see earlier ones.
 func MoveMany(dir string, qs []string, to, file string, dryRun bool, w io.Writer) int {
-	unlock, err := lockModule(dir)
-	if err != nil {
-		return fail(w, "load", err.Error(), "")
+	unlock, code := lockModule(dir, w)
+	if unlock == nil {
+		return code
 	}
 	defer unlock()
 	if len(qs) == 1 {

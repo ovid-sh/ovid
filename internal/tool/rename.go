@@ -39,9 +39,9 @@ func identByte(c byte) bool {
 // spelled the same is left alone. It refuses names that collide and changes
 // that add check errors.
 func Rename(dir, q, to string, dryRun bool, w io.Writer) int {
-	unlock, err := lockModule(dir)
-	if err != nil {
-		return fail(w, "load", err.Error(), "")
+	unlock, code := lockModule(dir, w)
+	if unlock == nil {
+		return code
 	}
 	defer unlock()
 	m, err := load(dir)

@@ -75,7 +75,8 @@ any, and `--dry-run` never writes.
 
 Agents can share a module. On Unix, writers take a lock on `ovid.mod` and
 run one at a time, and files are replaced atomically, so no edit is lost to
-another. The lock does not make a stale read safe: when two agents read the
+another. A writer waits for the lock at most 10 s (`OVID_LOCK_TIMEOUT`),
+saying so, then fails with `lock_timeout`. The lock does not make a stale read safe: when two agents read the
 same code and both change it, only the hash catches the second one (exit 2,
 re-read).
 
