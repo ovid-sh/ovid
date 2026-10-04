@@ -190,7 +190,10 @@ delete above them. `show` of a
 statement lists the `ex:` ids inside it with their hashes (`--exprs` does it
 for a whole decl), so one expression can be replaced on its own.
 
-A hash is 12 hex digits. A decl's hash covers its text. A statement's or
+A hash is 12 hex digits. A decl's hash covers its text, and the text of a
+func, type, or const begins at its **doc comment**: the unbroken run of
+`//` lines directly above it (a blank line ends the run, so a comment
+separated from the decl by one belongs to nothing). A statement's or
 expression's covers its kind, its text, which occurrence of that text in
 its decl it is (so two identical statements hash differently), and the
 decl's id and **whole text**. A positional hash is therefore bound to the

@@ -58,10 +58,10 @@ func Grep(dir, pattern, pkg string, std bool, offset, limit int, w io.Writer) in
 			declLen, stLen := 1<<62, 1<<62
 			for _, id := range byFile[fi] {
 				l := m.Index[id]
-				if loc[0] < l.Span.Off || loc[0] >= l.Span.End {
+				if loc[0] < l.Full.Off || loc[0] >= l.Full.End {
 					continue
 				}
-				size := l.Span.End - l.Span.Off
+				size := l.Full.End - l.Full.Off
 				if l.Kind == "stmt" {
 					if size < stLen {
 						stLen = size

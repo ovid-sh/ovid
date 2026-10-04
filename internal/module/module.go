@@ -67,7 +67,11 @@ type Loc struct {
 	Decl   string // id of the enclosing top-level decl
 	Parent string // id of the parent node
 	Span   ir.Span
-	Node   any
+	// Full is Span widened to take in the doc comment of a func, type, or
+	// const (see DocStart): the text that show prints, a hash covers, and
+	// replace and delete swap or remove. For every other node it is Span.
+	Full ir.Span
+	Node any
 }
 
 type Module struct {
@@ -379,6 +383,11 @@ func (m *Module) add(l *Loc) {
 	if _, dup := m.Index[l.ID]; dup {
 		return
 	}
+	l.Full = l.Span
+	switch l.Kind {
+	case "func", "type", "const":
+		l.Full.Off = DocStart(m.Files[l.Span.File].Src, l.Span.Off)
+	}
 	m.Index[l.ID] = l
 	m.Order = append(m.Order, l.ID)
 }
@@ -428,16 +437,49 @@ func (m *Module) index() {
 	}
 }
 
+// DocStart is where the doc comment of the decl at off begins: the first
+// non-blank byte of the unbroken run of // lines directly above the line
+// off is on. A blank line ends the run, so a comment separated from the
+// decl by one is not its doc comment. With no such lines it is off.
+func DocStart(src []byte, off int) int {
+	start := lineBegin(src, off)
+	if strings.TrimSpace(string(src[start:off])) != "" {
+		// Something precedes the decl on its line; it has no doc comment.
+		return off
+	}
+	doc := off
+	for start > 0 {
+		pl := lineBegin(src, start-1)
+		if !strings.HasPrefix(strings.TrimSpace(string(src[pl:start-1])), "//") {
+			break
+		}
+		start = pl
+		doc = pl
+		for src[doc] == ' ' || src[doc] == '\t' {
+			doc++
+		}
+	}
+	return doc
+}
+
+func lineBegin(src []byte, off int) int {
+	for off > 0 && src[off-1] != '\n' {
+		off--
+	}
+	return off
+}
+
 // Text returns the source text of a span.
 func (m *Module) Text(s ir.Span) string {
 	return string(m.Files[s.File].Src[s.Off:s.End])
 }
 
 // Hash is a short content hash of an id's source text. Edits that name it
-// are rejected when the text has changed. A declaration's text includes its
-// name, so its hash is the text's alone. A statement's or expression's id
-// is a position, so its hash is bound to the whole declaration it is in:
-// it covers the decl's id and full text, its own kind and text, and which
+// are rejected when the text has changed. A declaration's text (Full)
+// includes its name and its doc comment, so its hash is the text's alone.
+// A statement's or expression's id is a position, so its hash is bound to
+// the whole declaration it is in: it covers the decl's id and full text,
+// doc comment included, its own kind and text, and which
 // of the identical-text nodes there it is. Any change to that decl, even
 // one elsewhere in it, changes the hash of every statement in it, so a
 // stale st:/ex: id never matches, not even on a text-identical twin that
@@ -449,7 +491,7 @@ func (m *Module) Hash(id string) string {
 		seen := map[string]int{}
 		for _, oid := range m.Order {
 			l := m.Index[oid]
-			text := m.Text(l.Span)
+			text := m.Text(l.Full)
 			in := text
 			if l.Kind == "stmt" || l.Kind == "expr" {
 				k := l.Kind + "\x00" + l.Decl + "\x00" + text

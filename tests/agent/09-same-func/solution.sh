@@ -1,6 +1,6 @@
 set -e
-# Both writers read Scale at hash 589bb36e35d9. The first one lands.
-ovid replace fn:team.Scale --expect 589bb36e35d9 <<'EOF'
+# Both writers read Scale at hash f403e7c7837c. The first one lands.
+ovid replace fn:team.Scale --expect f403e7c7837c <<'EOF'
 func Scale(x i64) i64 {
   if x < 0 {
     return 0
@@ -10,7 +10,7 @@ func Scale(x i64) i64 {
 EOF
 # The second is refused as stale (exit 2) rather than overwriting it...
 code=0
-ovid replace fn:team.Scale --expect 589bb36e35d9 <<'EOF' || code=$?
+ovid replace fn:team.Scale --expect f403e7c7837c <<'EOF' || code=$?
 func Scale(x i64) i64 {
   return x * 4
 }
