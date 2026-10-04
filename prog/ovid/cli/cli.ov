@@ -50,10 +50,15 @@ func Fail(io *ovid/io.Cap, code i64, coden i64, detail i64, dn i64) i64 {
   return 1
 }
 
-// LoadFailed prints the summary for a module that did not load.
-func LoadFailed(io *ovid/io.Cap, m *ovid/parse.Mod) i64 {
+// LoadFailed ends the output for a module that did not load: the summary
+// line for check and dump, {"ok":false,"errors":N} for build.
+func LoadFailed(io *ovid/io.Cap, m *ovid/parse.Mod, build bool) i64 {
   var b *ovid/mem.Buf = ovid/mem.New(io, 256)
-  ovid/mem.WBytes(io, b, strptr("{\"fact\":\"summary\",\"ok\":false,\"errors\":"), strlen("{\"fact\":\"summary\",\"ok\":false,\"errors\":"))
+  if build {
+    ovid/mem.WBytes(io, b, strptr("{\"ok\":false,\"errors\":"), strlen("{\"ok\":false,\"errors\":"))
+  } else {
+    ovid/mem.WBytes(io, b, strptr("{\"fact\":\"summary\",\"ok\":false,\"errors\":"), strlen("{\"fact\":\"summary\",\"ok\":false,\"errors\":"))
+  }
   ovid/parse.WInt(io, b, m.nerr)
   ovid/mem.WBytes(io, b, strptr("}\n"), 2)
   ovid/io.Stdout(b.data, b.len)
@@ -113,8 +118,8 @@ func ParseArgs(io *ovid/io.Cap, allowOut bool) *Args {
 }
 
 // LoadArgs loads the module named by a; on load errors it prints the
-// summary and returns 0.
-func LoadArgs(io *ovid/io.Cap, a *Args) *ovid/parse.Mod {
+// closing line (see LoadFailed) and returns 0.
+func LoadArgs(io *ovid/io.Cap, a *Args, build bool) *ovid/parse.Mod {
   var stdn i64 = 0
   if a.std != 0 {
     stdn = ovid/io.CLen(a.std)
@@ -125,7 +130,7 @@ func LoadArgs(io *ovid/io.Cap, a *Args) *ovid/parse.Mod {
   }
   var m *ovid/parse.Mod = ovid/parse.Load(io, a.dir, dn, a.std, stdn)
   if m.nerr != 0 {
-    LoadFailed(io, m)
+    LoadFailed(io, m, build)
     return 0 as *ovid/parse.Mod
   }
   return m
@@ -136,11 +141,11 @@ func CmdCheck(io *ovid/io.Cap) i64 {
   if a.bad != 0 {
     return a.bad
   }
-  var m *ovid/parse.Mod = LoadArgs(io, a)
+  var m *ovid/parse.Mod = LoadArgs(io, a, false)
   if m == 0 as *ovid/parse.Mod {
     return 1
   }
-  if ovid/check.Run(io, m) != 0 {
+  if ovid/check.Run(io, m, false) != 0 {
     return 1
   }
   return 0
@@ -151,7 +156,7 @@ func CmdDump(io *ovid/io.Cap) i64 {
   if a.bad != 0 {
     return a.bad
   }
-  var m *ovid/parse.Mod = LoadArgs(io, a)
+  var m *ovid/parse.Mod = LoadArgs(io, a, false)
   if m == 0 as *ovid/parse.Mod {
     return 1
   }
@@ -165,11 +170,11 @@ func CmdBuild(io *ovid/io.Cap) i64 {
   if a.bad != 0 {
     return a.bad
   }
-  var m *ovid/parse.Mod = LoadArgs(io, a)
+  var m *ovid/parse.Mod = LoadArgs(io, a, true)
   if m == 0 as *ovid/parse.Mod {
     return 1
   }
-  if ovid/check.Run(io, m) != 0 {
+  if ovid/check.Run(io, m, true) != 0 {
     return 1
   }
   var out i64 = a.out

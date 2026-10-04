@@ -8,7 +8,7 @@ import ovid/mem
 // blank run before the next token holds a newline, skipped whether that run
 // was already skipped. Ident, ParsePath and ParseType return their string in
 // tp/tn. The first error sets err and moves the cursor to the end so every
-// loop stops; later errors are ignored.
+// loop stops; later errors are ignored. kwat/kwend belong to PeekKw.
 type P struct {
   io *ovid/io.Cap
   src i64
@@ -31,6 +31,8 @@ type P struct {
   cok bool
   xp i64
   xn i64
+  kwat i64
+  kwend i64
 }
 
 func IsIdentStart(c i64) bool {
@@ -251,16 +253,26 @@ func Ident(p *P) i64 {
 
 // PeekKw reports whether the next token is the identifier lit. Skipping
 // blanks is idempotent, so unlike the Go parser it needs no save/restore.
+// A statement tries many keywords at one position, so the end of the word
+// there is kept: kwat is that position + 1, kwend the word's end (the
+// position itself when no identifier starts there).
 func PeekKw(p *P, lit i64, n i64) bool {
   Skip(p)
-  if p.i >= p.n || !IsIdentStart(At(p, p.i)) {
+  if p.kwat != p.i + 1 {
+    var e i64 = p.i
+    if e < p.n && IsIdentStart(At(p, e)) {
+      e = e + 1
+      while e < p.n && IsIdentCont(At(p, e)) {
+        e = e + 1
+      }
+    }
+    p.kwat = p.i + 1
+    p.kwend = e
+  }
+  if p.kwend - p.i != n {
     return false
   }
-  var e i64 = p.i + 1
-  while e < p.n && IsIdentCont(At(p, e)) {
-    e = e + 1
-  }
-  return ovid/mem.Eq(p.src + p.i, e - p.i, lit, n)
+  return ovid/mem.Eq(p.src + p.i, n, lit, n)
 }
 
 func Kw(p *P, lit i64, n i64) bool {

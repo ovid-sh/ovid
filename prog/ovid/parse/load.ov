@@ -533,8 +533,12 @@ func StdPass(m *Mod) i64 {
 }
 
 // Revision is the first 16 hex digits of sha256 over every module (not std)
-// file: path, NUL, contents, NUL, in package then file order.
+// file: path, NUL, contents, NUL, in package then file order. It is computed
+// on first use: build never prints it.
 func Revision(m *Mod) i64 {
+  if m.rev != 0 {
+    return m.rev
+  }
   var b *ovid/mem.Buf = ovid/mem.New(m.io, 1 << 20)
   var f *File = m.files
   while f != 0 as *File {
@@ -550,7 +554,7 @@ func Revision(m *Mod) i64 {
   ovid/sha.Sum(m.io, b.data, b.len, raw)
   m.rev = ovid/io.Alloc(m.io, 64)
   ovid/sha.Hex(m.rev, raw)
-  return 0
+  return m.rev
 }
 
 // Load reads and parses the module in dir (stdp/stdn: --std override, or 0).
@@ -585,7 +589,6 @@ func Load(io *ovid/io.Cap, dirp i64, dirn i64, stdp i64, stdn i64) *Mod {
   while StdPass(m) != 0 {
     m.npkg = 0
   }
-  Revision(m)
   if m.nerr != 0 {
     return m
   }
