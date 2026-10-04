@@ -8,8 +8,9 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"ovid/internal/check"
@@ -162,7 +163,9 @@ func Build(dir, out string, w io.Writer) int {
 
 // Run builds to a temporary file and runs it with the given args. stdio is
 // the program's; the exit code is the program's. If the build fails, ovid
-// prints the errors and exits 125.
+// prints the errors and exits 125. If the program is killed by a signal,
+// ovid writes one JSON line to stderr saying which, and for a fault the
+// statement and calls it died in, and exits 128 + the signal number.
 func Run(dir string, args []string, w io.Writer) int {
 	m, err := load(dir)
 	if err != nil {
@@ -182,25 +185,31 @@ func Run(dir string, args []string, w io.Writer) int {
 	}
 	defer os.RemoveAll(tmpd)
 	bin := filepath.Join(tmpd, filepath.Base(m.Name))
-	if _, err := compileTo(m, m.Prog, bin); err != nil {
+	exe, marks, err := compile.CompileMap(m.Prog)
+	if err == nil {
+		_, err = module.WriteFiles(map[string][]byte{bin: exe}, 0o755)
+	}
+	if err != nil {
 		fail(w, "compile", err.Error(), "")
 		return ExitBuild
 	}
-	cmd := exec.Command(bin, args...)
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-	err = cmd.Run()
-	if ee, ok := err.(*exec.ExitError); ok {
-		if sig := signalOf(ee); sig != "" {
-			fmt.Fprintf(os.Stderr, "ovid: program killed by %s\n", sig)
-			return 128 + sigNum(ee)
-		}
-		return ee.ExitCode()
-	}
-	if err != nil {
-		fail(w, "run", err.Error(), "")
+	// ^C goes to the program; ovid stays to report how it ended. Caught,
+	// not ignored, so the program gets the default action.
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, os.Interrupt, syscall.SIGQUIT)
+	defer signal.Stop(sigs)
+	pr := runProc(bin, args, procIO{os.Stdin, os.Stdout, os.Stderr}, 0)
+	switch {
+	case pr.err != nil:
+		fail(w, "run", pr.err.Error(), "")
 		return ExitBuild
+	case pr.exited:
+		return pr.code
 	}
-	return ExitOK
+	r := map[string]any{"ok": false, "error": "killed", "exit": 128 + int(pr.signal)}
+	describeCrash(m, marks, pr, r)
+	emit(os.Stderr, r)
+	return 128 + int(pr.signal)
 }
 
 // Dump prints the program tree as JSON (the format the self-hosted CLI reads).

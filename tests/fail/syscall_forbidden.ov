@@ -1,0 +1,5 @@
+package demo
+import ovid/io
+func main(io *ovid/io.Cap) i64 {
+  return syscall(60, 0, 0, 0, 0, 0, 0) // error: syscall_forbidden 10 hint="call an ovid/io function instead"
+}

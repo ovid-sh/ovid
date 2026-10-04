@@ -9,21 +9,15 @@ import ovid/parse
 const HEAP i64 = 128 << 20
 const MAXLOC i64 = 1024
 
-// FNREC is the size of a func record: pkg, decl, name p/n, path p/n, label,
-// nparam, live.
-const FNREC i64 = 72
-
-// C is the code generator's state. fns holds one FNREC per func in program
-// order; ftab is an open-addressing table over them (record index + 1),
-// keyed by package path and name.
+// C is the code generator's state. pkg/pathp/fn are the func being
+// emitted; locs holds its params and vars.
 type C struct {
   io *ovid/io.Cap
   code *ovid/asm.Code
   mod *ovid/parse.Mod
-  fns i64
-  nfn i64
-  ftab i64
-  fmask i64
+  work i64
+  nwork i64
+  workcap i64
   pkg *ovid/parse.Pkg
   pathp i64
   pathn i64
@@ -92,89 +86,17 @@ func PkgConst(c *C, n *ovid/parse.Node) *ovid/parse.Decl {
   return ovid/parse.FindDecl(k.cs, n.namep, n.namen)
 }
 
-func FnHash(pp i64, pn i64, np i64, nn i64) i64 {
-  var h i64 = 5381
-  var i i64 = 0
-  while i < pn {
-    h = ((h << 5) + h) + load8(pp + i)
-    i = i + 1
-  }
-  h = ((h << 5) + h) + 46
-  i = 0
-  while i < nn {
-    h = ((h << 5) + h) + load8(np + i)
-    i = i + 1
-  }
-  return h
-}
-
-func FindFnRec(c *C, pp i64, pn i64, np i64, nn i64) i64 {
-  var h i64 = FnHash(pp, pn, np, nn) & c.fmask
-  while true {
-    var slot i64 = load64(c.ftab + (h * 8))
-    if slot == 0 {
-      return 0
-    }
-    var rec i64 = c.fns + ((slot - 1) * FNREC)
-    if ovid/mem.Eq(load64(rec + 16), load64(rec + 24), np, nn) {
-      if ovid/mem.Eq(load64(rec + 32), load64(rec + 40), pp, pn) {
-        return rec
-      }
-    }
-    h = (h + 1) & c.fmask
-  }
-  return 0
-}
-
-func AddFn(c *C, k *ovid/parse.Pkg, f *ovid/parse.Decl) i64 {
-  if FindFnRec(c, k.pathp, k.pathn, f.namep, f.namen) != 0 {
-    return Fail(c, 3)
-  }
-  var rec i64 = c.fns + (c.nfn * FNREC)
-  store64(rec + 0, k as i64)
-  store64(rec + 8, f as i64)
-  store64(rec + 16, f.namep)
-  store64(rec + 24, f.namen)
-  store64(rec + 32, k.pathp)
-  store64(rec + 40, k.pathn)
-  store64(rec + 48, ovid/asm.NewLabel(c.code))
-  store64(rec + 56, ovid/parse.CountDecls(f.sub))
-  store64(rec + 64, 0)
-  c.nfn = c.nfn + 1
-  var h i64 = FnHash(k.pathp, k.pathn, f.namep, f.namen) & c.fmask
-  while load64(c.ftab + (h * 8)) != 0 {
-    h = (h + 1) & c.fmask
-  }
-  store64(c.ftab + (h * 8), c.nfn)
-  return 0
-}
-
+// IndexProg gives every func its label, in program order.
 func IndexProg(c *C) i64 {
   var k *ovid/parse.Pkg = c.mod.pkgs
   if k == 0 as *ovid/parse.Pkg {
     return Fail(c, 1)
   }
   c.locs = ovid/io.Alloc(c.io, MAXLOC * 40)
-  var total i64 = 0
-  while k != 0 as *ovid/parse.Pkg {
-    total = total + ovid/parse.CountDecls(k.fs)
-    k = k.next
-  }
-  var sz i64 = 64
-  while sz < (total * 2) {
-    sz = sz * 2
-  }
-  c.ftab = ovid/io.Alloc(c.io, sz * 8)
-  c.fmask = sz - 1
-  c.nfn = 0
-  c.fns = ovid/io.Alloc(c.io, (total + 1) * FNREC)
-  k = c.mod.pkgs
   while k != 0 as *ovid/parse.Pkg {
     var f *ovid/parse.Decl = k.fs
     while f != 0 as *ovid/parse.Decl {
-      if AddFn(c, k, f) != 0 {
-        return c.err
-      }
+      f.lab = ovid/asm.NewLabel(c.code)
       f = f.next
     }
     k = k.next
@@ -383,13 +305,14 @@ func OffsetOf(c *C, tp i64, tn i64, fp i64, fnn i64) i64 {
   return -1
 }
 
-// CallRec returns the func record call node n resolves to, or 0.
-func CallRec(c *C, n *ovid/parse.Node, pp i64, pn i64) i64 {
+// Callee returns the func that call node n resolves to, or nil; pp/pn is
+// the package an unqualified call resolves in.
+func Callee(c *C, n *ovid/parse.Node, pp i64, pn i64) *ovid/parse.Decl {
   if n.pkgn != 0 {
     pp = n.pkgp
     pn = n.pkgn
   }
-  return FindFnRec(c, pp, pn, n.fnp, n.fnn)
+  return ovid/parse.FindFunc(c.mod, pp, pn, n.fnp, n.fnn)
 }
 
 func TypeOf(c *C, n *ovid/parse.Node) i64 {
@@ -442,11 +365,10 @@ func TypeOf(c *C, n *ovid/parse.Node) i64 {
     return 0
   }
   if op == ovid/parse.OP_CALL {
-    var rec i64 = CallRec(c, n, c.pathp, c.pathn)
-    if rec == 0 {
+    var fn *ovid/parse.Decl = Callee(c, n, c.pathp, c.pathn)
+    if fn == 0 as *ovid/parse.Decl {
       return Fail(c, 3)
     }
-    var fn *ovid/parse.Decl = load64(rec + 8) as *ovid/parse.Decl
     c.typ = fn.typp
     c.tyn = fn.typn
     return 0
@@ -610,8 +532,8 @@ func EmitArgs(c *C, a *ovid/parse.Node, lv i64) i64 {
 }
 
 func EmitCall(c *C, n *ovid/parse.Node, lv i64) i64 {
-  var rec i64 = CallRec(c, n, c.pathp, c.pathn)
-  if rec == 0 {
+  var fn *ovid/parse.Decl = Callee(c, n, c.pathp, c.pathn)
+  if fn == 0 as *ovid/parse.Decl {
     return Fail(c, 3)
   }
   var nargs i64 = ovid/parse.CountNodes(n.args)
@@ -626,7 +548,7 @@ func EmitCall(c *C, n *ovid/parse.Node, lv i64) i64 {
     ovid/asm.MovRegMemRbp(c.code, ArgReg(i), TempDisp(c, lv + i))
     i = i + 1
   }
-  ovid/asm.Call(c.code, load64(rec + 48))
+  ovid/asm.Call(c.code, fn.lab)
   return 0
 }
 
@@ -931,13 +853,13 @@ func EmitStmt(c *C, s *ovid/parse.Node) i64 {
   return Fail(c, 5)
 }
 
-func EmitFunc(c *C, rec i64) i64 {
+func EmitFunc(c *C, fn *ovid/parse.Decl) i64 {
   c.nloc = 0
   c.err = 0
-  c.pkg = load64(rec + 0) as *ovid/parse.Pkg
-  c.pathp = load64(rec + 32)
-  c.pathn = load64(rec + 40)
-  c.fn = load64(rec + 8) as *ovid/parse.Decl
+  c.pkg = fn.pkg
+  c.pathp = fn.pkg.pathp
+  c.pathn = fn.pkg.pathn
+  c.fn = fn
   var pa *ovid/parse.Decl = c.fn.sub
   while pa != 0 as *ovid/parse.Decl {
     AddLoc(c, pa.namep, pa.namen, pa.typp, pa.typn)
@@ -959,7 +881,7 @@ func EmitFunc(c *C, rec i64) i64 {
     frame = frame + 8
   }
   c.epi = ovid/asm.NewLabel(c.code)
-  ovid/asm.Mark(c.code, load64(rec + 48))
+  ovid/asm.Mark(c.code, fn.lab)
   ovid/asm.PushReg(c.code, 5)
   ovid/asm.MovRegReg(c.code, 5, 4)
   ovid/asm.SubRsp(c.code, frame)
@@ -993,15 +915,35 @@ func EmitFunc(c *C, rec i64) i64 {
   return 0
 }
 
-// MarkLive flags rec and every func it can call (rec + 64). Only live
+// MarkLive flags fn as reachable and queues it for LiveFrom. Only live
 // funcs are emitted, matching the Go compiler.
-func MarkLive(c *C, rec i64) i64 {
-  if load64(rec + 64) != 0 {
+func MarkLive(c *C, fn *ovid/parse.Decl) i64 {
+  if fn.live != 0 {
     return 0
   }
-  store64(rec + 64, 1)
-  var fn *ovid/parse.Decl = load64(rec + 8) as *ovid/parse.Decl
-  WalkLive(c, fn.body, load64(rec + 32), load64(rec + 40))
+  fn.live = 1
+  if c.nwork >= c.workcap {
+    var w i64 = ovid/io.Alloc(c.io, c.workcap * 16)
+    ovid/mem.Copy(w, c.work, c.workcap * 8)
+    c.work = w
+    c.workcap = c.workcap * 2
+  }
+  store64(c.work + (c.nwork * 8), fn as i64)
+  c.nwork = c.nwork + 1
+  return 0
+}
+
+// LiveFrom marks every func reachable from fn. The queue keeps a long call
+// chain from becoming deep recursion.
+func LiveFrom(c *C, fn *ovid/parse.Decl) i64 {
+  c.workcap = 256
+  c.work = ovid/io.Alloc(c.io, c.workcap * 8)
+  MarkLive(c, fn)
+  while c.nwork > 0 {
+    c.nwork = c.nwork - 1
+    var f *ovid/parse.Decl = load64(c.work + (c.nwork * 8)) as *ovid/parse.Decl
+    WalkLive(c, f.body, f.pkg.pathp, f.pkg.pathn)
+  }
   return 0
 }
 
@@ -1010,9 +952,9 @@ func MarkLive(c *C, rec i64) i64 {
 func WalkLive(c *C, n *ovid/parse.Node, pp i64, pn i64) i64 {
   while n != 0 as *ovid/parse.Node {
     if n.op == ovid/parse.OP_CALL {
-      var rec i64 = CallRec(c, n, pp, pn)
-      if rec != 0 {
-        MarkLive(c, rec)
+      var fn *ovid/parse.Decl = Callee(c, n, pp, pn)
+      if fn != 0 as *ovid/parse.Decl {
+        MarkLive(c, fn)
       }
     }
     WalkLive(c, n.left, pp, pn)
@@ -1109,26 +1051,29 @@ func Compile(io *ovid/io.Cap, m *ovid/parse.Mod, errp i64) *ovid/mem.Buf {
     store64(errp, c.err)
     return z as *ovid/mem.Buf
   }
-  var mainRec i64 = FindFnRec(c, m.entryp, m.entryn, strptr("main"), strlen("main"))
-  if mainRec == 0 {
+  var mainFn *ovid/parse.Decl = ovid/parse.FindFunc(m, m.entryp, m.entryn, strptr("main"), strlen("main"))
+  if mainFn == 0 as *ovid/parse.Decl {
     store64(errp, 1)
     return z as *ovid/mem.Buf
   }
-  if EmitStartup(c, load64(mainRec + 48)) != 0 {
+  if EmitStartup(c, mainFn.lab) != 0 {
     store64(errp, c.err)
     return z as *ovid/mem.Buf
   }
-  MarkLive(c, mainRec)
-  var i i64 = 0
-  while i < c.nfn {
-    var rec i64 = c.fns + (i * FNREC)
-    if load64(rec + 64) != 0 {
-      if EmitFunc(c, rec) != 0 {
-        store64(errp, c.err)
-        return z as *ovid/mem.Buf
+  LiveFrom(c, mainFn)
+  var k *ovid/parse.Pkg = m.pkgs
+  while k != 0 as *ovid/parse.Pkg {
+    var f *ovid/parse.Decl = k.fs
+    while f != 0 as *ovid/parse.Decl {
+      if f.live != 0 {
+        if EmitFunc(c, f) != 0 {
+          store64(errp, c.err)
+          return z as *ovid/mem.Buf
+        }
       }
+      f = f.next
     }
-    i = i + 1
+    k = k.next
   }
   ovid/asm.Patch(c.code)
   store64(errp, 0)

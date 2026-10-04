@@ -1,4 +1,4 @@
 package util/demo
 func One() i64 {
-  return true // error: type_mismatch 10
+  return true // error: type_mismatch 10 expected="i64" got="bool"
 }

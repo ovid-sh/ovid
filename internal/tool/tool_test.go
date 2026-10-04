@@ -5,13 +5,16 @@ import (
 	"debug/elf"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"ovid/internal/module"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // repo is the repository root, found from this package's directory.
@@ -91,8 +94,23 @@ func last(t *testing.T, out string) map[string]any {
 	return rs[len(rs)-1]
 }
 
+// canExec is whether this host can execute the linux/amd64 binaries the
+// compiler emits.
+var canExec = runtime.GOOS == "linux" && runtime.GOARCH == "amd64"
+
+// needExec skips the rest of a test on a host that cannot execute emitted
+// binaries. What the test did before the call (build, check, edit) still ran.
+func needExec(t *testing.T) {
+	t.Helper()
+	if !canExec {
+		t.Skipf("%s/%s cannot execute linux/amd64 binaries", runtime.GOOS, runtime.GOARCH)
+	}
+}
+
+// run executes an emitted binary.
 func run(t *testing.T, bin string, args ...string) (string, int) {
 	t.Helper()
+	needExec(t)
 	out, err := exec.Command(bin, args...).CombinedOutput()
 	if ee, ok := err.(*exec.ExitError); ok {
 		return string(out), ee.ExitCode()
@@ -118,6 +136,7 @@ func demo(src string) map[string]string {
 	return map[string]string{"demo/main.ov": src}
 }
 
+// TestMemWords: Eq and Copy work a word at a time; check every length around
 // the word size, a difference in each byte, and an overlapping copy.
 func TestMemWords(t *testing.T) {
 	src := demo(`package demo
@@ -521,6 +540,138 @@ func Four() i64 {
 	}
 }
 
+// TestRunCrash: a program that faults under ovid run gets its exit code
+// passed through, and stderr names the statement and the calls that led to it.
+func TestRunCrash(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("crash sites need ptrace")
+	}
+	dir := mkmod(t, demo(`package demo
+
+import ovid/io
+
+type Node struct {
+  v i64
+}
+
+func Get(n *Node) i64 {
+  return n.v
+}
+
+func main(io *ovid/io.Cap) i64 {
+  ovid/io.Print(strptr("before\n"))
+  return Get(0 as *Node)
+}
+`))
+	stdout, stderr := filepath.Join(dir, "out"), filepath.Join(dir, "err")
+	code := withStdio(t, stdout, stderr, func() int { return Run(dir, nil, io.Discard) })
+	if code != 128+11 {
+		t.Fatalf("exit %d", code)
+	}
+	if out, _ := os.ReadFile(stdout); string(out) != "before\n" {
+		t.Fatalf("stdout %q", out)
+	}
+	errb, _ := os.ReadFile(stderr)
+	r := last(t, string(errb))
+	at, _ := r["at"].(map[string]any)
+	stack, _ := r["stack"].([]any)
+	if r["error"] != "killed" || r["fault_addr"] != "0x0" || at["id"] != "st:demo.Get:1" || len(stack) != 2 {
+		t.Fatalf("stderr: %s", errb)
+	}
+	if outer, _ := stack[1].(map[string]any); outer["id"] != "st:demo.main:2" {
+		t.Fatalf("caller: %s", errb)
+	}
+}
+
+// TestRunStdio: a program that exits normally gets ovid run's stdin, writes
+// its own stdout and stderr, and its exit code passes through, whether it
+// runs traced or plainly (the fallback where ptrace is unavailable).
+func TestRunStdio(t *testing.T) {
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("ovid programs are linux/amd64 binaries")
+	}
+	dir := mkmod(t, demo(`package demo
+
+import ovid/io
+
+func main(io *ovid/io.Cap) i64 {
+  var buf i64 = ovid/io.Alloc(io, 64)
+  var n i64 = ovid/io.Read(0, buf, 64)
+  ovid/io.Stdout(buf, n)
+  ovid/io.Stderr(strptr("to stderr\n"), 10)
+  return 3
+}
+`))
+	in := filepath.Join(dir, "in")
+	if err := os.WriteFile(in, []byte("from stdin\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	open := func(name string) *os.File {
+		f, err := os.Create(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { f.Close() })
+		return f
+	}
+	check := func(how string, code int, out, errOut string) {
+		t.Helper()
+		o, _ := os.ReadFile(filepath.Join(dir, out))
+		e, _ := os.ReadFile(filepath.Join(dir, errOut))
+		if code != 3 || string(o) != "from stdin\n" || string(e) != "to stderr\n" {
+			t.Fatalf("%s: exit %d, stdout %q, stderr %q", how, code, o, e)
+		}
+	}
+
+	stdin, err := os.Open(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stdin.Close()
+	si := os.Stdin
+	os.Stdin = stdin
+	code := withStdio(t, filepath.Join(dir, "out"), filepath.Join(dir, "err"), func() int { return Run(dir, nil, io.Discard) })
+	os.Stdin = si
+	check("run", code, "out", "err")
+
+	bin := filepath.Join(dir, "bin", "demo")
+	var b bytes.Buffer
+	if Build(dir, bin, &b) != 0 {
+		t.Fatal(b.String())
+	}
+	for name, runner := range map[string]func(string, []string, procIO, time.Duration) procResult{"traced": runProc, "plain": runPlain} {
+		stdin, err := os.Open(in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pr := runner(bin, nil, procIO{stdin, open(name + ".out"), open(name + ".err")}, 0)
+		stdin.Close()
+		if pr.err != nil || !pr.exited {
+			t.Fatalf("%s: %+v", name, pr)
+		}
+		check(name, pr.code, name+".out", name+".err")
+	}
+}
+
+// withStdio runs f with os.Stdout and os.Stderr sent to files.
+func withStdio(t *testing.T, stdout, stderr string, f func() int) int {
+	t.Helper()
+	o, err := os.Create(stdout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer o.Close()
+	e, err := os.Create(stderr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e.Close()
+	so, se := os.Stdout, os.Stderr
+	os.Stdout, os.Stderr = o, e
+	defer func() { os.Stdout, os.Stderr = so, se }()
+	return f()
+}
+
 func TestTestCommand(t *testing.T) {
 	dir := mkmod(t, map[string]string{
 		"demo/main.ov": "package demo\nimport ovid/io\nfunc Two() i64 {\n  return 2\n}\nfunc main(io *ovid/io.Cap) i64 {\n  return 0\n}\n",
@@ -554,6 +705,12 @@ func TestNil(io *ovid/io.Cap) i64 {
 `,
 	})
 	var b bytes.Buffer
+	// Listing compiles nothing, so it runs on every host.
+	if code := Test(dir, "", true, &b); code != 0 || last(t, b.String())["count"] != float64(4) {
+		t.Fatalf("list %d %s", code, b.String())
+	}
+	b.Reset()
+	needExec(t)
 	if code := Test(dir, "", false, &b); code != ExitFail {
 		t.Fatalf("code %d %s", code, b.String())
 	}
@@ -582,10 +739,6 @@ func TestNil(io *ovid/io.Cap) i64 {
 	s := last(t, b.String())
 	if s["passed"] != float64(1) || s["failed"] != float64(3) {
 		t.Fatalf("summary %v", s)
-	}
-	b.Reset()
-	if code := Test(dir, "", true, &b); code != 0 || last(t, b.String())["count"] != float64(4) {
-		t.Fatalf("list %d %s", code, b.String())
 	}
 }
 
@@ -619,6 +772,7 @@ func TestInit(t *testing.T) {
 		t.Fatal(b.String())
 	}
 	b.Reset()
+	needExec(t)
 	if code := Test(dir, "", false, &b); code != 0 {
 		t.Fatal(b.String())
 	}
@@ -647,6 +801,7 @@ func TestProgChecks(t *testing.T) {
 // TestProgTests runs the self-hosted compiler's own Ovid tests.
 func TestProgTests(t *testing.T) {
 	var b bytes.Buffer
+	needExec(t)
 	if code := Test(filepath.Join(repo(t), "prog"), "", false, &b); code != 0 {
 		t.Fatalf("prog tests fail:\n%s", b.String())
 	}
@@ -926,6 +1081,19 @@ func TestSelfHost(t *testing.T) {
 		t.Fatalf("%d %q", code, out)
 	}
 
+	// Both compilers compute one revision, over ovid.mod, the module, and
+	// the std they loaded: prog names a std directory, hello uses the
+	// built-in one on the Go side and the same files by --std here.
+	for _, dir := range []string{prog, hello} {
+		b.Reset()
+		Check(dir, false, &b)
+		want := last(t, b.String())["revision"]
+		out, _ := run(t, s1, "check", dir, "--std", stdDir)
+		if got := last(t, out)["revision"]; got != want || want == nil {
+			t.Fatalf("revision of %s: self-hosted %v, go %v", dir, got, want)
+		}
+	}
+
 	// The self-hosted checker names each error's node and source line, and
 	// reports a second decl of a name once, at that decl.
 	bad := mkmod(t, demo("package demo\nimport ovid/io\nfunc F() i64 {\n  return 1\n}\nfunc F() i64 {\n  return 2\n}\nfunc main(io *ovid/io.Cap) i64 {\n  var x i64 = true\n  return x\n}\n"))
@@ -963,6 +1131,105 @@ func TestSelfHost(t *testing.T) {
 	out, code = run(t, s1, "check", broken, "--std", stdDir)
 	if d := last(t, out); code != 1 || d["fact"] != "summary" || d["ok"] != false || d["errors"] != float64(1) {
 		t.Fatalf("check of a syntax error %d: %s", code, out)
+	}
+}
+
+// TestSelfHostLarge builds a program far larger than the compiler with both
+// compilers and compares the output. It is sized to cross what used to be
+// fixed limits in the self-hosted one: a call chain 30000 funcs deep (the
+// reachability walk recursed along it), more than 65536 distinct strings
+// with repeats among them, and code, label, and fixup tables that must grow.
+func TestSelfHostLarge(t *testing.T) {
+	if testing.Short() {
+		t.Skip("large program")
+	}
+	const n = 30000
+	var src strings.Builder
+	src.WriteString("package demo\nimport ovid/io\nfunc F0() i64 {\n  return 1\n}\n")
+	for i := 1; i < n; i++ {
+		fmt.Fprintf(&src, "func F%d() i64 {\n  return (F%d() + strlen(\"a%d\") + strlen(\"b%d\") + load8(strptr(\"c%d\")) + strlen(\"a%d\")) & 1023\n}\n", i, i-1, i, i, i, i-1)
+	}
+	fmt.Fprintf(&src, "func main(io *ovid/io.Cap) i64 {\n  return F%d() & 127\n}\n", n-1)
+	dir := mkmod(t, demo(src.String()))
+	g := mustBuild(t, dir)
+
+	tmp := t.TempDir()
+	s1 := filepath.Join(tmp, "s1")
+	var b bytes.Buffer
+	if code := Build(filepath.Join(repo(t), "prog"), s1, &b); code != 0 {
+		t.Fatalf("go build of prog: %s", b.String())
+	}
+	s := filepath.Join(tmp, "big")
+	if out, code := run(t, s1, "build", dir, "-o", s, "--std", filepath.Join(repo(t), "std")); code != 0 {
+		t.Fatalf("self-hosted build %d: %s", code, out)
+	}
+	x, _ := os.ReadFile(g)
+	y, _ := os.ReadFile(s)
+	if len(x) == 0 || !bytes.Equal(x, y) {
+		t.Fatalf("outputs differ: go %d bytes, self-hosted %d bytes", len(x), len(y))
+	}
+	_, want := run(t, g)
+	if _, got := run(t, s); got != want {
+		t.Fatalf("exit %d, want %d", got, want)
+	}
+}
+
+// TestRevisionCoversBuild: the revision moves when ovid.mod or a loaded std
+// file changes, not only when a module file does.
+func TestRevisionCoversBuild(t *testing.T) {
+	stdDir := t.TempDir()
+	for _, rel := range []string{"ovid/io/io.ov", "ovid/mem/mem.ov"} {
+		src, err := os.ReadFile(filepath.Join(repo(t), "std", rel))
+		if err != nil {
+			t.Fatal(err)
+		}
+		os.MkdirAll(filepath.Dir(filepath.Join(stdDir, rel)), 0o755)
+		if err := os.WriteFile(filepath.Join(stdDir, rel), src, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	files := demo("package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  return 0\n}\n")
+	files["alt/main.ov"] = "package alt\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  return 2\n}\n"
+	files["ovid.mod"] = "module demo\nentry demo\nstd " + stdDir + "\n"
+	dir := mkmod(t, files)
+	rev := func() string {
+		t.Helper()
+		var b bytes.Buffer
+		if code := Check(dir, false, &b); code != 0 {
+			t.Fatalf("check: %s", b.String())
+		}
+		r, _ := last(t, b.String())["revision"].(string)
+		if len(r) != 16 {
+			t.Fatalf("revision %q", r)
+		}
+		return r
+	}
+	r0 := rev()
+	if rev() != r0 {
+		t.Fatal("the revision is not stable")
+	}
+	if err := os.WriteFile(filepath.Join(dir, "ovid.mod"), []byte("module demo\nentry alt\nstd "+stdDir+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r1 := rev()
+	if r1 == r0 {
+		t.Fatal("changing the entry in ovid.mod kept the revision")
+	}
+	io := filepath.Join(stdDir, "ovid/io/io.ov")
+	src, _ := os.ReadFile(io)
+	if err := os.WriteFile(io, append(src, []byte("\n// changed\n")...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if rev() == r1 {
+		t.Fatal("changing a loaded std file kept the revision")
+	}
+	// A std file that is not loaded does not count.
+	r2 := rev()
+	mem := filepath.Join(stdDir, "ovid/mem/mem.ov")
+	src, _ = os.ReadFile(mem)
+	os.WriteFile(mem, append(src, []byte("\n// changed\n")...), 0o644)
+	if rev() != r2 {
+		t.Fatal("changing a std file that is not loaded moved the revision")
 	}
 }
 

@@ -1,0 +1,12 @@
+package demo
+import ovid/io
+func Add(a i64, b i64) i64 {
+  return a + b
+}
+func Seven(a i64, b i64, c i64, d i64, e i64, f i64, g i64) i64 { // error: arity 1
+  return a + b + c + d + e + f + g
+}
+func main(io *ovid/io.Cap) i64 {
+  var x i64 = Add(1) // error: arity 15 expected="2" got="1"
+  return Add(1, 2, x) // error: arity 10 expected="2" got="3" hint="demo: func Add(a i64, b i64) i64"
+}

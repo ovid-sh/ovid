@@ -1,0 +1,8 @@
+// ovid.mod names an entry package that does not exist. The diagnostic has
+// no position, so the comment below may sit on any line of the case.
+// error: no_entry hint="set `entry <pkg>` in ovid.mod"
+package demo
+import ovid/io
+func main(io *ovid/io.Cap) i64 {
+  return 0
+}

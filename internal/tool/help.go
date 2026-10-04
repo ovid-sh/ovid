@@ -102,7 +102,9 @@ NUL-terminated, so printing one needs only its address:
   ovid/io.Stdout(p, n)                 // n bytes at p, for non-literals
 
 Memory: no implicit allocation. ovid/io.Alloc(io, nbytes) returns an i64
-address from the heap the runtime maps; cast it: var p *Pair = raw as *Pair.
+address of zeroed bytes from the heap, which grows as needed and is never
+freed; it does not return 0 (out of memory ends the program, exit 125).
+Cast the address: var p *Pair = raw as *Pair.
 Each struct field takes 8 bytes, so a struct is 8 * fields bytes; never
 count them by hand, write sizeof(T) (T a struct; path.T for another
 package's), a compile-time i64:
@@ -146,7 +148,10 @@ ovid check [--facts]
   last: {"fact":"summary","ok",errors,packages,funcs,revision,ms}.
 ovid build [-o out]          default out: <module>/bin/<module name>
 ovid run [--] [args...]      program stdio and exit code pass through;
-                             if the build fails: errors as JSON, exit 125
+                             if the build fails: errors as JSON, exit 125.
+  Killed by a signal: exit 128+N and one line on stderr,
+  {"ok":false,"error":"killed",signal,exit,at,stack,fault_addr,hint}, with
+  at/stack (the statement and its callers) for a fault on Linux.
 ovid test [--run substr] [--list]
   {"fact":"test",id,ok,exit,ms,output} per test; a failure that returned a
   value adds "returned_by": the return statements that can produce it;

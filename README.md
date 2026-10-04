@@ -41,8 +41,8 @@ Every command prints JSON lines and the last line has `"ok"`. Exit codes:
 |---|---|
 | `ovid init <dir>` | new module with a main and a test |
 | `ovid check [--facts]` | errors, then a summary with the module revision |
-| `ovid build [-o out]` / `ovid run [-- args]` | compile; run passes stdio and the exit code through |
-| `ovid test [--run substr] [--list]` | each `TestX(io *ovid/io.Cap) i64` in its own process; 0 passes; a failure names the `return` that produced it, a crash the statement and call stack |
+| `ovid build [-o out]` / `ovid run [-- args]` | compile; run passes stdio and the exit code through and reports a death by signal on stderr, on Linux with the statement and call stack |
+| `ovid test [--run substr] [--list]` | each `TestX(io *ovid/io.Cap) i64` in its own process; 0 passes; a failure names the `return` that produced it, a crash its signal (on Linux, the statement and call stack) |
 | `ovid outline [--pkg P]` | packages, or a package's decls with signature, doc, struct size, lines, hash |
 | `ovid show <id\|name>... [--plain]` | source of a node, each statement line tagged with its id |
 | `ovid refs <id\|name>` | every use of a func, type, field, const, param, or local |
@@ -105,8 +105,10 @@ cmp /tmp/s1 /tmp/s2                        # byte-identical
 
 The two compilers emit byte-identical binaries for the same source, and
 `go test ./internal/tool -run TestSelfHost` checks it. The self-hosted
-compiler is 188,706 bytes (2026-10-03). On an idle starship (Ryzen 7
-8745HS) it built `prog/` in 14 ms, against 21 ms for the Go one.
+compiler is about 190 KB. On an idle starship (Ryzen 7 8745HS, 2026-10-03)
+it built `prog/` in 13 ms, against 21 ms for the Go one, and a
+generated program of 100,000 funcs (1.9 million lines) in 3.6 s against
+9.7 s.
 
 ## Tests
 

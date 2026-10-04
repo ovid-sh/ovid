@@ -34,7 +34,27 @@ Put a comment at the end of each line that should get a diagnostic:
 ```
 
 The word is the diagnostic's `code` (see `docs/PROTOCOL.md`), and the
-optional number is its column. The diagnostics `ovid check` reports must be
-exactly the ones named: one that is missing fails the case, and so does one
-that no comment asked for. A diagnostic that carries no line matches a
-comment with its code anywhere in the case.
+optional number is its column. After those, any of `expected="..."`,
+`got="..."`, and `hint="..."` (Go-quoted) must equal the diagnostic's field
+of that name:
+
+```
+  return Add(1, true) // error: type_mismatch 17 expected="i64" got="bool"
+```
+
+A line that gets two diagnostics carries two comments, one after the other.
+
+The diagnostics `ovid check` reports must be exactly the ones named: one
+that is missing fails the case, and so does one that no comment asked for.
+A diagnostic that carries no line matches a comment with its code anywhere
+in the case.
+
+`go test ./internal/tool -run TestCorpusFail -v` prints what each case
+reports in the form a comment takes, ready to paste.
+
+Each diagnostic code has at least one case here, with four exceptions.
+`duplicate_package`, `bad_op`, and `missing_expr` guard the program tree
+itself, and no source text is known to produce them. `duplicate_id` is
+reported today only as a side effect of a repeated func, field, or
+parameter, which is a bug (#26); it has no case so that the corpus does not
+record it.
