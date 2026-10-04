@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -239,7 +240,7 @@ ovid init <dir> [--name N]   writes ovid.mod, <N>/main.ov, <N>/main_test.ov
 ovid dump                    the whole program as JSON; a string literal
                              that is not UTF-8 is "value_hex", not "value"
 ovid version                 {commit, dirty, binary (hash of the executable), path}
-ovid help [topic]
+ovid help [topic|command]    a topic, or the entry above for one command
 `
 
 const helpEdit = `ovid edit: id-addressed edits, applied all or none.
@@ -346,10 +347,48 @@ func Help(topic string, w io.Writer) int {
 	case "std":
 		helpStd(w)
 	default:
-		fmt.Fprintf(w, "no help topic %q; topics: language commands edit std ids\n", topic)
+		if e := commandHelp(topic); e != "" {
+			fmt.Fprint(w, e)
+			fmt.Fprintln(w, "\nAll commands: ovid help commands. Topics: language commands edit std ids.")
+			return ExitOK
+		}
+		fmt.Fprintf(w, "no help topic %q; topics: language commands edit std ids, or a command name\n", topic)
 		return ExitUsage
 	}
 	return ExitOK
+}
+
+// commandHelp is the part of helpCommands about the command cmd: each
+// entry whose heading (its "ovid ..." line and any "  | ..." lines after
+// it) names cmd, so ovid help delete finds the entry shared by the edit
+// ops. "" if there is none.
+func commandHelp(cmd string) string {
+	re := regexp.MustCompile(`(^ovid |\| )` + regexp.QuoteMeta(cmd) + `\b`)
+	var out, entry, head strings.Builder
+	flush := func() {
+		if re.MatchString(head.String()) {
+			out.WriteString(entry.String())
+		}
+		entry.Reset()
+		head.Reset()
+	}
+	inHead := false
+	for _, ln := range strings.SplitAfter(helpCommands, "\n") {
+		switch {
+		case strings.HasPrefix(ln, "ovid "):
+			flush()
+			inHead = true
+		case inHead && strings.HasPrefix(ln, "  | "):
+		default:
+			inHead = false
+		}
+		if inHead {
+			head.WriteString(ln)
+		}
+		entry.WriteString(ln)
+	}
+	flush()
+	return out.String()
 }
 
 // helpStd lists the shipped packages' declarations from their source.

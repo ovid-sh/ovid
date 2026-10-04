@@ -12,6 +12,7 @@ import (
 	"ovid/internal/module"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -802,6 +803,25 @@ func TestEditStrayFields(t *testing.T) {
 		if got, _ := os.ReadFile(filepath.Join(dir, "demo/main.ov")); string(got) != src {
 			t.Fatalf("%s: written:\n%s", c.key, got)
 		}
+	}
+}
+
+// TestHelpCommand: ovid help <command> prints that command's entry, since
+// agents ask for it by name; the edit ops share one entry.
+func TestHelpCommand(t *testing.T) {
+	for _, c := range []string{"init", "check", "build", "run", "test", "outline", "show", "refs", "grep",
+		"replace", "insert", "append", "delete", "rename", "move", "dump", "version", "help"} {
+		var b bytes.Buffer
+		if code := Help(c, &b); code != ExitOK || !regexp.MustCompile(`(?m)(^ovid |\| )`+c+`\b`).MatchString(b.String()) {
+			t.Errorf("help %s: %d\n%s", c, code, b.String())
+		}
+	}
+	var b bytes.Buffer
+	if Help("show", &b); strings.Contains(b.String(), "ovid refs") {
+		t.Errorf("help show includes other entries:\n%s", b.String())
+	}
+	if code := Help("nope", &b); code != ExitUsage {
+		t.Errorf("help nope: %d", code)
 	}
 }
 
