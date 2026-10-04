@@ -28,7 +28,21 @@ type Result struct {
 	Facts  []Fact
 	// Types maps expression ids to their checked type.
 	Types map[string]string
+	// Uses lists every name the checker resolved to a declaration, in the
+	// order it checked them.
+	Uses  []Use
 	Funcs int
+}
+
+// Use is one name in source that resolves to a declaration. Span is the name
+// token alone (T in *path.T, F in path.F(), x in p.x), so a rename of Target
+// rewrites exactly Span.
+type Use struct {
+	Target string  // the declaration: fn:, ty:, fld:, cn:, pa:, or a var's st: id
+	ID     string  // the node that spells it: an expression, statement, field, param, or func
+	Kind   string  // call, field, setfield, name, assign, type, result
+	In     string  // the type or func the use sits in
+	Span   ir.Span // the name token
 }
 
 type sig struct {
@@ -49,6 +63,19 @@ type checker struct {
 }
 
 func (c *checker) issue(is Issue) { c.r.Issues = append(c.r.Issues, is) }
+
+func (c *checker) use(target, id, kind, in string, sp ir.Span) {
+	c.r.Uses = append(c.r.Uses, Use{Target: target, ID: id, Kind: kind, In: in, Span: sp})
+}
+
+// useType records a use of the struct type t resolves to, if it is one.
+func (c *checker) useType(t, id, kind, in string, sp ir.Span) {
+	t = strings.TrimPrefix(t, "*")
+	if t == "" || t == "i64" || t == "bool" || t == "invalid" {
+		return
+	}
+	c.use("ty:"+t, id, kind, in, sp)
+}
 
 func (c *checker) err(id, code, msg string) {
 	c.issue(Issue{Code: code, ID: id, Message: msg})
@@ -128,6 +155,7 @@ func Run(p *ir.Program) *Result {
 				} else if !scalar(ft) {
 					c.err(f.ID, "struct_value", "field must be i64, bool, or a pointer; write *"+ft)
 				}
+				c.useType(ft, f.ID, "type", t.ID, f.TypeSpan)
 			}
 		}
 		for fi := range pkg.Funcs {
@@ -147,6 +175,7 @@ func Run(p *ir.Program) *Result {
 				} else if !scalar(pt) {
 					c.err(pa.ID, "struct_value", "parameter must be i64, bool, or a pointer; write *"+pt)
 				}
+				c.useType(pt, pa.ID, "type", fn.ID, pa.TypeSpan)
 				ps = append(ps, pt)
 				names = append(names, pa.Name)
 			}
@@ -157,6 +186,7 @@ func Run(p *ir.Program) *Result {
 			} else if !scalar(rt) {
 				c.err(fn.ID, "struct_value", "result must be i64, bool, or a pointer; write *"+rt)
 			}
+			c.useType(rt, fn.ID, "result", fn.ID, fn.ResultSpan)
 			c.sigs[pkg.Path+"."+fn.Name] = sig{params: ps, names: names, result: rt, id: fn.ID}
 			c.r.Facts = append(c.r.Facts, Fact{"fact": "func", "id": fn.ID, "sig": Signature(pkg.Path, fn)})
 			for _, st := range fn.Body {
@@ -310,16 +340,32 @@ func Resolve(pkg *ir.Package, t string, pkgs map[string]*ir.Package) (string, er
 
 type env struct {
 	vars map[string]string
+	ids  map[string]string // name -> the pa: or st: id that declared it
 	up   *env
 }
 
+func newEnv(up *env) *env {
+	return &env{vars: map[string]string{}, ids: map[string]string{}, up: up}
+}
+
 func (e *env) get(name string) (string, bool) {
+	t, _, ok := e.lookup(name)
+	return t, ok
+}
+
+// lookup returns a local's type and the id of its declaration.
+func (e *env) lookup(name string) (string, string, bool) {
 	for ; e != nil; e = e.up {
 		if t, ok := e.vars[name]; ok {
-			return t, true
+			return t, e.ids[name], true
 		}
 	}
-	return "", false
+	return "", "", false
+}
+
+func (e *env) bind(name, t, id string) {
+	e.vars[name] = t
+	e.ids[name] = id
 }
 
 func (e *env) names() []string {
@@ -334,7 +380,7 @@ func (e *env) names() []string {
 
 func (c *checker) checkBody(fn *ir.Func) {
 	c.fn = fn
-	e := &env{vars: map[string]string{}}
+	e := newEnv(nil)
 	for _, pa := range fn.Params {
 		if _, ok := e.vars[pa.Name]; ok {
 			c.err(pa.ID, "duplicate_name", "parameter "+pa.Name+" is declared twice")
@@ -343,7 +389,7 @@ func (c *checker) checkBody(fn *ir.Func) {
 		if err != nil {
 			t = "invalid"
 		}
-		e.vars[pa.Name] = t
+		e.bind(pa.Name, t, pa.ID)
 	}
 	c.res, _ = c.resolve(fn.Result)
 	if c.res == "" {
@@ -388,6 +434,7 @@ func (c *checker) stmt(e *env, s *ir.Node) {
 		} else if !scalar(t) {
 			c.err(s.ID, "struct_value", "local must be i64, bool, or a pointer; write *"+t)
 		}
+		c.useType(t, s.ID, "type", c.fn.ID, s.TypeSpan)
 		if _, ok := e.get(s.Name); ok {
 			c.err(s.ID, "duplicate_name", s.Name+" is already declared in this function; assign with `"+s.Name+" = ...` instead")
 		}
@@ -397,12 +444,14 @@ func (c *checker) stmt(e *env, s *ir.Node) {
 				c.mismatch(s.Val.ID, "var "+s.Name, vt, t)
 			}
 		}
-		e.vars[s.Name] = t
+		e.bind(s.Name, t, s.ID)
 	case "assign":
-		t, ok := e.get(s.Name)
+		t, id, ok := e.lookup(s.Name)
 		if !ok {
 			c.unknownName(s.ID, s.Name, e)
 			t = "invalid"
+		} else {
+			c.use(id, s.ID, "assign", c.fn.ID, s.NameSpan)
 		}
 		vt := c.expr(e, s.Val)
 		if vt != t && vt != "invalid" && t != "invalid" {
@@ -410,7 +459,7 @@ func (c *checker) stmt(e *env, s *ir.Node) {
 		}
 	case "setfield":
 		bt := c.expr(e, s.Base)
-		ft := c.field(s.ID, bt, s.Name)
+		ft := c.field(s, bt)
 		vt := c.expr(e, s.Val)
 		if vt != ft && vt != "invalid" && ft != "invalid" {
 			c.mismatch(s.Val.ID, "field "+s.Name, vt, ft)
@@ -439,13 +488,13 @@ func (c *checker) stmt(e *env, s *ir.Node) {
 		if ct := c.expr(e, s.Cond); ct != "bool" && ct != "invalid" {
 			c.mismatch(s.Cond.ID, "if condition", ct, "bool")
 		}
-		c.stmts(&env{vars: map[string]string{}, up: e}, s.Then)
-		c.stmts(&env{vars: map[string]string{}, up: e}, s.Else)
+		c.stmts(newEnv(e), s.Then)
+		c.stmts(newEnv(e), s.Else)
 	case "while":
 		if ct := c.expr(e, s.Cond); ct != "bool" && ct != "invalid" {
 			c.mismatch(s.Cond.ID, "while condition", ct, "bool")
 		}
-		c.stmts(&env{vars: map[string]string{}, up: e}, s.Body)
+		c.stmts(newEnv(e), s.Body)
 	default:
 		c.err(s.ID, "bad_op", "unknown statement op "+s.Op)
 	}
@@ -471,14 +520,15 @@ func (c *checker) unknownName(id, name string, e *env) {
 	c.issue(is)
 }
 
-func (c *checker) field(id, bt, name string) string {
+// field checks n.Name on a value of type bt, for a field or setfield node.
+func (c *checker) field(n *ir.Node, bt string) string {
 	if bt == "invalid" {
 		return "invalid"
 	}
-	ft, fields, err := FieldType(bt, name, c.pkgs)
+	ft, fields, err := FieldType(bt, n.Name, c.pkgs)
 	if err != nil {
-		is := Issue{Code: "unknown_field", ID: id, Message: err.Error()}
-		if s := Suggest(name, fields); s != "" {
+		is := Issue{Code: "unknown_field", ID: n.ID, Message: err.Error()}
+		if s := Suggest(n.Name, fields); s != "" {
 			is.Hint = "did you mean " + s + "?"
 		} else if len(fields) > 0 {
 			is.Hint = "fields: " + strings.Join(fields, ", ")
@@ -486,6 +536,7 @@ func (c *checker) field(id, bt, name string) string {
 		c.issue(is)
 		return "invalid"
 	}
+	c.use("fld:"+strings.TrimPrefix(bt, "*")+"."+n.Name, n.ID, n.Op, c.fn.ID, n.NameSpan)
 	return ft
 }
 
@@ -523,11 +574,13 @@ func (c *checker) expr0(e *env, n *ir.Node) string {
 		if n.Pkg != "" && n.Pkg != c.pkg.Path {
 			return c.pkgConst(n)
 		}
-		if t, ok := e.get(n.Name); ok {
+		if t, id, ok := e.lookup(n.Name); ok {
+			c.use(id, n.ID, "name", c.fn.ID, n.NameSpan)
 			return t
 		}
 		for _, cn := range c.pkg.Consts {
 			if cn.Name == n.Name {
+				c.use(cn.ID, n.ID, "name", c.fn.ID, n.NameSpan)
 				return "i64"
 			}
 		}
@@ -564,6 +617,7 @@ func (c *checker) expr0(e *env, n *ir.Node) string {
 			c.err(n.ID, "bad_type", err.Error())
 			return "invalid"
 		}
+		c.useType(t, n.ID, "type", c.fn.ID, n.TypeSpan)
 		src := c.expr(e, n.Arg)
 		if src != "invalid" && !scalar(t) {
 			c.mismatch(n.ID, "cast", src, "i64, bool, or a pointer type")
@@ -574,12 +628,14 @@ func (c *checker) expr0(e *env, n *ir.Node) string {
 			c.issue(Issue{Code: "bad_type", ID: n.ID, Message: "sizeof(" + n.Type + ") is always 8", Hint: "write 8; sizeof takes a struct type"})
 			return "i64"
 		}
-		if _, err := c.resolve(n.Type); err != nil {
+		if t, err := c.resolve(n.Type); err != nil {
 			c.err(n.ID, "bad_type", err.Error())
+		} else {
+			c.useType(t, n.ID, "type", c.fn.ID, n.TypeSpan)
 		}
 		return "i64"
 	case "field":
-		return c.field(n.ID, c.expr(e, n.Base), n.Name)
+		return c.field(n, c.expr(e, n.Base))
 	case "call":
 		return c.call(e, n)
 	case "syscall":
@@ -608,6 +664,7 @@ func (c *checker) pkgConst(n *ir.Node) string {
 	if pk != nil {
 		for _, cn := range pk.Consts {
 			if cn.Name == n.Name {
+				c.use(cn.ID, n.ID, "name", c.fn.ID, n.NameSpan)
 				return "i64"
 			}
 			cands = append(cands, cn.Name)
@@ -653,6 +710,7 @@ func (c *checker) call(e *env, n *ir.Node) string {
 		}
 		return "invalid"
 	}
+	c.use(sg.id, n.ID, "call", c.fn.ID, n.NameSpan)
 	if len(n.Args) != len(sg.params) {
 		c.issue(Issue{Code: "arity", ID: n.ID, Message: fmt.Sprintf("%s takes %d arguments, got %d", n.Func, len(sg.params), len(n.Args)),
 			Expected: fmt.Sprint(len(sg.params)), Got: fmt.Sprint(len(n.Args)), Hint: c.sigText(path, n.Func)})
