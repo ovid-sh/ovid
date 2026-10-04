@@ -1,0 +1,4 @@
+package elsewhere // error: layout 1 hint="the package path is the directory path; write `package demo`"
+func One() i64 {
+  return 1
+}

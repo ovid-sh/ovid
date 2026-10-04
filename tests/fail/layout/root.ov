@@ -1,0 +1,4 @@
+package demo // error: layout 1
+func Two() i64 {
+  return 2
+}

@@ -1,0 +1,8 @@
+package demo
+import ovid/io
+func main(io *ovid/io.Cap) i64 {
+  var a i64 = x // error: unknown_name 15
+  var b i64 = Nope() // error: unknown_name 15
+  var c i64 = ovid/io.NOPE // error: unknown_name 15
+  return ovid/io.Nope(a, b, c) // error: unknown_name 10 hint="did you mean Open?"
+}

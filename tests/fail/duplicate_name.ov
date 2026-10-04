@@ -1,0 +1,11 @@
+package demo
+import ovid/io
+const Twice i64 = 1
+type Twice struct { // error: duplicate_name 1
+  a i64
+}
+func main(io *ovid/io.Cap) i64 {
+  var n i64 = 1
+  var n i64 = 2 // error: duplicate_name 3
+  return n
+}

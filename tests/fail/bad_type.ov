@@ -1,0 +1,15 @@
+package demo
+import ovid/io
+type Node struct {
+  next *Nope // error: bad_type 3
+}
+func Param(p *Nope) i64 { // error: bad_type 12
+  return 0
+}
+func Result() *Nope { // error: bad_type 1
+  return 0 as *Nope // error: bad_type 10
+}
+func main(io *ovid/io.Cap) i64 {
+  var p *Nope = 0 as *Nope // error: bad_type 3 // error: bad_type 17
+  return sizeof(i64) + sizeof(Nope) // error: bad_type 10 hint="write 8; sizeof takes a struct type" // error: bad_type 24
+}

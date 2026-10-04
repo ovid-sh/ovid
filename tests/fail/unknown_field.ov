@@ -1,0 +1,11 @@
+package demo
+import ovid/io
+type Pair struct {
+  a i64
+  b i64
+}
+func main(io *ovid/io.Cap) i64 {
+  var p *Pair = ovid/io.Alloc(io, sizeof(Pair)) as *Pair
+  p.c = 1 // error: unknown_field 3 hint="did you mean a?"
+  return p.d // error: unknown_field 10
+}

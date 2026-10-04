@@ -1,0 +1,5 @@
+package demo // error: bad_main 1 expected="func main(io *ovid/io.Cap) i64"
+import ovid/io
+func Start(io *ovid/io.Cap) i64 {
+  return 0
+}

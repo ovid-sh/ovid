@@ -1,0 +1,17 @@
+package demo
+import ovid/io
+func Sign(x i64) i64 { // error: missing_return 1 hint="end the body with `return`; an if only counts when both branches return"
+  if x > 0 {
+    return 1
+  } else if x < 0 {
+    return -1
+  }
+}
+func Loop(x i64) i64 { // error: missing_return 1
+  while x > 0 {
+    return x
+  }
+}
+func main(io *ovid/io.Cap) i64 {
+  return Sign(1) + Loop(1)
+}
