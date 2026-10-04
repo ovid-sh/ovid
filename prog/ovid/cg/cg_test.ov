@@ -1,0 +1,37 @@
+package ovid/cg
+
+import ovid/io
+import ovid/mem
+
+// MsgIs reports whether c failed with the message want[0:n].
+func MsgIs(io *ovid/io.Cap, c *C, want i64, n i64) bool {
+  if c.err == 0 {
+    ovid/io.Eprint(strptr("no failure\n"))
+    return false
+  }
+  if ovid/mem.Eq(c.msg.data, c.msg.len, want, n) {
+    return true
+  }
+  ovid/io.Eprint(strptr("got "))
+  ovid/io.Stderr(c.msg.data, c.msg.len)
+  ovid/io.Eprint(strptr("\n"))
+  return false
+}
+
+// A failure says what failed, and only the first one is kept.
+func TestFailMessage(io *ovid/io.Cap) i64 {
+  var c *C = ovid/io.Alloc(io, sizeof(C)) as *C
+  c.io = io
+  if OffsetOf(c, strptr("i64"), strlen("i64"), strptr("a"), strlen("a")) != -1 {
+    return 1
+  }
+  if !MsgIs(io, c, strptr("field a on i64"), strlen("field a on i64")) {
+    return 2
+  }
+  Fail(c, strptr("later"), strlen("later"))
+  Add(c, strptr(" and more"), strlen(" and more"))
+  if !MsgIs(io, c, strptr("field a on i64"), strlen("field a on i64")) {
+    return 3
+  }
+  return 0
+}

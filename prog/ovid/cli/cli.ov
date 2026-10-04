@@ -186,9 +186,8 @@ func CmdBuild(io *ovid/io.Cap) i64 {
   store64(errp, 0)
   var b *ovid/mem.Buf = ovid/cg.Compile(io, m, errp)
   if load64(errp) != 0 {
-    var tmp i64 = ovid/io.Alloc(io, 64)
-    var en i64 = ovid/mem.FormatI64(tmp, load64(errp))
-    return Fail(io, strptr("compile"), strlen("compile"), tmp, en)
+    var msg *ovid/mem.Buf = load64(errp) as *ovid/mem.Buf
+    return Fail(io, strptr("compile"), strlen("compile"), msg.data, msg.len)
   }
   MkParent(io, out)
   if ovid/io.WriteFileAtomic(io, out, ovid/io.CLen(out), b.data, b.len, 493) != 0 {

@@ -19,7 +19,8 @@ const LOC_REG i64 = 48
 // C is the code generator's state. pkg/pathp/fn are the func being
 // emitted; locs holds its params and vars, nloc of them. While they are
 // bound, scope holds the numbers of the nscope in scope, innermost last;
-// live is the most that were in scope at once.
+// live is the most that were in scope at once. err is set by the first
+// failure, and msg says what it was.
 type C struct {
   io *ovid/io.Cap
   code *ovid/asm.Code
@@ -51,13 +52,64 @@ type C struct {
   nsaved i64
   saveBase i64
   free i64
+  msg *ovid/mem.Buf
+  adding bool
 }
 
-func Fail(c *C, code i64) i64 {
-  if c.err == 0 {
-    c.err = code
+// Fail records the first failure. Its message is p[0:n] and whatever Add
+// appends before the next Fail.
+func Fail(c *C, p i64, n i64) i64 {
+  c.adding = c.err == 0
+  if c.adding {
+    c.err = 1
+    c.msg = ovid/mem.New(c.io, 64)
+    ovid/mem.WBytes(c.io, c.msg, p, n)
   }
   return c.err
+}
+
+// Add appends p[0:n] to the message of the failure the last Fail recorded.
+func Add(c *C, p i64, n i64) i64 {
+  if c.adding {
+    ovid/mem.WBytes(c.io, c.msg, p, n)
+  }
+  return c.err
+}
+
+// AddQual appends name np[0:nn], qualified with package pp[0:pn] if any.
+func AddQual(c *C, pp i64, pn i64, np i64, nn i64) i64 {
+  if pn != 0 {
+    Add(c, pp, pn)
+    Add(c, strptr("."), 1)
+  }
+  return Add(c, np, nn)
+}
+
+// FailName fails with what followed by the name n refers to.
+func FailName(c *C, what i64, whatn i64, n *ovid/parse.Node) i64 {
+  Fail(c, what, whatn)
+  return AddQual(c, n.pkgp, n.pkgn, n.namep, n.namen)
+}
+
+// FailCall fails for call node n, whose func was not found.
+func FailCall(c *C, n *ovid/parse.Node) i64 {
+  Fail(c, strptr("call "), strlen("call "))
+  return AddQual(c, n.pkgp, n.pkgn, n.fnp, n.fnn)
+}
+
+// FailIn fails with what followed by the func being emitted, pkg.Name.
+func FailIn(c *C, what i64, whatn i64) i64 {
+  Fail(c, what, whatn)
+  return AddQual(c, c.pathp, c.pathn, c.fn.namep, c.fn.namen)
+}
+
+// FailField fails with "field f on T", for a field fp[0:fnn] that type
+// tp[0:tn] does not have.
+func FailField(c *C, tp i64, tn i64, fp i64, fnn i64) i64 {
+  Fail(c, strptr("field "), strlen("field "))
+  Add(c, fp, fnn)
+  Add(c, strptr(" on "), strlen(" on "))
+  return Add(c, tp, tn)
 }
 
 func Max(a i64, b i64) i64 {
@@ -111,7 +163,7 @@ func PkgConst(c *C, n *ovid/parse.Node) *ovid/parse.Decl {
 func IndexProg(c *C) i64 {
   var k *ovid/parse.Pkg = c.mod.pkgs
   if k == 0 as *ovid/parse.Pkg {
-    return Fail(c, 1)
+    return Fail(c, strptr("no packages"), strlen("no packages"))
   }
   c.locs = ovid/io.Alloc(c.io, MAXLOC * LOCSIZE)
   c.scope = ovid/io.Alloc(c.io, MAXLOC * 8)
@@ -142,7 +194,7 @@ func LocOf(c *C, n *ovid/parse.Node) i64 {
 // blocks share slots.
 func AddLoc(c *C, s *ovid/parse.Node, np i64, nn i64, tp i64, tn i64) i64 {
   if c.nloc >= MAXLOC {
-    return Fail(c, 6)
+    return FailIn(c, strptr("too many locals in "), strlen("too many locals in "))
   }
   var rec i64 = c.locs + (c.nloc * LOCSIZE)
   store64(rec + 0, np)
@@ -342,7 +394,8 @@ func FindType(c *C, tp i64, tn i64) *ovid/parse.Decl {
 func SizeOf(c *C, tp i64, tn i64) i64 {
   var t *ovid/parse.Decl = FindType(c, tp, tn)
   if t == 0 as *ovid/parse.Decl {
-    Fail(c, 4)
+    Fail(c, strptr("sizeof "), strlen("sizeof "))
+    Add(c, tp, tn)
     return -1
   }
   return ovid/parse.CountDecls(t.sub) * 8
@@ -358,7 +411,7 @@ func OffsetOf(c *C, tp i64, tn i64, fp i64, fnn i64) i64 {
     }
   }
   if t == 0 as *ovid/parse.Decl {
-    Fail(c, 4)
+    FailField(c, tp, tn, fp, fnn)
     return -1
   }
   var k i64 = 0
@@ -372,7 +425,7 @@ func OffsetOf(c *C, tp i64, tn i64, fp i64, fnn i64) i64 {
     k = k + 1
     f = f.next
   }
-  Fail(c, 4)
+  FailField(c, tp, tn, fp, fnn)
   return -1
 }
 
@@ -391,7 +444,7 @@ func TypeOf(c *C, n *ovid/parse.Node) i64 {
     return c.err
   }
   if n == 0 as *ovid/parse.Node {
-    return Fail(c, 5)
+    return FailIn(c, strptr("nil expr in "), strlen("nil expr in "))
   }
   var op i64 = n.op
   if LeafOp(op) || ArithOp(op) || op == ovid/parse.OP_NEG || op == ovid/parse.OP_BNOT {
@@ -408,14 +461,14 @@ func TypeOf(c *C, n *ovid/parse.Node) i64 {
       if PkgConst(c, n) != 0 as *ovid/parse.Decl {
         return SetI64(c)
       }
-      return Fail(c, 2)
+      return FailName(c, strptr("const "), strlen("const "), n)
     }
     var loc i64 = LocOf(c, n)
     if loc == 0 {
       if ovid/parse.FindDecl(c.pkg.cs, n.namep, n.namen) != 0 as *ovid/parse.Decl {
         return SetI64(c)
       }
-      return Fail(c, 2)
+      return FailName(c, strptr("name "), strlen("name "), n)
     }
     c.typ = load64(loc + 24)
     c.tyn = load64(loc + 32)
@@ -438,13 +491,13 @@ func TypeOf(c *C, n *ovid/parse.Node) i64 {
   if op == ovid/parse.OP_CALL {
     var fn *ovid/parse.Decl = Callee(c, n, c.pathp, c.pathn)
     if fn == 0 as *ovid/parse.Decl {
-      return Fail(c, 3)
+      return FailCall(c, n)
     }
     c.typ = fn.typp
     c.tyn = fn.typn
     return 0
   }
-  return Fail(c, 5)
+  return FailIn(c, strptr("no type for an expr in "), strlen("no type for an expr in "))
 }
 
 func FieldOff(c *C, base *ovid/parse.Node, fp i64, fnn i64) i64 {
@@ -848,7 +901,7 @@ func ArithRcx(c *C, op i64) i64 {
     ovid/asm.MovRegReg(c.code, 0, 2)
     return 0
   }
-  return Fail(c, 5)
+  return FailIn(c, strptr("bad arith op in "), strlen("bad arith op in "))
 }
 
 // EmitArith evaluates a binary arithmetic node into rax. A side that is an
@@ -976,7 +1029,7 @@ func EmitJump(c *C, n *ovid/parse.Node, lv i64, lab i64, when bool) i64 {
   }
   n = Uncast(n)
   if n == 0 as *ovid/parse.Node {
-    return Fail(c, 5)
+    return FailIn(c, strptr("nil condition in "), strlen("nil condition in "))
   }
   var op i64 = n.op
   if CmpOp(op) {
@@ -1255,10 +1308,11 @@ func EmitArgs(c *C, args *ovid/parse.Node, sys bool, lv i64) i64 {
 func EmitCall(c *C, n *ovid/parse.Node, lv i64) i64 {
   var fn *ovid/parse.Decl = Callee(c, n, c.pathp, c.pathn)
   if fn == 0 as *ovid/parse.Decl {
-    return Fail(c, 3)
+    return FailCall(c, n)
   }
   if ovid/parse.CountNodes(n.args) > 6 {
-    return Fail(c, 6)
+    Fail(c, strptr("arity "), strlen("arity "))
+    return Add(c, n.fnp, n.fnn)
   }
   if EmitArgs(c, n.args, false, lv) != 0 {
     return c.err
@@ -1269,7 +1323,7 @@ func EmitCall(c *C, n *ovid/parse.Node, lv i64) i64 {
 
 func EmitSys(c *C, n *ovid/parse.Node, lv i64) i64 {
   if ovid/parse.CountNodes(n.args) != 7 {
-    return Fail(c, 6)
+    return Fail(c, strptr("syscall arity"), strlen("syscall arity"))
   }
   if EmitArgs(c, n.args, true, lv) != 0 {
     return c.err
@@ -1283,7 +1337,7 @@ func EmitExpr(c *C, n *ovid/parse.Node, lv i64) i64 {
     return c.err
   }
   if n == 0 as *ovid/parse.Node {
-    return Fail(c, 5)
+    return FailIn(c, strptr("nil expr in "), strlen("nil expr in "))
   }
   var op i64 = n.op
   if op == ovid/parse.OP_INT {
@@ -1320,7 +1374,7 @@ func EmitExpr(c *C, n *ovid/parse.Node, lv i64) i64 {
     if n.pkgn != 0 {
       var pc *ovid/parse.Decl = PkgConst(c, n)
       if pc == 0 as *ovid/parse.Decl {
-        return Fail(c, 2)
+        return FailName(c, strptr("const "), strlen("const "), n)
       }
       ovid/asm.MovRegImm(c.code, 0, pc.val)
       return 0
@@ -1339,7 +1393,7 @@ func EmitExpr(c *C, n *ovid/parse.Node, lv i64) i64 {
       ovid/asm.MovRegImm(c.code, 0, con.val)
       return 0
     }
-    return Fail(c, 2)
+    return FailName(c, strptr("name "), strlen("name "), n)
   }
   if ArithOp(op) {
     return EmitArith(c, n, lv)
@@ -1419,7 +1473,7 @@ func EmitExpr(c *C, n *ovid/parse.Node, lv i64) i64 {
     return 0
   }
   if !UnaryOp(op) {
-    return Fail(c, 5)
+    return FailIn(c, strptr("bad expr op in "), strlen("bad expr op in "))
   }
   if EmitExpr(c, n.arg, lv) != 0 {
     return c.err
@@ -1457,7 +1511,12 @@ func EmitStmt(c *C, s *ovid/parse.Node) i64 {
   if op == ovid/parse.OP_VAR || op == ovid/parse.OP_ASSIGN {
     var loc i64 = LocOf(c, s)
     if loc == 0 {
-      return Fail(c, 2)
+      if op == ovid/parse.OP_VAR {
+        Fail(c, strptr("var "), strlen("var "))
+      } else {
+        Fail(c, strptr("assign "), strlen("assign "))
+      }
+      return Add(c, s.namep, s.namen)
     }
     if s.val == 0 as *ovid/parse.Node && op == ovid/parse.OP_VAR {
       // A declaration without a value makes the local zero, each time it
@@ -1535,7 +1594,7 @@ func EmitStmt(c *C, s *ovid/parse.Node) i64 {
     ovid/asm.Mark(c.code, test)
     return EmitJump(c, s.cond, 0, top, true)
   }
-  return Fail(c, 5)
+  return FailIn(c, strptr("bad stmt op in "), strlen("bad stmt op in "))
 }
 
 func EmitFunc(c *C, fn *ovid/parse.Decl) i64 {
@@ -1750,29 +1809,28 @@ func EmitStartup(c *C, mainLab i64) i64 {
 }
 
 // Compile emits the checked module m as a static executable, or returns
-// nil with a code at errp.
+// nil with a *ovid/mem.Buf at errp that says what failed.
 func Compile(io *ovid/io.Cap, m *ovid/parse.Mod, errp i64) *ovid/mem.Buf {
   var z i64 = 0
-  var raw i64 = ovid/io.Alloc(io, sizeof(C))
-  if raw == 0 {
-    store64(errp, 1)
-    return z as *ovid/mem.Buf
-  }
-  var c *C = raw as *C
+  store64(errp, 0)
+  var c *C = ovid/io.Alloc(io, sizeof(C)) as *C
   c.io = io
   c.mod = m
   c.code = ovid/asm.New(io)
   if IndexProg(c) != 0 {
-    store64(errp, c.err)
+    store64(errp, c.msg as i64)
     return z as *ovid/mem.Buf
   }
   var mainFn *ovid/parse.Decl = ovid/parse.FindFunc(m, m.entryp, m.entryn, strptr("main"), strlen("main"))
   if mainFn == 0 as *ovid/parse.Decl {
-    store64(errp, 1)
+    Fail(c, strptr("missing "), strlen("missing "))
+    Add(c, m.entryp, m.entryn)
+    Add(c, strptr(".main"), strlen(".main"))
+    store64(errp, c.msg as i64)
     return z as *ovid/mem.Buf
   }
   if EmitStartup(c, mainFn.lab) != 0 {
-    store64(errp, c.err)
+    store64(errp, c.msg as i64)
     return z as *ovid/mem.Buf
   }
   LiveFrom(c, mainFn)
@@ -1782,7 +1840,7 @@ func Compile(io *ovid/io.Cap, m *ovid/parse.Mod, errp i64) *ovid/mem.Buf {
     while f != 0 as *ovid/parse.Decl {
       if f.live != 0 {
         if EmitFunc(c, f) != 0 {
-          store64(errp, c.err)
+          store64(errp, c.msg as i64)
           return z as *ovid/mem.Buf
         }
       }
@@ -1791,6 +1849,5 @@ func Compile(io *ovid/io.Cap, m *ovid/parse.Mod, errp i64) *ovid/mem.Buf {
     k = k.next
   }
   ovid/asm.Patch(c.code)
-  store64(errp, 0)
   return ovid/elf.Link(io, c.code)
 }
