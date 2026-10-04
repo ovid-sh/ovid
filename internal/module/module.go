@@ -82,7 +82,8 @@ type Module struct {
 	Errors []Diag
 	Index  map[string]*Loc
 	Order  []string
-	hashes map[string]string // filled on first Hash
+	hashes map[string]string // full digests, filled on first Hash
+	modSrc []byte            // ovid.mod as read
 }
 
 // Diag is one error with its location resolved.
@@ -133,6 +134,7 @@ func LoadOverlay(dir string, overlay map[string][]byte) (*Module, error) {
 	if err != nil {
 		return nil, err
 	}
+	m.modSrc = modSrc
 	var stdDir string
 	for _, ln := range strings.Split(string(modSrc), "\n") {
 		f := strings.Fields(ln)
@@ -427,25 +429,52 @@ func (m *Module) Hash(id string) string {
 				seen[k]++
 			}
 			sum := sha256.Sum256([]byte(in))
-			m.hashes[oid] = hex.EncodeToString(sum[:6])
+			m.hashes[oid] = hex.EncodeToString(sum[:])
 		}
 	}
+	if h := m.hashes[id]; h != "" {
+		return h[:12]
+	}
+	return ""
+}
+
+// Digest is the full sha256 that Hash prints the first 12 digits of. The
+// short form guards an edit; this one is wide enough to key a cache.
+func (m *Module) Digest(id string) string {
+	m.Hash(id)
 	return m.hashes[id]
 }
 
-// Revision hashes every module file (not std): path and contents.
-func (m *Module) Revision() string {
+// Revision is the first 16 digits of RevisionDigest: enough to tell an
+// agent that the module moved.
+func (m *Module) Revision() string { return m.RevisionDigest()[:16] }
+
+// RevisionDigest is the sha256 of everything a build of the module reads:
+// ovid.mod, every module file in load order, then every std file that was
+// loaded, sorted by path. Each is hashed as name, NUL, contents, NUL. The
+// self-hosted compiler computes the same value (prog/ovid/parse Revision).
+func (m *Module) RevisionDigest() string {
 	h := sha256.New()
-	for _, f := range m.Files {
-		if strings.HasPrefix(f.Path, "std:") {
-			continue
-		}
-		h.Write([]byte(f.Path))
+	add := func(name string, src []byte) {
+		h.Write([]byte(name))
 		h.Write([]byte{0})
-		h.Write(f.Src)
+		h.Write(src)
 		h.Write([]byte{0})
 	}
-	return hex.EncodeToString(h.Sum(nil)[:8])
+	add("ovid.mod", m.modSrc)
+	var stds []*File
+	for _, f := range m.Files {
+		if strings.HasPrefix(f.Path, "std:") {
+			stds = append(stds, f)
+			continue
+		}
+		add(f.Path, f.Src)
+	}
+	sort.Slice(stds, func(i, j int) bool { return stds[i].Path < stds[j].Path })
+	for _, f := range stds {
+		add(f.Path, f.Src)
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // Where resolves a span to a diag-ready location.

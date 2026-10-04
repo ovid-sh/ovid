@@ -101,7 +101,10 @@ delete above them; an edit to one must carry `expect`.
 A hash is 12 hex digits. A decl's hash covers its text; a statement's or
 expression's also covers its kind, its decl, and which occurrence of that
 text it is, so two identical statements hash differently. `revision`
-(16 hex digits) covers every file of the module.
+(16 hex digits) covers everything a build reads: `ovid.mod`, every file of
+the module, and the files of the shipped packages the module imports, so a
+new toolchain with a changed standard library moves it too. Both are the
+leading digits of a sha256; the tools keep the whole digest internally.
 
 ## Receipts
 

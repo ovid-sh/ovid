@@ -25,6 +25,8 @@ type Mod struct {
   nerr i64
   out *ovid/mem.Buf
   json *ovid/mem.Buf
+  modsrc i64
+  modlen i64
   ftab i64
   fmask i64
   rev i64
@@ -535,23 +537,62 @@ func StdPass(m *Mod) i64 {
   return cnt
 }
 
-// Revision is the first 16 hex digits of sha256 over every module (not std)
-// file: path, NUL, contents, NUL, in package then file order. It is computed
-// on first use: build never prints it.
+// RevAdd appends name, NUL, contents, NUL to the revision's input.
+func RevAdd(m *Mod, b *ovid/mem.Buf, np i64, nn i64, sp i64, sn i64) i64 {
+  ovid/mem.WBytes(m.io, b, np, nn)
+  ovid/mem.WByte(m.io, b, 0)
+  ovid/mem.WBytes(m.io, b, sp, sn)
+  ovid/mem.WByte(m.io, b, 0)
+  return 0
+}
+
+// Revision is the sha256, as 64 hex digits, of everything a build of the
+// module reads: ovid.mod, every module file in package then file order,
+// then every std file that was loaded, sorted by path (std:<pkg>/<file>).
+// Callers print the first 16 digits. It matches RevisionDigest in
+// internal/module. It is computed on first use: build never prints it.
 func Revision(m *Mod) i64 {
   if m.rev != 0 {
     return m.rev
   }
   var b *ovid/mem.Buf = ovid/mem.New(m.io, 1 << 20)
+  RevAdd(m, b, strptr("ovid.mod"), 8, m.modsrc, m.modlen)
   var f *File = m.files
   while f != 0 as *File {
     if f.std == 0 {
-      ovid/mem.WBytes(m.io, b, f.relp, f.reln)
-      ovid/mem.WByte(m.io, b, 0)
-      ovid/mem.WBytes(m.io, b, f.src, f.n)
-      ovid/mem.WByte(m.io, b, 0)
+      RevAdd(m, b, f.relp, f.reln, f.src, f.n)
     }
     f = f.mnext
+  }
+  // The std files in path order: each round takes the smallest path after
+  // the one taken last. There are only a handful.
+  var last *File = 0 as *File
+  var more bool = true
+  while more {
+    var best *File = 0 as *File
+    f = m.files
+    while f != 0 as *File {
+      if f.std != 0 {
+        var after bool = last == 0 as *File
+        if !after {
+          after = Cmp(f.relp, f.reln, last.relp, last.reln) > 0
+        }
+        if after {
+          if best == 0 as *File {
+            best = f
+          } else if Cmp(f.relp, f.reln, best.relp, best.reln) < 0 {
+            best = f
+          }
+        }
+      }
+      f = f.mnext
+    }
+    if best == 0 as *File {
+      more = false
+    } else {
+      RevAdd(m, b, best.relp, best.reln, best.src, best.n)
+      last = best
+    }
   }
   var raw i64 = ovid/io.Alloc(m.io, 32)
   ovid/sha.Sum(m.io, b.data, b.len, raw)
@@ -578,7 +619,9 @@ func Load(io *ovid/io.Cap, dirp i64, dirn i64, stdp i64, stdn i64) *Mod {
     LoadErr(m, strptr("no_module"), 9, 0 as *File, 0, b)
     return m
   }
-  ReadMod(m, load64(pp), load64(pn), stdp, stdn)
+  m.modsrc = load64(pp)
+  m.modlen = load64(pn)
+  ReadMod(m, m.modsrc, m.modlen, stdp, stdn)
   if m.nerr != 0 {
     return m
   }
