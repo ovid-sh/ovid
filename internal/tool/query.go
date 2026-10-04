@@ -332,11 +332,13 @@ func annotate(m *module.Module, root *module.Loc, base int, text string) string 
 	return strings.Join(lines, "\n")
 }
 
-// Ref is one use of a declaration.
+// Ref is one use of a declaration. span is the node that holds it, which
+// refs reports; tok is the name token itself, which rename rewrites.
 type ref struct {
 	id   string
-	kind string // call, field, setfield, name, assign, type, decl
+	kind string // call, field, setfield, name, assign, type, result
 	span ir.Span
+	tok  ir.Span
 	decl string
 }
 
@@ -397,104 +399,41 @@ func usesByPkg(m *module.Module, rs []ref) map[string]int {
 	return out
 }
 
+// findRefs lists the uses of target that the checker resolved to it, in
+// source order. A name the checker resolved elsewhere (a field spelled like
+// a type, a local shadowing a const) is not a use, whatever its spelling.
 func findRefs(m *module.Module, res *check.Result, target *module.Loc) ([]ref, error) {
-	var out []ref
-	full := func(t string, pkg string) string {
-		// Types in the tree are already resolved to pkg.T / *pkg.T.
-		return strings.TrimPrefix(t, "*")
-	}
 	switch target.Kind {
-	case "func":
-		name := target.ID[strings.LastIndex(target.ID, ".")+1:]
-		forEachNode(m, func(pkg *ir.Package, fn *ir.Func, n *ir.Node) {
-			if n.Op != "call" || n.Func != name {
-				return
-			}
-			p := n.Pkg
-			if p == "" {
-				p = pkg.Path
-			}
-			if p == target.Pkg {
-				out = append(out, ref{id: n.ID, kind: "call", span: n.Span, decl: fn.ID})
-			}
-		})
-	case "type":
-		tname := target.Pkg + "." + target.ID[strings.LastIndex(target.ID, ".")+1:]
-		for pi := range m.Prog.Packages {
-			pkg := &m.Prog.Packages[pi]
-			for _, t := range pkg.Types {
-				for _, f := range t.Fields {
-					if full(f.Type, pkg.Path) == tname {
-						out = append(out, ref{id: f.ID, kind: "type", span: f.Span, decl: t.ID})
-					}
-				}
-			}
-			for fi := range pkg.Funcs {
-				fn := &pkg.Funcs[fi]
-				for _, pa := range fn.Params {
-					if full(pa.Type, pkg.Path) == tname {
-						out = append(out, ref{id: pa.ID, kind: "type", span: pa.Span, decl: fn.ID})
-					}
-				}
-				if full(fn.Result, pkg.Path) == tname {
-					out = append(out, ref{id: fn.ID, kind: "result", span: headerSpan(m, fn), decl: fn.ID})
-				}
-			}
-		}
-		forEachNode(m, func(pkg *ir.Package, fn *ir.Func, n *ir.Node) {
-			if (n.Op == "var" || n.Op == "cast" || n.Op == "sizeof") && full(n.Type, pkg.Path) == tname {
-				out = append(out, ref{id: n.ID, kind: "type", span: n.Span, decl: fn.ID})
-			}
-		})
-	case "field":
-		fl := target.Node.(*ir.Field)
-		owner := "*" + strings.TrimPrefix(target.Decl, "ty:")
-		forEachNode(m, func(pkg *ir.Package, fn *ir.Func, n *ir.Node) {
-			if (n.Op == "field" || n.Op == "setfield") && n.Name == fl.Name && res.Types[n.Base.ID] == owner {
-				out = append(out, ref{id: n.ID, kind: n.Op, span: n.Span, decl: fn.ID})
-			}
-		})
-	case "const":
-		cn := target.Node.(*ir.Const)
-		forEachNode(m, func(pkg *ir.Package, fn *ir.Func, n *ir.Node) {
-			if n.Op != "name" || n.Name != cn.Name {
-				return
-			}
-			if (n.Pkg == "" && pkg.Path == target.Pkg && !localNamed(fn, cn.Name)) || n.Pkg == target.Pkg {
-				out = append(out, ref{id: n.ID, kind: "name", span: n.Span, decl: fn.ID})
-			}
-		})
-	case "param":
-		pa := target.Node.(*ir.Param)
-		fn := m.Index[target.Decl].Node.(*ir.Func)
-		for _, st := range fn.Body {
-			st.Walk(func(n *ir.Node) {
-				if (n.Op == "name" || n.Op == "assign") && n.Name == pa.Name {
-					out = append(out, ref{id: n.ID, kind: n.Op, span: n.Span, decl: fn.ID})
-				}
-			})
-		}
+	case "func", "type", "field", "const", "param":
 	case "stmt":
-		n := target.Node.(*ir.Node)
-		if n.Op != "var" {
+		if n := target.Node.(*ir.Node); n.Op != "var" {
 			return nil, fmt.Errorf("refs works on funcs, types, fields, consts, params, and var statements; %s is a %s statement", target.ID, n.Op)
-		}
-		fn := m.Index[target.Decl].Node.(*ir.Func)
-		after := false
-		for _, st := range fn.Body {
-			st.Walk(func(c *ir.Node) {
-				if c == n {
-					after = true
-					return
-				}
-				if after && (c.Op == "name" || c.Op == "assign") && c.Name == n.Name {
-					out = append(out, ref{id: c.ID, kind: c.Op, span: c.Span, decl: fn.ID})
-				}
-			})
 		}
 	default:
 		return nil, fmt.Errorf("refs works on funcs, types, fields, consts, params, and var statements, not %s", target.Kind)
 	}
+	var out []ref
+	for _, u := range res.Uses {
+		if u.Target != target.ID {
+			continue
+		}
+		r := ref{id: u.ID, kind: u.Kind, span: u.Span, tok: u.Span, decl: u.In}
+		if u.Kind == "result" {
+			if l := m.Index[u.ID]; l != nil {
+				r.span = headerSpan(m, l.Node.(*ir.Func))
+			}
+		} else if l := m.Index[u.ID]; l != nil {
+			r.span = l.Span
+		}
+		out = append(out, r)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		a, b := out[i].tok, out[j].tok
+		if a.File != b.File {
+			return a.File < b.File
+		}
+		return a.Off < b.Off
+	})
 	return out, nil
 }
 
@@ -523,16 +462,4 @@ func headerSpan(m *module.Module, fn *ir.Func) ir.Span {
 		end++
 	}
 	return ir.Span{File: fn.Span.File, Off: fn.Span.Off, End: end}
-}
-
-func forEachNode(m *module.Module, f func(pkg *ir.Package, fn *ir.Func, n *ir.Node)) {
-	for pi := range m.Prog.Packages {
-		pkg := &m.Prog.Packages[pi]
-		for fi := range pkg.Funcs {
-			fn := &pkg.Funcs[fi]
-			for _, st := range fn.Body {
-				st.Walk(func(n *ir.Node) { f(pkg, fn, n) })
-			}
-		}
-	}
 }

@@ -12,6 +12,9 @@ import (
 )
 
 // Span is a byte range in one source file. File indexes Program.Files.
+// Declarations and nodes also record the token that spells their name
+// (NameSpan) and the name in each type they spell (TypeSpan, ResultSpan:
+// just T in *path.T), so tools can rewrite a name without scanning text.
 type Span struct {
 	File int
 	Off  int
@@ -43,45 +46,54 @@ type Import struct {
 }
 
 type Const struct {
-	ID    string `json:"id"`
-	Name  string `json:"name"`
-	Type  string `json:"type"`
-	Value int64  `json:"value"`
-	Span  Span   `json:"-"`
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Type     string `json:"type"`
+	Value    int64  `json:"value"`
+	Span     Span   `json:"-"`
+	NameSpan Span   `json:"-"`
 }
 
 type TypeDecl struct {
-	ID     string  `json:"id"`
-	Name   string  `json:"name"`
-	Fields []Field `json:"fields"`
-	Span   Span    `json:"-"`
+	ID       string  `json:"id"`
+	Name     string  `json:"name"`
+	Fields   []Field `json:"fields"`
+	Span     Span    `json:"-"`
+	NameSpan Span    `json:"-"`
 }
 
 type Field struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-	Type string `json:"type"`
-	Span Span   `json:"-"`
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Type     string `json:"type"`
+	Span     Span   `json:"-"`
+	NameSpan Span   `json:"-"`
+	TypeSpan Span   `json:"-"`
 }
 
 type Func struct {
-	ID     string  `json:"id"`
-	Name   string  `json:"name"`
-	Params []Param `json:"params,omitempty"`
-	Result string  `json:"result"`
-	Body   []*Node `json:"body,omitempty"`
-	Span   Span    `json:"-"`
+	ID         string  `json:"id"`
+	Name       string  `json:"name"`
+	Params     []Param `json:"params,omitempty"`
+	Result     string  `json:"result"`
+	Body       []*Node `json:"body,omitempty"`
+	Span       Span    `json:"-"`
+	NameSpan   Span    `json:"-"`
+	ResultSpan Span    `json:"-"`
 }
 
 type Param struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-	Type string `json:"type"`
-	Span Span   `json:"-"`
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Type     string `json:"type"`
+	Span     Span   `json:"-"`
+	NameSpan Span   `json:"-"`
+	TypeSpan Span   `json:"-"`
 }
 
 // Node is a statement or expression. ValK selects the JSON "value" payload:
-// 1 int, 2 bool, 3 string.
+// 1 int, 2 bool, 3 string. For a call, NameSpan is the token of Func. Spans
+// are not part of the JSON form.
 type Node struct {
 	ID    string
 	Op    string
@@ -105,6 +117,9 @@ type Node struct {
 	Else  []*Node
 	Body  []*Node
 	Span  Span
+
+	NameSpan Span
+	TypeSpan Span
 }
 
 func (n *Node) MarshalJSON() ([]byte, error) {
