@@ -270,3 +270,20 @@ func TestCorpusFail(t *testing.T) {
 		})
 	}
 }
+
+// TestCorpusDirectives: a run case with a second exit is refused, while
+// stdout and args add up across lines.
+func TestCorpusDirectives(t *testing.T) {
+	c := corpusCase{
+		files: map[string]string{"demo/main.ov": "// exit: 1\n// stdout: \"a\"\n// stdout: \"b\\n\"\n// args: x\n// args: y z\n"},
+		shown: map[string]string{"demo/main.ov": "run/d.ov"},
+	}
+	w, err := c.runWant()
+	if err != nil || w.exit != 1 || w.stdout != "ab\n" || strings.Join(w.args, ",") != "x,y,z" {
+		t.Fatalf("want exit 1, stdout \"ab\\n\", args x,y,z; got %+v, %v", w, err)
+	}
+	c.files["demo/main.ov"] += "// exit: 2\n"
+	if _, err := c.runWant(); err == nil || err.Error() != "run/d.ov:6: a second exit, after run/d.ov:1" {
+		t.Fatalf("second exit: %v", err)
+	}
+}

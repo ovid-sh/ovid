@@ -571,6 +571,11 @@ func TestNil(io *ovid/io.Cap) i64 {
 `,
 	})
 	var b bytes.Buffer
+	// Listing compiles nothing, so it runs on every host.
+	if code := Test(dir, "", true, &b); code != 0 || last(t, b.String())["count"] != float64(4) {
+		t.Fatalf("list %d %s", code, b.String())
+	}
+	b.Reset()
 	needExec(t)
 	if code := Test(dir, "", false, &b); code != ExitFail {
 		t.Fatalf("code %d %s", code, b.String())
@@ -600,10 +605,6 @@ func TestNil(io *ovid/io.Cap) i64 {
 	s := last(t, b.String())
 	if s["passed"] != float64(1) || s["failed"] != float64(3) {
 		t.Fatalf("summary %v", s)
-	}
-	b.Reset()
-	if code := Test(dir, "", true, &b); code != 0 || last(t, b.String())["count"] != float64(4) {
-		t.Fatalf("list %d %s", code, b.String())
 	}
 }
 
