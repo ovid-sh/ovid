@@ -142,6 +142,9 @@ ovid run [--] [args...]      program stdio and exit code pass through;
 ovid test [--run substr] [--list]
   {"fact":"test",id,ok,exit,ms,output} per test; a failure that returned a
   value adds "returned_by": the return statements that can produce it.
+  A crash adds "signal", "at" (the statement that faulted), "stack" (it and
+  each call leading to it, innermost first), and for a bad load or store
+  "fault_addr"; a hung test reads "signal":"timeout".
   --list prints the tests without running them.
 ovid outline [--pkg P] [--all]
   Per decl: id, kind, sig, file, line, end_line, hash, and when present

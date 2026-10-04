@@ -17,8 +17,22 @@ const heapSize int64 = 128 << 20
 
 // Compile emits a statically linked executable.
 func Compile(p *ir.Program) ([]byte, error) {
+	bin, _, err := CompileMap(p)
+	return bin, err
+}
+
+// Mark says the code from Off (an offset into the code, which starts at
+// elf.CodeVAddr) up to the next mark belongs to the func or statement ID.
+type Mark struct {
+	Off int
+	ID  string
+}
+
+// CompileMap is Compile plus the code map, in increasing Off order, which
+// turns a crash address back into a statement.
+func CompileMap(p *ir.Program) ([]byte, []Mark, error) {
 	if p == nil {
-		return nil, fmt.Errorf("nil program")
+		return nil, nil, fmt.Errorf("nil program")
 	}
 	c := &cg{
 		prog:      p,
@@ -33,7 +47,7 @@ func Compile(p *ir.Program) ([]byte, error) {
 		for _, fn := range pkg.Funcs {
 			key := pkg.Path + "." + fn.Name
 			if _, ok := c.funcLabel[key]; ok {
-				return nil, fmt.Errorf("duplicate func %s", key)
+				return nil, nil, fmt.Errorf("duplicate func %s", key)
 			}
 			c.funcLabel[key] = c.b.NewLabel()
 			var ps []string
@@ -45,10 +59,10 @@ func Compile(p *ir.Program) ([]byte, error) {
 	}
 	mainKey := p.Entry + ".main"
 	if _, ok := c.funcLabel[mainKey]; !ok {
-		return nil, fmt.Errorf("missing %s", mainKey)
+		return nil, nil, fmt.Errorf("missing %s", mainKey)
 	}
 	if err := c.emitStartup(c.funcLabel[mainKey]); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	live := reachable(p, mainKey)
 	for i := range p.Packages {
@@ -58,15 +72,15 @@ func Compile(p *ir.Program) ([]byte, error) {
 				continue
 			}
 			if err := c.emitFunc(pkg, &pkg.Funcs[fi]); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 		}
 	}
 	if err := c.b.PatchRel(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	c.b.PatchAbs(elf.RodataVAddr(len(c.b.Code)))
-	return elf.Link(c.b.Code, c.ro, 0), nil
+	return elf.Link(c.b.Code, c.ro, 0), c.marks, nil
 }
 
 type sig struct {
@@ -88,6 +102,15 @@ type cg struct {
 	epi        int
 	pkg        *ir.Package
 	fn         *ir.Func
+	marks      []Mark
+}
+
+func (c *cg) mark(id string) {
+	if n := len(c.marks); n > 0 && c.marks[n-1].Off == len(c.b.Code) {
+		c.marks[n-1].ID = id
+		return
+	}
+	c.marks = append(c.marks, Mark{len(c.b.Code), id})
 }
 
 func (c *cg) intern(s string) int {
@@ -238,6 +261,7 @@ func (c *cg) emitFunc(pkg *ir.Package, fn *ir.Func) error {
 	}
 	lab := c.funcLabel[pkg.Path+"."+fn.Name]
 	c.b.Mark(lab)
+	c.mark(fn.ID)
 	c.epi = c.b.NewLabel()
 	c.b.PushReg(asm.RBP)
 	c.b.MovRegReg(asm.RBP, asm.RSP)
@@ -255,6 +279,7 @@ func (c *cg) emitFunc(pkg *ir.Package, fn *ir.Func) error {
 	if err := c.emitStmts(fn.Body); err != nil {
 		return err
 	}
+	c.mark(fn.ID)
 	c.b.XorRaxRax()
 	c.b.Mark(c.epi)
 	c.b.MovRegReg(asm.RSP, asm.RBP)
@@ -368,8 +393,13 @@ func (c *cg) emitStmts(stmts []*ir.Node) error {
 		if s == nil {
 			continue
 		}
+		c.mark(s.ID)
 		if err := c.emitStmt(s); err != nil {
 			return err
+		}
+		// Code after a nested block (a loop's jump back) is the statement's.
+		if len(s.Then) > 0 || len(s.Else) > 0 || len(s.Body) > 0 {
+			c.mark(s.ID)
 		}
 	}
 	return nil

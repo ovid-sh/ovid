@@ -1,8 +1,6 @@
 package tool
 
 import (
-	"bytes"
-	"context"
 	"fmt"
 	"io"
 	"os"
@@ -14,6 +12,7 @@ import (
 	"time"
 
 	"ovid/internal/check"
+	"ovid/internal/compile"
 	"ovid/internal/ir"
 	"ovid/internal/module"
 )
@@ -98,42 +97,58 @@ func Test(dir, filter string, list bool, w io.Writer) int {
 	}
 	defer os.RemoveAll(tmpd)
 	bin := filepath.Join(tmpd, "test")
-	if _, err := compileTo(m, prog, bin); err != nil {
+	exe, marks, err := compile.CompileMap(prog)
+	if err == nil {
+		err = os.WriteFile(bin, exe, 0o755)
+	}
+	if err != nil {
 		return fail(w, "compile", err.Error(), "")
 	}
+	outPath := filepath.Join(tmpd, "out")
 	passed, failed := 0, 0
 	for k, t := range tests {
 		args := make([]string, k+1)
 		for i := range args {
 			args[i] = "t"
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
-		cmd := exec.CommandContext(ctx, bin, args...)
-		var out bytes.Buffer
-		cmd.Stdout, cmd.Stderr = &out, &out
+		of, err := os.Create(outPath)
+		if err != nil {
+			return fail(w, "write", err.Error(), "")
+		}
 		t0 := time.Now()
-		err := cmd.Run()
+		pr := runProc(bin, args, of, testTimeout)
 		ms := time.Since(t0).Milliseconds()
-		timedOut := ctx.Err() == context.DeadlineExceeded
-		cancel()
+		of.Close()
+		out, _ := os.ReadFile(outPath)
 		r := map[string]any{"fact": "test", "id": t.id, "ms": ms}
 		if l := m.Index[t.id]; l != nil {
 			file, a, _, _ := m.Where(l.Span)
 			r["file"], r["line"] = file, a.Line
 		}
-		code := 0
-		ok := err == nil
-		if ee, isExit := err.(*exec.ExitError); isExit {
-			code = ee.ExitCode()
-			if sig := signalOf(ee); sig != "" {
-				r["signal"] = sig
-				if timedOut {
-					r["signal"] = "timeout"
-					r["hint"] = fmt.Sprintf("killed after %s", testTimeout)
+		code := pr.code
+		ok := pr.err == nil && pr.exited && code == 0
+		switch {
+		case pr.err != nil:
+			r["error"] = pr.err.Error()
+		case pr.timedOut:
+			r["signal"] = "timeout"
+			r["hint"] = fmt.Sprintf("killed after %s", testTimeout)
+		case !pr.exited:
+			code = -1
+			r["signal"] = pr.signal.String()
+			if st := crashStack(m, marks, pr); len(st) > 0 {
+				r["at"] = st[0]
+				r["stack"] = st
+			}
+			if pr.signal == syscall.SIGFPE {
+				r["hint"] = "an integer / or % by zero (or the most negative i64 / -1)"
+			}
+			if pr.hasAddr {
+				r["fault_addr"] = fmt.Sprintf("%#x", pr.addr)
+				if pr.addr < 4096 {
+					r["hint"] = "a load or store through a null pointer (or a field of one): check for 0 as *T before use"
 				}
 			}
-		} else if err != nil {
-			r["error"] = err.Error()
 		}
 		r["ok"] = ok
 		if !ok {
@@ -147,8 +162,8 @@ func Test(dir, filter string, list bool, w io.Writer) int {
 		} else {
 			passed++
 		}
-		if out.Len() > 0 {
-			s := out.String()
+		if len(out) > 0 {
+			s := string(out)
 			if len(s) > 4000 {
 				s = s[:4000] + "...(truncated)"
 			}

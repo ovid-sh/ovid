@@ -506,6 +506,15 @@ func TestFails(io *ovid/io.Cap) i64 {
 func TestCrash(io *ovid/io.Cap) i64 {
   return 1 / 0
 }
+type P struct {
+  x i64
+}
+func get(p *P) i64 {
+  return p.x
+}
+func TestNil(io *ovid/io.Cap) i64 {
+  return get(0 as *P)
+}
 `,
 	})
 	var b bytes.Buffer
@@ -521,15 +530,24 @@ func TestCrash(io *ovid/io.Cap) i64 {
 	if got["fn:demo.TestTwo"]["ok"] != true || got["fn:demo.TestFails"]["exit"] != float64(3) || got["fn:demo.TestCrash"]["signal"] != "floating point exception" {
 		t.Fatalf("results %v", got)
 	}
+	// A fault names the statement and the calls that led to it.
+	nilT := got["fn:demo.TestNil"]
+	if st, _ := nilT["stack"].([]any); nilT["fault_addr"] != "0x0" || len(st) != 2 ||
+		st[0].(map[string]any)["id"] != "st:demo.get:1" || st[1].(map[string]any)["id"] != "st:demo.TestNil:1" {
+		t.Fatalf("nil crash %v", nilT)
+	}
+	if at, _ := got["fn:demo.TestCrash"]["at"].(map[string]any); at["source"] != "  return 1 / 0" {
+		t.Fatalf("div crash %v", got["fn:demo.TestCrash"])
+	}
 	if rb := got["fn:demo.TestFails"]["returned_by"].([]any); len(rb) != 1 || rb[0].(map[string]any)["source"] != "  return 3" {
 		t.Fatalf("returned_by %v", got["fn:demo.TestFails"])
 	}
 	s := last(t, b.String())
-	if s["passed"] != float64(1) || s["failed"] != float64(2) {
+	if s["passed"] != float64(1) || s["failed"] != float64(3) {
 		t.Fatalf("summary %v", s)
 	}
 	b.Reset()
-	if code := Test(dir, "", true, &b); code != 0 || last(t, b.String())["count"] != float64(3) {
+	if code := Test(dir, "", true, &b); code != 0 || last(t, b.String())["count"] != float64(4) {
 		t.Fatalf("list %d %s", code, b.String())
 	}
 }
