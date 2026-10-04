@@ -1,0 +1,17 @@
+// The decl that comes later in the source is the repeat, whatever its
+// kind: here a type after a func of the same name. A repeated main is not
+// checked against main's signature either.
+package demo
+import ovid/io
+func Later() i64 {
+  return 0
+}
+type Later struct { // error: duplicate_name 1
+  a i64
+}
+func main(io *ovid/io.Cap) i64 {
+  return Later()
+}
+func main() i64 { // error: duplicate_name 1
+  return 0
+}

@@ -95,19 +95,40 @@ func Run(p *ir.Program) *Result {
 	for i := range p.Packages {
 		pkg := &p.Packages[i]
 		c.pkg = pkg
-		seen := map[string]string{}
-		// decl reports whether name is new in the package. A second decl
-		// of a name gets one error, at that decl, and nothing else about
-		// it is checked: its id is the first decl's, so its fields,
-		// params, and statements could only be reported at the wrong place.
+		// first is the decl of each name that comes first in the source,
+		// whatever its kind: consts, types, and funcs share the names.
+		type firstDecl struct {
+			id string
+			at ir.Span
+		}
+		first := map[string]firstDecl{}
+		note := func(id, name string, at ir.Span) {
+			f, ok := first[name]
+			if !ok || at.File < f.at.File || (at.File == f.at.File && at.Off < f.at.Off) {
+				first[name] = firstDecl{id, at}
+			}
+		}
+		for _, cn := range pkg.Consts {
+			note(cn.ID, cn.Name, cn.Span)
+		}
+		for _, t := range pkg.Types {
+			note(t.ID, t.Name, t.Span)
+		}
+		for fi := range pkg.Funcs {
+			note(pkg.Funcs[fi].ID, pkg.Funcs[fi].Name, pkg.Funcs[fi].Span)
+		}
+		// decl reports whether this is the first decl of name in the
+		// package. A later one gets one error, at that decl, and nothing
+		// else about it is checked: its id may be the first decl's, so its
+		// fields, params, and statements could be reported at the wrong
+		// place.
 		decl := func(id, name string, at ir.Span) bool {
-			if prev, ok := seen[name]; ok {
+			if f := first[name]; f.at != at {
 				c.issue(Issue{Code: "duplicate_name", ID: id, At: &at,
-					Message: fmt.Sprintf("%s is already declared in package %s (%s)", name, pkg.Path, prev)})
+					Message: fmt.Sprintf("%s is already declared in package %s (%s)", name, pkg.Path, f.id)})
 				return false
 			}
 			claim(id)
-			seen[name] = id
 			return true
 		}
 		iseen := map[string]bool{}
@@ -243,7 +264,8 @@ func (c *checker) checkEntry(p *ir.Program) {
 	}
 	var main *ir.Func
 	for i := range ep.Funcs {
-		if ep.Funcs[i].Name == "main" {
+		// A repeated main is already reported and not checked further.
+		if ep.Funcs[i].Name == "main" && !c.dup[&ep.Funcs[i]] {
 			main = &ep.Funcs[i]
 		}
 	}

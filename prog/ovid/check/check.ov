@@ -825,6 +825,12 @@ func CheckMain(c *Ch) i64 {
     return 0
   }
   var fn *ovid/parse.Decl = ovid/parse.FindDecl(k.fs, strptr("main"), strlen("main"))
+  if fn != 0 as *ovid/parse.Decl {
+    // A main that repeats an earlier name is reported and not checked.
+    if fn.dup != 0 {
+      fn = 0 as *ovid/parse.Decl
+    }
+  }
   if fn == 0 as *ovid/parse.Decl {
     HereDecl(c, H_PKG, k, 0 as *ovid/parse.Decl, 0 as *ovid/parse.Decl)
     Err(c, strptr("bad_main"), strlen("bad_main"), strptr("entry package has no main"), strlen("entry package has no main"))
@@ -917,12 +923,40 @@ func CountIds(m *ovid/parse.Mod) i64 {
 // that decl, and nothing else about it is checked: not a repeated type's
 // fields, nor a repeated func's params, result, or body.
 
+// Before reports whether e is a decl that comes before d in the source: in
+// a file of the package that sorts earlier, or earlier in the same file.
+func Before(e *ovid/parse.Decl, d *ovid/parse.Decl) bool {
+  if e == 0 as *ovid/parse.Decl {
+    return false
+  }
+  var ef *ovid/parse.File = e.file
+  var df *ovid/parse.File = d.file
+  if ef == df {
+    return e.off < d.off
+  }
+  return ovid/parse.Cmp(ef.relp, ef.reln, df.relp, df.reln) < 0
+}
+
+// Taken claims the id of the const, type, or func d, which the checker is
+// at, and reports whether d repeats a name: an earlier decl of its kind has
+// its id, or a decl of the same name in a or b, the package's lists of the
+// other two kinds, comes before it.
+func Taken(c *Ch, d *ovid/parse.Decl, a *ovid/parse.Decl, b *ovid/parse.Decl) bool {
+  if Claim(c) != 0 {
+    return true
+  }
+  if Before(ovid/parse.FindDecl(a, d.namep, d.namen), d) {
+    return true
+  }
+  return Before(ovid/parse.FindDecl(b, d.namep, d.namen), d)
+}
+
 // Consts claims the ids of package k's consts.
 func Consts(c *Ch, k *ovid/parse.Pkg) i64 {
   var d *ovid/parse.Decl = k.cs
   while d != 0 as *ovid/parse.Decl {
     HereDecl(c, H_CONST, k, d, 0 as *ovid/parse.Decl)
-    if Claim(c) != 0 {
+    if Taken(c, d, k.ts, k.fs) {
       Err(c, strptr("duplicate_name"), strlen("duplicate_name"), d.namep, d.namen)
     }
     d = d.next
@@ -936,11 +970,7 @@ func Types(c *Ch, k *ovid/parse.Pkg) i64 {
   var t *ovid/parse.Decl = k.ts
   while t != 0 as *ovid/parse.Decl {
     HereDecl(c, H_TYPE, k, t, 0 as *ovid/parse.Decl)
-    var taken bool = Claim(c) != 0
-    if !taken {
-      taken = ovid/parse.FindDecl(k.cs, t.namep, t.namen) != 0 as *ovid/parse.Decl
-    }
-    if taken {
+    if Taken(c, t, k.cs, k.fs) {
       Err(c, strptr("duplicate_name"), strlen("duplicate_name"), t.namep, t.namen)
     } else {
       var f *ovid/parse.Decl = t.sub
@@ -966,14 +996,7 @@ func Funcs(c *Ch, k *ovid/parse.Pkg) i64 {
   var fn *ovid/parse.Decl = k.fs
   while fn != 0 as *ovid/parse.Decl {
     HereDecl(c, H_FUNC, k, fn, fn)
-    var taken bool = Claim(c) != 0
-    if !taken {
-      taken = ovid/parse.FindDecl(k.cs, fn.namep, fn.namen) != 0 as *ovid/parse.Decl
-    }
-    if !taken {
-      taken = ovid/parse.FindDecl(k.ts, fn.namep, fn.namen) != 0 as *ovid/parse.Decl
-    }
-    if taken {
+    if Taken(c, fn, k.cs, k.ts) {
       Err(c, strptr("duplicate_name"), strlen("duplicate_name"), fn.namep, fn.namen)
       fn.dup = 1
     } else {
