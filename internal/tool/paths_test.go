@@ -19,6 +19,12 @@ func TestModuleRelativePaths(t *testing.T) {
 		"demo/main.ov": "package demo\nimport ovid/io\nfunc Two() i64 {\n  return 2\n}\nfunc main(io *ovid/io.Cap) i64 {\n  return Two()\n}\n",
 		"demo/bad.ov":  "package demo\nfunc Bad() i64 {\n  return true\n}\n",
 	})
+	// The working directory is reported with symlinks resolved (/var is one
+	// on macOS), so name the module the same way for the default mode.
+	dir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
 	wd, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
