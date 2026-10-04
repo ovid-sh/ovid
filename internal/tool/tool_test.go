@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"debug/elf"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
+	"ovid/internal/module"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -729,6 +732,43 @@ func TestEditOne(t *testing.T) {
 	}
 	if out, code := buildRunDir(t, dir); code != 1 || out != "a \"b\"\n" {
 		t.Fatalf("exit %d out %q", code, out)
+	}
+}
+
+// TestConcurrentEdits: writers that touch the same file run one after
+// another under the module lock, so none of their changes is lost.
+func TestConcurrentEdits(t *testing.T) {
+	dir := mkmod(t, demo("package demo\n\nimport ovid/io\n\nfunc main(io *ovid/io.Cap) i64 {\n  return 0\n}\n"))
+	const n = 40
+	codes := make([]int, n)
+	outs := make([]bytes.Buffer, n)
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			op := EditOp{Op: "append", Into: "demo", Text: fmt.Sprintf("func F%d() i64 {\n  return %d\n}", i, i)}
+			codes[i] = runEdit(dir, &EditReq{Ops: []EditOp{op}}, EditOpts{}, &outs[i])
+		}(i)
+	}
+	wg.Wait()
+	for i, c := range codes {
+		if c != 0 {
+			t.Fatalf("writer %d: %d %s", i, c, outs[i].String())
+		}
+	}
+	m, err := module.Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := 0
+	for _, p := range m.Prog.Packages {
+		if p.Path == "demo" {
+			got = len(p.Funcs)
+		}
+	}
+	if got != n+1 {
+		t.Fatalf("%d funcs after %d appends; want %d", got, n, n+1)
 	}
 }
 

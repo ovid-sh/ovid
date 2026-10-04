@@ -91,6 +91,11 @@ func nextByte(src []byte, off int) byte {
 // Rename renames a declaration and every use of it, token by token. It
 // refuses names that collide and changes that add check errors.
 func Rename(dir, q, to string, dryRun bool, w io.Writer) int {
+	unlock, err := lockModule(dir)
+	if err != nil {
+		return fail(w, "load", err.Error(), "")
+	}
+	defer unlock()
 	m, err := load(dir)
 	if err != nil {
 		return fail(w, "load", err.Error(), "")

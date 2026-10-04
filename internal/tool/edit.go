@@ -134,6 +134,11 @@ func EditOne(dir string, op EditOp, textFrom string, o EditOpts, w io.Writer) in
 }
 
 func runEdit(dir string, req *EditReq, o EditOpts, w io.Writer) int {
+	unlock, err := lockModule(dir)
+	if err != nil {
+		return fail(w, "load", err.Error(), "")
+	}
+	defer unlock()
 	m, err := load(dir)
 	if err != nil {
 		return fail(w, "load", err.Error(), "")
@@ -171,6 +176,12 @@ func runEdit(dir string, req *EditReq, o EditOpts, w io.Writer) int {
 
 // applySplices applies text splices, reparses, checks, and writes.
 func applySplices(w io.Writer, dir string, m *module.Module, sps []*splice, ops []EditOp, dryRun bool, guard int, show bool, extra map[string]any) int {
+	loaded := map[string][]byte{}
+	for _, f := range m.Files {
+		if f.Abs != "" {
+			loaded[f.Abs] = f.Src
+		}
+	}
 	byFile := map[string][]*splice{}
 	for _, s := range sps {
 		byFile[s.abs] = append(byFile[s.abs], s)
@@ -185,13 +196,10 @@ func applySplices(w io.Writer, dir string, m *module.Module, sps []*splice, ops 
 					"split them into separate edits, or replace the enclosing node once")
 			}
 		}
-		var old []byte
-		if !list[0].isNew {
-			b, err := os.ReadFile(abs)
-			if err != nil {
-				return fail(w, "read", err.Error(), "")
-			}
-			old = b
+		// Splice the bytes the plan was made from, not a fresh read.
+		old, known := loaded[abs]
+		if !list[0].isNew && !known {
+			return fail(w, "read", abs+" is not a file of this module", "")
 		}
 		var out []byte
 		prev := 0
@@ -236,6 +244,15 @@ func applySplices(w io.Writer, dir string, m *module.Module, sps []*splice, ops 
 		return ExitFail
 	}
 	if !dryRun {
+		// Ovid writers are serialized by the module lock; this catches an
+		// editor or script that changed a file while the edit was planned.
+		for _, abs := range changed {
+			if now, err := os.ReadFile(abs); err == nil && string(now) != string(loaded[abs]) {
+				emit(w, map[string]any{"ok": false, "error": "stale", "message": rel(m, abs) + " changed on disk while the edit ran; nothing was written",
+					"hint": "run the edit again; ids and hashes are read fresh each time"})
+				return ExitStale
+			}
+		}
 		if done, err := module.WriteFiles(overlay, 0); err != nil {
 			var files []string
 			for _, abs := range done {

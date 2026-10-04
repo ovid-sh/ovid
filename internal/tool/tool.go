@@ -54,6 +54,14 @@ type checked struct {
 	diags []module.Diag
 }
 
+// lockModule takes the module's write lock; see module.Lock.
+func lockModule(dir string) (func(), error) {
+	if dir == "" {
+		dir = "."
+	}
+	return module.Lock(dir)
+}
+
 func load(dir string) (*module.Module, error) {
 	if dir == "" {
 		dir = "."

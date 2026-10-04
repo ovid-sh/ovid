@@ -21,6 +21,16 @@ import (
 // files gain the imports they now need. Like rename, it refuses a change
 // that adds check errors.
 func Move(dir, q, to, file string, dryRun bool, w io.Writer) int {
+	unlock, err := lockModule(dir)
+	if err != nil {
+		return fail(w, "load", err.Error(), "")
+	}
+	defer unlock()
+	return move(dir, q, to, file, dryRun, w)
+}
+
+// move is Move with the module lock already held.
+func move(dir, q, to, file string, dryRun bool, w io.Writer) int {
 	m, err := load(dir)
 	if err != nil {
 		return fail(w, "load", err.Error(), "")
@@ -358,8 +368,13 @@ func pkgsUsed(l *module.Loc) []string {
 // move or the module's .ov files are put back as they were; dry-run moves
 // for real and then restores, so later moves see earlier ones.
 func MoveMany(dir string, qs []string, to, file string, dryRun bool, w io.Writer) int {
+	unlock, err := lockModule(dir)
+	if err != nil {
+		return fail(w, "load", err.Error(), "")
+	}
+	defer unlock()
 	if len(qs) == 1 {
-		return Move(dir, qs[0], to, file, dryRun, w)
+		return move(dir, qs[0], to, file, dryRun, w)
 	}
 	m, err := load(dir)
 	if err != nil {
@@ -371,7 +386,7 @@ func MoveMany(dir string, qs []string, to, file string, dryRun bool, w io.Writer
 	}
 	var moved []string
 	for _, q := range qs {
-		if code := Move(dir, q, to, file, false, w); code != ExitOK {
+		if code := move(dir, q, to, file, false, w); code != ExitOK {
 			if rerr := restoreOv(m.Root, snap); rerr != nil {
 				return fail(w, "restore", rerr.Error(), "the module may be half-moved; check git status")
 			}
