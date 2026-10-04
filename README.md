@@ -119,6 +119,14 @@ go test ./...
 or diagnostics written as comments; add a test by adding a file. See
 [tests/README.md](tests/README.md).
 
+`tests/agent/` is an exercise for agents: tasks with goals a program
+checks, from writing a small program to recovering from a stale edit. `go
+test` checks that the reference solutions meet them;
+`go run ./tests/agent/run` gives the tasks to a model and records how it
+did. Re-run it when a command's output or defaults change, and record the
+results in `docs/AGENT_FEEDBACK.md`. See
+[tests/agent/README.md](tests/agent/README.md).
+
 ## Not yet
 
 No HTTP client, no URL imports, no package
