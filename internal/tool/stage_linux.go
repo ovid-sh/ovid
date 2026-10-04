@@ -9,7 +9,10 @@ import (
 	"unsafe"
 )
 
-const sysMemfdCreate = 319
+const (
+	sysMemfdCreate = 319
+	mfdCloexec     = 1
+)
 
 // stageInMemory puts exe in an anonymous in-memory file. The child execs
 // it by its descriptor's /proc path, so this needs /proc; it returns nil
@@ -22,7 +25,9 @@ func stageInMemory(exe []byte, name string, fd int) *staged {
 	if err != nil {
 		return nil
 	}
-	r, _, e := syscall.Syscall(sysMemfdCreate, uintptr(unsafe.Pointer(n)), 0, 0)
+	// Close-on-exec: the child gets the program only as the descriptor it
+	// is handed, and no other process started meanwhile inherits it.
+	r, _, e := syscall.Syscall(sysMemfdCreate, uintptr(unsafe.Pointer(n)), mfdCloexec, 0)
 	if e != 0 {
 		return nil
 	}

@@ -74,8 +74,8 @@ func TestTestWithoutTempDir(t *testing.T) {
 	}
 }
 
-// TestStageInMemory: without a directory the program is held in memory and
-// named by the descriptor the child will have it on.
+// TestStageInMemory: without a directory the program is held in memory,
+// named by the descriptor the child will have it on, and not inheritable.
 func TestStageInMemory(t *testing.T) {
 	if _, err := os.Stat("/proc/self/fd"); err != nil {
 		t.Skip("no /proc to execute a program in memory through")
@@ -87,6 +87,12 @@ func TestStageInMemory(t *testing.T) {
 	defer st.done()
 	if st.path != "/proc/self/fd/5" || st.extra == nil {
 		t.Fatalf("%+v", st)
+	}
+	// This descriptor must not leak into the program or anything else
+	// started meanwhile; the child gets its own copy as fd 5.
+	fl, _, e := syscall.Syscall(syscall.SYS_FCNTL, st.extra.Fd(), syscall.F_GETFD, 0)
+	if e != 0 || fl&syscall.FD_CLOEXEC == 0 {
+		t.Fatalf("the in-memory program's descriptor is inheritable: flags %#x, %v", fl, e)
 	}
 }
 
