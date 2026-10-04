@@ -59,13 +59,20 @@ the working directory. `ovid help commands`, `ovid help edit`, and
 is the contract they share: exit codes, error codes, and receipts.
 
 An edit names nodes by id (`fn:pkg.Name`, `st:pkg.Func:3`, ...; see
-`ovid help ids`) or by name (`Sum`, `util.Sum`, `Pair.next`), and may carry the hash that
-`outline`/`show` printed. If that node's text has changed since it was read,
-the edit is refused with exit 2 and the current text, so concurrent agents
-only conflict when they touch the same code. After applying, the module is
-reparsed and checked in memory. An edit that adds check errors is refused
-unless it passes `--allow-broken`; `--require-clean` also refuses one that
-leaves any, and `--dry-run` never writes.
+`ovid help ids`) or by name (`Sum`, `util.Sum`, `Pair.next`), and may carry
+the hash that `outline`/`show` printed. If that node's text has changed
+since it was read, the edit is refused with exit 2 and the current text.
+Statement and expression ids are positions that an insert renumbers, so an
+edit to one must carry a hash. After applying, the module is reparsed and
+checked in memory. An edit that adds check errors is refused unless
+`--allow-broken` is given; `--require-clean` also refuses one that leaves
+any, and `--dry-run` never writes.
+
+Agents can share a module. On Unix, writers take a lock on `ovid.mod` and
+run one at a time, and files are replaced atomically, so no edit is lost to
+another. The lock does not make a stale read safe: when two agents read the
+same code and both change it, only the hash catches the second one (exit 2,
+re-read), so pass it even where it is optional.
 
 ## Language, briefly
 
