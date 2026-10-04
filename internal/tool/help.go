@@ -279,7 +279,7 @@ show <stmt> lists them with ids and hashes).
 
 A func's, type's, or const's doc comment (the // lines directly above it,
 no blank line between) is part of it, as ovid show prints it: replace puts
-the text's own doc comment in its place, so text without one removes it;
+the text's own doc comment in its place, and text without one keeps it;
 delete removes it; insert before puts the new text above it.
 
 After applying, the module is reparsed (a syntax error rejects everything

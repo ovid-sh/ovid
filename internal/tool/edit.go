@@ -611,10 +611,14 @@ func planOp(m *module.Module, i int, op EditOp, force, rev bool) ([]*splice, *ed
 	block := l.Kind == "stmt" || l.Kind == "func" || l.Kind == "type" || l.Kind == "const" || l.Kind == "import"
 	decl := l.Kind == "func" || l.Kind == "type" || l.Kind == "const"
 	// A decl's doc comment is part of it (Full): replace swaps it for the
-	// new text's, or drops it if the text has none, and delete removes it.
+	// new text's, or keeps it when the text brings none, and delete
+	// removes it.
 	switch op.Op {
 	case "replace":
 		sp.off, sp.end = l.Full.Off, l.Full.End
+		if decl && !startsWithComment(op.Text) {
+			sp.off = l.Span.Off
+		}
 		sp.text = reindent(op.Text, ind, false)
 	case "delete":
 		sp.off, sp.end = l.Full.Off, l.Full.End
@@ -753,6 +757,12 @@ func lineAfter(src []byte, off int) int {
 }
 
 // ownsLines reports whether nothing but blanks shares the span's lines.
+// startsWithComment reports whether a decl's new text opens with a //
+// comment, which then replaces the old doc comment.
+func startsWithComment(text string) bool {
+	return strings.HasPrefix(strings.TrimLeft(text, " \t\r\n"), "//")
+}
+
 func ownsLines(src []byte, s ir.Span) bool {
 	b := lineBegin(src, s.Off)
 	if strings.TrimSpace(string(src[b:s.Off])) != "" {

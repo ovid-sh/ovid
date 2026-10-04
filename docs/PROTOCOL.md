@@ -195,8 +195,9 @@ func, type, or const begins at its **doc comment**: the unbroken run of
 `//` lines directly above it (a blank line ends the run, so a comment
 separated from the decl by one belongs to nothing). It is what `show`
 prints (with `doc_line` and `doc` in `--json`; `line` stays the decl's own
-first line), what `replace` swaps (the new text's doc comment takes the old
-one's place, so text without one removes it), and what `delete` removes;
+first line), what `replace` swaps (text that opens with a `//` comment
+puts it in the old one's place; text with none keeps the old one, so an
+agent fixing a body does not lose its doc), and what `delete` removes;
 `insert --before` lands above it. A statement's or
 expression's covers its kind, its text, which occurrence of that text in
 its decl it is (so two identical statements hash differently), and the

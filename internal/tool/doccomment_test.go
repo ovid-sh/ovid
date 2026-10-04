@@ -55,7 +55,7 @@ func wantFile(t *testing.T, dir, want string) {
 
 // TestDocCommentReplace: replace swaps the doc comment with the decl's
 // text: the new text's comment takes the old one's place, and text with
-// none removes it (#24).
+// none keeps the old one, so fixing a body does not drop its doc (#24).
 func TestDocCommentReplace(t *testing.T) {
 	dir := mkmod(t, demo(docSrc))
 	r := docEdit(t, dir, EditOp{Op: "replace", ID: "G", Text: "// G returns two.\nfunc G() i64 {\n  return 2\n}"})
@@ -69,7 +69,7 @@ func TestDocCommentReplace(t *testing.T) {
 	docEdit(t, dir, EditOp{Op: "replace", ID: "H", Text: "func H() i64 {\n  return 3\n}"})
 	wantFile(t, dir, strings.Replace(
 		strings.Replace(docSrc, "// G returns one.\nfunc G() i64 {\n  return 1\n}", "// G returns two.\nfunc G() i64 {\n  return 2\n}", 1),
-		"// H returns zero.\n// It is never more.\nfunc H() i64 {\n  return 0\n}", "func H() i64 {\n  return 3\n}", 1))
+		"// H returns zero.\n// It is never more.\nfunc H() i64 {\n  return 0\n}", "// H returns zero.\n// It is never more.\nfunc H() i64 {\n  return 3\n}", 1))
 
 	// A comment a blank line above is not K's, so replacing K keeps it.
 	dir = mkmod(t, demo(docSrc))
