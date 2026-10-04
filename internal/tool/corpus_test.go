@@ -221,6 +221,50 @@ func (c *corpusCase) wantErrs() ([]wantErr, error) {
 	return ws, nil
 }
 
+// diag is one reported error, its file made module-relative.
+type diag struct {
+	Fact, Code, Message, File string
+	Line, Col                 int
+	Expected, Got, Hint       string
+}
+
+// attrs is d's optional fields, written as a comment gives them.
+func attrs(d diag) string {
+	s := ""
+	for _, kv := range [][2]string{{"expected", d.Expected}, {"got", d.Got}, {"hint", d.Hint}} {
+		if kv[1] != "" {
+			s += fmt.Sprintf(" %s=%q", kv[0], kv[1])
+		}
+	}
+	return s
+}
+
+// diags reads the errors out of a check's JSON lines.
+func (c *corpusCase) diags(t *testing.T, out string) []diag {
+	t.Helper()
+	var got []diag
+	for _, ln := range strings.Split(strings.TrimSpace(out), "\n") {
+		var d diag
+		if err := json.Unmarshal([]byte(ln), &d); err != nil {
+			t.Fatalf("not JSON: %q", ln)
+		}
+		if d.Fact == "truncated" {
+			t.Fatalf("tests/%s: more than %d errors", c.name, maxErrors)
+		}
+		if d.Fact == "error" {
+			// Diagnostics name files relative to the working
+			// directory; make them module-relative like wants.
+			if abs, err := filepath.Abs(d.File); err == nil {
+				if rel, err := filepath.Rel(c.root, abs); err == nil && c.files[filepath.ToSlash(rel)] != "" {
+					d.File = filepath.ToSlash(rel)
+				}
+			}
+			got = append(got, d)
+		}
+	}
+	return got
+}
+
 // TestCorpusFail checks every program of tests/fail: the diagnostics must be
 // exactly the ones its "// error:" comments name.
 func TestCorpusFail(t *testing.T) {
@@ -235,41 +279,7 @@ func TestCorpusFail(t *testing.T) {
 			}
 			var b bytes.Buffer
 			Check(c.root, false, &b)
-			type diag struct {
-				Fact, Code, Message, File string
-				Line, Col                 int
-				Expected, Got, Hint       string
-			}
-			// attrs is d's optional fields, written as a comment gives them.
-			attrs := func(d diag) string {
-				s := ""
-				for _, kv := range [][2]string{{"expected", d.Expected}, {"got", d.Got}, {"hint", d.Hint}} {
-					if kv[1] != "" {
-						s += fmt.Sprintf(" %s=%q", kv[0], kv[1])
-					}
-				}
-				return s
-			}
-			var got []diag
-			for _, ln := range strings.Split(strings.TrimSpace(b.String()), "\n") {
-				var d diag
-				if err := json.Unmarshal([]byte(ln), &d); err != nil {
-					t.Fatalf("not JSON: %q", ln)
-				}
-				if d.Fact == "truncated" {
-					t.Fatalf("tests/%s: more than %d errors", c.name, maxErrors)
-				}
-				if d.Fact == "error" {
-					// Diagnostics name files relative to the working
-					// directory; make them module-relative like wants.
-					if abs, err := filepath.Abs(d.File); err == nil {
-						if rel, err := filepath.Rel(c.root, abs); err == nil && c.files[filepath.ToSlash(rel)] != "" {
-							d.File = filepath.ToSlash(rel)
-						}
-					}
-					got = append(got, d)
-				}
-			}
+			got := c.diags(t, b.String())
 			var diff []string
 			met := make([]bool, len(wants))
 			for _, d := range got {
