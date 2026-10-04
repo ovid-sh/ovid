@@ -69,7 +69,9 @@ func Alloc(io *Cap, n i64) i64 {
 // Map returns n fresh zeroed bytes from the kernel (mmap, private and
 // anonymous), or ends the program when there is no memory. The mapping is
 // not reserved (MAP_NORESERVE, 0x4000): it is address space until it is
-// touched, so a host with less memory than a region still grants it.
+// touched, so under the kernel's default overcommit heuristic a host with
+// less memory than a region can still grant it. Strict overcommit
+// (vm.overcommit_memory=2) ignores the flag, and other limits still apply.
 func Map(n i64) i64 {
   var p i64 = syscall(SYS_MMAP, 0, n, 3, 0x4022, -1, 0)
   if p < 0 && p > -4096 {

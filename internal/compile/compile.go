@@ -176,8 +176,9 @@ func (c *cg) emitStartup(mainLab int) error {
 	c.b.MovRegImm64(asm.RSI, heapSize)
 	c.b.MovRegImm64(asm.RDX, 3)
 	// MAP_PRIVATE|MAP_ANONYMOUS|MAP_NORESERVE: the heap is address space
-	// until it is touched, so it must not count against the overcommit limit
-	// of a host with less memory than the heap.
+	// until it is touched, so under the kernel's default overcommit
+	// heuristic it does not count against a host with less memory than the
+	// heap. Strict overcommit (vm.overcommit_memory=2) ignores the flag.
 	c.b.MovRegImm64(asm.R10, 0x4022)
 	c.b.MovRegImm64(asm.R8, -1)
 	c.b.MovRegImm64(asm.R9, 0)
