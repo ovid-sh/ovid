@@ -50,7 +50,7 @@ The Go pipeline, one package per stage under `internal/`:
 
 ### Two compilers that must stay identical
 
-`prog/ovid/{parse,check,cg,asm,elf}` mirror `internal/{syntax,check,compile,asm,elf}` (plus `json`, `sha`, `cli`). `TestSelfHost` requires the two to emit **byte-identical** binaries for the same source and compares the self-hosted checker's diagnostics. So a change to the language, the checker's diagnostics, codegen, the assembler, or the ELF layout must be made in both `internal/` and `prog/`, and `std/` changes affect both. The README also describes the language and commands and states the self-hosted compiler's size; keep it in step.
+`prog/ovid/{parse,check,cg,asm,elf}` mirror `internal/{syntax,check,compile,asm,elf}` (plus `json`, `sha`, `cli`). `TestSelfHost` requires the two to emit **byte-identical** binaries for the same source and compares the self-hosted checker's diagnostics. So a change to the language, the checker's diagnostics, codegen, the assembler, or the ELF layout must be made in both `internal/` and `prog/`, and `std/` changes affect both. The README also describes the language and commands; keep it in step. It gives the self-hosted compiler's size and build time only roughly and dated: do not update them for an ordinary change, since every PR editing that line conflicts with every other. Exact numbers belong to the bench (#11).
 
 ### The output contract
 
