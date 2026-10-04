@@ -1,0 +1,9 @@
+package demo
+
+import ovid/io
+
+// A var's value is checked before its name is in scope.
+func main(io *ovid/io.Cap) i64 {
+  var x i64 = x // error: unknown_name
+  return x
+}

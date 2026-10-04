@@ -282,6 +282,12 @@ func Define(c *Ch, np i64, nn i64, tp i64, tn i64) i64 {
   if Lookup(c, np, nn) != 0 {
     Err(c, strptr("duplicate_name"), strlen("duplicate_name"), np, nn)
   }
+  return Bind(c, np, nn, tp, tn)
+}
+
+// Bind puts np[0:nn] of type tp[0:tn] in scope, without Define's check
+// for a name already there.
+func Bind(c *Ch, np i64, nn i64, tp i64, tn i64) i64 {
   if c.nenv >= 4096 {
     return 0
   }
@@ -716,11 +722,15 @@ func CheckStmt(c *Ch, s *ovid/parse.Node) i64 {
     } else if kind == 1 {
       Err(c, strptr("struct_value"), strlen("struct_value"), s.namep, s.namen)
     }
-    Define(c, s.namep, s.namen, tp, tn)
+    if Lookup(c, s.namep, s.namen) != 0 {
+      Err(c, strptr("duplicate_name"), strlen("duplicate_name"), s.namep, s.namen)
+    }
+    // The value is checked before the name is in scope, as in codegen.
     if s.val != 0 as *ovid/parse.Node {
       CheckExpr(c, s.val)
       NeedTy(c, tp, tn, s.namep, s.namen)
     }
+    Bind(c, s.namep, s.namen, tp, tn)
     return 0
   }
   if op == ovid/parse.OP_ASSIGN {
