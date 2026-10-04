@@ -104,6 +104,7 @@ func directive(line, key string) (string, bool) {
 
 func (c *corpusCase) runWant() (runWant, error) {
 	var w runWant
+	exitAt := ""
 	for _, rel := range c.sortedFiles() {
 		for i, line := range strings.Split(c.files[rel], "\n") {
 			at := fmt.Sprintf("%s:%d", c.shown[rel], i+1)
@@ -112,7 +113,10 @@ func (c *corpusCase) runWant() (runWant, error) {
 				if err != nil {
 					return w, fmt.Errorf("%s: exit wants a number, got %q", at, v)
 				}
-				w.exit = n
+				if exitAt != "" {
+					return w, fmt.Errorf("%s: a second exit, after %s", at, exitAt)
+				}
+				w.exit, exitAt = n, at
 			} else if v, ok := directive(line, "stdout"); ok {
 				s, err := strconv.Unquote(v)
 				if err != nil {
@@ -130,7 +134,6 @@ func (c *corpusCase) runWant() (runWant, error) {
 // TestCorpusRun builds every program of tests/run and, where the host can
 // execute the result, checks its exit code and stdout.
 func TestCorpusRun(t *testing.T) {
-	canExec := runtime.GOOS == "linux" && runtime.GOARCH == "amd64"
 	for _, c := range corpus(t, "run") {
 		t.Run(c.name, func(t *testing.T) {
 			want, err := c.runWant()
