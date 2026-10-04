@@ -343,8 +343,24 @@ func (m *Module) diagAt(file, off, end int, code, msg, hint string) Diag {
 		Line: a.Line, Col: a.Col, EndLine: b.Line, EndCol: b.Col, Source: f.Line(a.Line)}
 }
 
-// DisplayPath is the path an agent can open: relative to the cwd when possible.
+// PathsEnv selects what the paths in records are relative to: unset or
+// "cwd", the working directory; "module", the module root.
+const PathsEnv = "OVID_PATHS"
+
+// DisplayPath is the path an agent can open: relative to the cwd when
+// possible. With OVID_PATHS=module it is relative to the module root
+// instead ("std:<path>" for a shipped package), so that copies of one
+// module report the same paths wherever they are and wherever ovid runs.
 func (m *Module) DisplayPath(f *File) string {
+	if os.Getenv(PathsEnv) == "module" {
+		if f.Path != "" {
+			return filepath.ToSlash(f.Path)
+		}
+		if rel, err := filepath.Rel(m.Root, f.Abs); err == nil {
+			return filepath.ToSlash(rel)
+		}
+		return f.Abs
+	}
 	if f.Abs == "" {
 		return f.Path
 	}
