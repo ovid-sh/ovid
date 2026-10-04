@@ -9,14 +9,17 @@ import ovid/parse
 const HEAP i64 = 128 << 20
 const MAXLOC i64 = 1024
 
-// A local's record in C.locs: name (address, length), rbp displacement,
-// type (address, length), weight, and register (-1 for none).
+// A local's record in C.locs, one per param or var declaration: name
+// (address, length), rbp displacement, type (address, length), weight, and
+// register (-1 for none).
 const LOCSIZE i64 = 56
 const LOC_WEIGHT i64 = 40
 const LOC_REG i64 = 48
 
 // C is the code generator's state. pkg/pathp/fn are the func being
-// emitted; locs holds its params and vars.
+// emitted; locs holds its params and vars, nloc of them. While they are
+// bound, scope holds the numbers of the nscope in scope, innermost last;
+// live is the most that were in scope at once.
 type C struct {
   io *ovid/io.Cap
   code *ovid/asm.Code
@@ -30,6 +33,9 @@ type C struct {
   fn *ovid/parse.Decl
   locs i64
   nloc i64
+  scope i64
+  nscope i64
+  live i64
   localBytes i64
   epi i64
   err i64
@@ -108,6 +114,7 @@ func IndexProg(c *C) i64 {
     return Fail(c, 1)
   }
   c.locs = ovid/io.Alloc(c.io, MAXLOC * LOCSIZE)
+  c.scope = ovid/io.Alloc(c.io, MAXLOC * 8)
   c.saved = ovid/io.Alloc(c.io, 64)
   c.free = ovid/io.Alloc(c.io, 64)
   while k != 0 as *ovid/parse.Pkg {
@@ -121,54 +128,99 @@ func IndexProg(c *C) i64 {
   return 0
 }
 
-func FindLoc(c *C, np i64, nn i64) i64 {
-  var i i64 = 0
-  while i < c.nloc {
-    var rec i64 = c.locs + (i * LOCSIZE)
-    if ovid/mem.Eq(load64(rec + 0), load64(rec + 8), np, nn) {
-      return rec
-    }
-    i = i + 1
-  }
-  return 0
-}
-
-func AddLoc(c *C, np i64, nn i64, tp i64, tn i64) i64 {
-  var rec i64 = FindLoc(c, np, nn)
-  if rec != 0 {
-    store64(rec + 24, tp)
-    store64(rec + 32, tn)
+// LocOf is the record of the local that n, a var, an assign, or a name,
+// is, or 0.
+func LocOf(c *C, n *ovid/parse.Node) i64 {
+  if n == 0 as *ovid/parse.Node || n.loc == 0 {
     return 0
   }
+  return c.locs + ((n.loc - 1) * LOCSIZE)
+}
+
+// AddLoc gives the declaration s (nil for a param) a new local and puts it
+// in scope. Its slot is the number of locals in scope, so vars of sibling
+// blocks share slots.
+func AddLoc(c *C, s *ovid/parse.Node, np i64, nn i64, tp i64, tn i64) i64 {
   if c.nloc >= MAXLOC {
     return Fail(c, 6)
   }
-  rec = c.locs + (c.nloc * LOCSIZE)
+  var rec i64 = c.locs + (c.nloc * LOCSIZE)
   store64(rec + 0, np)
   store64(rec + 8, nn)
-  store64(rec + 16, 0 - ((c.nloc + 1) * 8))
+  store64(rec + 16, 0 - ((c.nscope + 1) * 8))
   store64(rec + 24, tp)
   store64(rec + 32, tn)
   store64(rec + LOC_WEIGHT, 0)
   store64(rec + LOC_REG, -1)
+  store64(c.scope + (c.nscope * 8), c.nloc)
   c.nloc = c.nloc + 1
+  c.nscope = c.nscope + 1
+  c.live = Max(c.live, c.nscope)
+  if s != 0 as *ovid/parse.Node {
+    s.loc = c.nloc
+  }
   return 0
 }
 
-// CollectStmts gives every var declared in the statement list s a slot.
-func CollectStmts(c *C, s *ovid/parse.Node) i64 {
+// BindName resolves n, an assign or a name, to the innermost local called
+// np[0:nn] in scope, if there is one.
+func BindName(c *C, n *ovid/parse.Node, np i64, nn i64) i64 {
+  n.loc = 0
+  var j i64 = c.nscope - 1
+  while j >= 0 {
+    var i i64 = load64(c.scope + (j * 8))
+    var rec i64 = c.locs + (i * LOCSIZE)
+    if ovid/mem.Eq(load64(rec + 0), load64(rec + 8), np, nn) {
+      n.loc = i + 1
+      return 0
+    }
+    j = j - 1
+  }
+  return 0
+}
+
+// BindStmts gives every var declared in the statement list s its own local
+// and resolves each use of a name to the declaration in scope, as the
+// checker scopes: a var's value is evaluated before its name is in scope,
+// and a block's vars leave scope where it ends.
+func BindStmts(c *C, s *ovid/parse.Node) i64 {
+  var n i64 = c.nscope
   while s != 0 as *ovid/parse.Node {
+    BindExpr(c, s.val)
+    BindExpr(c, s.base)
+    BindExpr(c, s.addr)
+    BindExpr(c, s.cond)
     if s.op == ovid/parse.OP_VAR {
       if s.namen != 0 {
-        AddLoc(c, s.namep, s.namen, s.typp, s.typn)
+        AddLoc(c, s, s.namep, s.namen, s.typp, s.typn)
       }
-    } else if s.op == ovid/parse.OP_IF {
-      CollectStmts(c, s.then)
-      CollectStmts(c, s.els)
-    } else if s.op == ovid/parse.OP_WHILE {
-      CollectStmts(c, s.body)
+    } else if s.op == ovid/parse.OP_ASSIGN {
+      BindName(c, s, s.namep, s.namen)
     }
+    BindStmts(c, s.then)
+    BindStmts(c, s.els)
+    BindStmts(c, s.body)
     s = s.next
+  }
+  c.nscope = n
+  return 0
+}
+
+func BindExpr(c *C, n *ovid/parse.Node) i64 {
+  if n == 0 as *ovid/parse.Node {
+    return 0
+  }
+  if n.op == ovid/parse.OP_NAME && n.pkgn == 0 {
+    BindName(c, n, n.namep, n.namen)
+  }
+  BindExpr(c, n.left)
+  BindExpr(c, n.right)
+  BindExpr(c, n.arg)
+  BindExpr(c, n.base)
+  var a *ovid/parse.Node = n.args
+  while a != 0 as *ovid/parse.Node {
+    BindExpr(c, a)
+    a = a.next
   }
   return 0
 }
@@ -358,7 +410,7 @@ func TypeOf(c *C, n *ovid/parse.Node) i64 {
       }
       return Fail(c, 2)
     }
-    var loc i64 = FindLoc(c, n.namep, n.namen)
+    var loc i64 = LocOf(c, n)
     if loc == 0 {
       if ovid/parse.FindDecl(c.pkg.cs, n.namep, n.namen) != 0 as *ovid/parse.Decl {
         return SetI64(c)
@@ -471,9 +523,7 @@ const KREG i64 = 3
 // (at most 5).
 func WeighStmts(c *C, s *ovid/parse.Node, depth i64) i64 {
   while s != 0 as *ovid/parse.Node {
-    if s.op == ovid/parse.OP_VAR || s.op == ovid/parse.OP_ASSIGN {
-      Weigh(c, s.namep, s.namen, depth)
-    }
+    Weigh(c, LocOf(c, s), depth)
     WeighExpr(c, s.val, depth)
     WeighExpr(c, s.base, depth)
     WeighExpr(c, s.addr, depth)
@@ -494,8 +544,9 @@ func WeighStmts(c *C, s *ovid/parse.Node, depth i64) i64 {
   return 0
 }
 
-func Weigh(c *C, np i64, nn i64, depth i64) i64 {
-  var rec i64 = FindLoc(c, np, nn)
+// Weigh adds 4^depth to the weight of the local whose record is rec, if
+// there is one.
+func Weigh(c *C, rec i64, depth i64) i64 {
   if rec != 0 {
     store64(rec + LOC_WEIGHT, load64(rec + LOC_WEIGHT) + (1 << (2 * depth)))
   }
@@ -506,9 +557,7 @@ func WeighExpr(c *C, n *ovid/parse.Node, depth i64) i64 {
   if n == 0 as *ovid/parse.Node {
     return 0
   }
-  if n.op == ovid/parse.OP_NAME && n.pkgn == 0 {
-    Weigh(c, n.namep, n.namen, depth)
-  }
+  Weigh(c, LocOf(c, n), depth)
   WeighExpr(c, n.left, depth)
   WeighExpr(c, n.right, depth)
   WeighExpr(c, n.arg, depth)
@@ -659,7 +708,7 @@ func Operand(c *C, n *ovid/parse.Node) i64 {
       }
       v = pc.val
     } else {
-      var loc i64 = FindLoc(c, n.namep, n.namen)
+      var loc i64 = LocOf(c, n)
       if loc != 0 {
         c.opv = load64(loc + LOC_REG)
         if c.opv >= 0 {
@@ -1116,8 +1165,7 @@ func EmitAssign(c *C, s *ovid/parse.Node, loc i64) i64 {
   // x = x op operand works on x in place.
   var n *ovid/parse.Node = Uncast(s.val)
   if n != 0 as *ovid/parse.Node && AluOf(n.op) >= 0 {
-    var l *ovid/parse.Node = Uncast(n.left)
-    if l != 0 as *ovid/parse.Node && l.op == ovid/parse.OP_NAME && l.pkgn == 0 && ovid/mem.Eq(l.namep, l.namen, s.namep, s.namen) {
+    if LocOf(c, Uncast(n.left)) == loc {
       k = Operand(c, n.right)
       v = c.opv
       if k != KNONE {
@@ -1277,7 +1325,7 @@ func EmitExpr(c *C, n *ovid/parse.Node, lv i64) i64 {
       ovid/asm.MovRegImm(c.code, 0, pc.val)
       return 0
     }
-    var loc i64 = FindLoc(c, n.namep, n.namen)
+    var loc i64 = LocOf(c, n)
     if loc != 0 {
       if load64(loc + LOC_REG) >= 0 {
         ovid/asm.MovRegReg(c.code, 0, load64(loc + LOC_REG))
@@ -1407,13 +1455,14 @@ func EmitStmt(c *C, s *ovid/parse.Node) i64 {
   }
   var op i64 = s.op
   if op == ovid/parse.OP_VAR || op == ovid/parse.OP_ASSIGN {
-    var loc i64 = FindLoc(c, s.namep, s.namen)
+    var loc i64 = LocOf(c, s)
     if loc == 0 {
       return Fail(c, 2)
     }
     if s.val == 0 as *ovid/parse.Node && op == ovid/parse.OP_VAR {
       // A declaration without a value makes the local zero, each time it
-      // runs: the frame is not cleared on entry.
+      // runs: the frame is not cleared on entry, and the slot may have been
+      // a sibling block's.
       if load64(loc + LOC_REG) >= 0 {
         return ovid/asm.MovRegImm(c.code, load64(loc + LOC_REG), 0)
       }
@@ -1491,6 +1540,8 @@ func EmitStmt(c *C, s *ovid/parse.Node) i64 {
 
 func EmitFunc(c *C, fn *ovid/parse.Decl) i64 {
   c.nloc = 0
+  c.nscope = 0
+  c.live = 0
   c.err = 0
   c.pkg = fn.pkg
   c.pathp = fn.pkg.pathp
@@ -1498,15 +1549,15 @@ func EmitFunc(c *C, fn *ovid/parse.Decl) i64 {
   c.fn = fn
   var pa *ovid/parse.Decl = c.fn.sub
   while pa != 0 as *ovid/parse.Decl {
-    AddLoc(c, pa.namep, pa.namen, pa.typp, pa.typn)
+    AddLoc(c, 0 as *ovid/parse.Node, pa.namep, pa.namen, pa.typp, pa.typn)
     pa = pa.next
   }
   var body *ovid/parse.Node = c.fn.body
-  CollectStmts(c, body)
+  BindStmts(c, body)
   if c.err != 0 {
     return c.err
   }
-  c.localBytes = c.nloc * 8
+  c.localBytes = c.live * 8
   c.peak = StmtsPeak(body)
   var tempBytes i64 = 0
   if c.peak >= 0 {
@@ -1534,10 +1585,7 @@ func EmitFunc(c *C, fn *ovid/parse.Decl) i64 {
   i = 0
   pa = c.fn.sub
   while pa != 0 as *ovid/parse.Decl {
-    var loc i64 = FindLoc(c, pa.namep, pa.namen)
-    if loc == 0 {
-      return Fail(c, 2)
-    }
+    var loc i64 = c.locs + (i * LOCSIZE)
     var r i64 = load64(loc + LOC_REG)
     if r < 0 {
       ovid/asm.MovMemRbpReg(c.code, ArgReg(i), load64(loc + 16))

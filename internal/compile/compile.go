@@ -101,14 +101,17 @@ type cg struct {
 	funcLabel  map[string]int
 	sigs       map[string]sig
 	pkgs       map[string]*ir.Package
-	locals     map[string]int32
+	locals     []local          // the func's params and vars, one per declaration
+	ref        map[*ir.Node]int // a var, an assign, or a local's name: its local
+	scope      []int            // the locals in scope while binding, innermost last
+	live       int              // the most locals in scope at once
 	consts     map[string]int64
 	localBytes int32
 	epi        int
-	last       *ir.Node       // the func's final statement when it is a return
-	regs       map[string]int // locals that live in a register
-	saved      []int          // callee-saved registers the func uses
-	saveBase   int32          // their save slots lie below this displacement
+	last       *ir.Node    // the func's final statement when it is a return
+	regs       map[int]int // locals that live in a register
+	saved      []int       // callee-saved registers the func uses
+	saveBase   int32       // their save slots lie below this displacement
 	pkg        *ir.Package
 	fn         *ir.Func
 	marks      []Mark
@@ -254,36 +257,18 @@ func capOff(p *ir.Program, name string) (int32, error) {
 func (c *cg) emitFunc(pkg *ir.Package, fn *ir.Func) error {
 	c.pkg = pkg
 	c.fn = fn
-	c.locals = map[string]int32{}
 	c.consts = map[string]int64{}
 	for _, cn := range pkg.Consts {
 		c.consts[cn.Name] = cn.Value
 	}
-	off := int32(8)
-	var order []string
-	for _, pa := range fn.Params {
-		c.locals[pa.Name] = -off
-		off += 8
-		order = append(order, pa.Name)
-	}
-	var vars []named
-	collectVars(fn.Body, &vars)
-	for _, v := range vars {
-		if _, ok := c.locals[v.name]; ok {
-			// Sibling blocks may reuse a name. They share one slot.
-			continue
-		}
-		c.locals[v.name] = -off
-		off += 8
-		order = append(order, v.name)
-	}
-	c.localBytes = off - 8
+	c.bindFunc(fn)
+	c.localBytes = int32(8 * c.live)
 	peak := stmtsMax(fn.Body)
 	tempBytes := int32(0)
 	if peak >= 0 {
 		tempBytes = int32((peak + 1) * 8)
 	}
-	c.allocRegs(fn, order)
+	c.allocRegs(fn)
 	c.saveBase = -(c.localBytes + tempBytes)
 	frame := c.localBytes + tempBytes + int32(8*len(c.saved))
 	if frame%16 != 0 {
@@ -302,9 +287,9 @@ func (c *cg) emitFunc(pkg *ir.Package, fn *ir.Func) error {
 	for i, r := range c.saved {
 		c.b.MovMemRbpReg(r, c.saveBase-int32(8*(i+1)))
 	}
-	for i, pa := range fn.Params {
-		if r, ok := c.regs[pa.Name]; !ok {
-			c.b.MovMemRbpReg(argRegs[i], c.locals[pa.Name])
+	for i := range fn.Params {
+		if r, ok := c.regs[i]; !ok {
+			c.b.MovMemRbpReg(argRegs[i], c.locals[i].disp)
 		} else if r != argRegs[i] {
 			c.b.MovRegReg(r, argRegs[i])
 		}
@@ -334,24 +319,108 @@ func (c *cg) emitFunc(pkg *ir.Package, fn *ir.Func) error {
 	return nil
 }
 
-type named struct{ name string }
+// local is a param or a var. Each declaration has its own, with its own
+// type, frame slot, and register.
+type local struct {
+	name string
+	typ  string
+	disp int32
+}
+
+// bindFunc gives every param and var of fn its own local, params first and
+// then vars in the order they are declared, and resolves each use of a
+// name to the declaration in scope, as the checker scopes: a var's value
+// is evaluated before its name is in scope, and a block's vars leave scope
+// where it ends. A local's slot is the number of locals in scope when it is
+// declared, so vars of sibling blocks share slots, and the frame holds the
+// most locals in scope at once.
+func (c *cg) bindFunc(fn *ir.Func) {
+	c.locals = nil
+	c.ref = map[*ir.Node]int{}
+	c.scope = nil
+	c.live = 0
+	for _, pa := range fn.Params {
+		c.declare(nil, pa.Name, pa.Type)
+	}
+	c.bindStmts(fn.Body)
+}
+
+// declare puts a new local in scope for the declaration s (nil for a param).
+func (c *cg) declare(s *ir.Node, name, t string) {
+	i := len(c.locals)
+	c.locals = append(c.locals, local{name, c.resolve(c.pkg, t), -int32(8 * (len(c.scope) + 1))})
+	c.scope = append(c.scope, i)
+	c.live = max1(c.live, len(c.scope))
+	if s != nil {
+		c.ref[s] = i
+	}
+}
+
+// bindName resolves n, an assign or a name, to the innermost local called
+// name in scope, if there is one.
+func (c *cg) bindName(n *ir.Node, name string) {
+	for j := len(c.scope) - 1; j >= 0; j-- {
+		if c.locals[c.scope[j]].name == name {
+			c.ref[n] = c.scope[j]
+			return
+		}
+	}
+}
+
+func (c *cg) bindStmts(stmts []*ir.Node) {
+	n := len(c.scope)
+	for _, s := range stmts {
+		if s == nil {
+			continue
+		}
+		c.bindExpr(s.Val)
+		c.bindExpr(s.Base)
+		c.bindExpr(s.Addr)
+		c.bindExpr(s.Cond)
+		switch s.Op {
+		case "var":
+			c.declare(s, s.Name, s.Type)
+		case "assign":
+			c.bindName(s, s.Name)
+		}
+		c.bindStmts(s.Then)
+		c.bindStmts(s.Else)
+		c.bindStmts(s.Body)
+	}
+	c.scope = c.scope[:n]
+}
+
+func (c *cg) bindExpr(n *ir.Node) {
+	if n == nil {
+		return
+	}
+	if n.Op == "name" && n.Pkg == "" {
+		c.bindName(n, n.Name)
+	}
+	c.bindExpr(n.Left)
+	c.bindExpr(n.Right)
+	c.bindExpr(n.Arg)
+	c.bindExpr(n.Base)
+	for _, a := range n.Args {
+		c.bindExpr(a)
+	}
+}
 
 // argRegs are the registers a call's arguments arrive in.
 var argRegs = []int{asm.RDI, asm.RSI, asm.RDX, asm.RCX, asm.R8, asm.R9}
 
-// allocRegs decides which locals live in registers; order lists the
-// locals, params first. A func that calls nothing keeps its params where
+// allocRegs decides which locals live in registers. A func that calls nothing keeps its params where
 // they arrive (rdi, rsi, r8, r9; rdx and rcx are needed as scratch) and may
 // use the other registers a call would clobber, which cost nothing to
 // take. After those come the callee-saved registers, which must be saved
 // and restored, so only a local used at least three times gets one. The
 // most used locals choose first; a use inside a loop counts four times one
 // outside it.
-func (c *cg) allocRegs(fn *ir.Func, order []string) {
-	c.regs = map[string]int{}
+func (c *cg) allocRegs(fn *ir.Func) {
+	c.regs = map[int]int{}
 	c.saved = nil
-	weight := map[string]int{}
-	weighStmts(fn.Body, 0, weight)
+	weight := make([]int, len(c.locals))
+	c.weighStmts(fn.Body, 0, weight)
 	var free []int
 	if !stmtsCall(fn.Body) {
 		for i, r := range argRegs {
@@ -359,7 +428,7 @@ func (c *cg) allocRegs(fn *ir.Func, order []string) {
 				continue
 			}
 			if i < len(fn.Params) {
-				c.regs[order[i]] = r
+				c.regs[i] = r
 			} else {
 				free = append(free, r)
 			}
@@ -370,11 +439,11 @@ func (c *cg) allocRegs(fn *ir.Func, order []string) {
 	for {
 		// The heaviest local without a register; the first of equals.
 		best := -1
-		for i, name := range order {
-			if _, ok := c.regs[name]; ok || weight[name] == 0 {
+		for i, w := range weight {
+			if _, ok := c.regs[i]; ok || w == 0 {
 				continue
 			}
-			if best < 0 || weight[name] > weight[order[best]] {
+			if best < 0 || w > weight[best] {
 				best = i
 			}
 		}
@@ -382,10 +451,10 @@ func (c *cg) allocRegs(fn *ir.Func, order []string) {
 			return
 		}
 		if len(free) > 0 {
-			c.regs[order[best]] = free[0]
+			c.regs[best] = free[0]
 			free = free[1:]
-		} else if len(callee) > 0 && weight[order[best]] >= 3 {
-			c.regs[order[best]] = callee[0]
+		} else if len(callee) > 0 && weight[best] >= 3 {
+			c.regs[best] = callee[0]
 			c.saved = append(c.saved, callee[0])
 			callee = callee[1:]
 		} else {
@@ -394,47 +463,47 @@ func (c *cg) allocRegs(fn *ir.Func, order []string) {
 	}
 }
 
-// weighStmts adds, for each name used or assigned in stmts, 4^depth to its
-// weight, depth being the number of loops around the use (at most 5).
-func weighStmts(stmts []*ir.Node, depth int, w map[string]int) {
+// weighStmts adds, for each local used or assigned in stmts, 4^depth to
+// its weight, depth being the number of loops around the use (at most 5).
+func (c *cg) weighStmts(stmts []*ir.Node, depth int, w []int) {
 	for _, s := range stmts {
 		if s == nil {
 			continue
 		}
-		if s.Op == "var" || s.Op == "assign" {
-			w[s.Name] += 1 << (2 * depth)
+		if i, ok := c.ref[s]; ok {
+			w[i] += 1 << (2 * depth)
 		}
-		weighExpr(s.Val, depth, w)
-		weighExpr(s.Base, depth, w)
-		weighExpr(s.Addr, depth, w)
-		weighStmts(s.Then, depth, w)
-		weighStmts(s.Else, depth, w)
+		c.weighExpr(s.Val, depth, w)
+		c.weighExpr(s.Base, depth, w)
+		c.weighExpr(s.Addr, depth, w)
+		c.weighStmts(s.Then, depth, w)
+		c.weighStmts(s.Else, depth, w)
 		if s.Op == "while" {
 			inner := depth
 			if inner < 5 {
 				inner++
 			}
-			weighExpr(s.Cond, inner, w)
-			weighStmts(s.Body, inner, w)
+			c.weighExpr(s.Cond, inner, w)
+			c.weighStmts(s.Body, inner, w)
 		} else {
-			weighExpr(s.Cond, depth, w)
+			c.weighExpr(s.Cond, depth, w)
 		}
 	}
 }
 
-func weighExpr(n *ir.Node, depth int, w map[string]int) {
+func (c *cg) weighExpr(n *ir.Node, depth int, w []int) {
 	if n == nil {
 		return
 	}
-	if n.Op == "name" && n.Pkg == "" {
-		w[n.Name] += 1 << (2 * depth)
+	if i, ok := c.ref[n]; ok {
+		w[i] += 1 << (2 * depth)
 	}
-	weighExpr(n.Left, depth, w)
-	weighExpr(n.Right, depth, w)
-	weighExpr(n.Arg, depth, w)
-	weighExpr(n.Base, depth, w)
+	c.weighExpr(n.Left, depth, w)
+	c.weighExpr(n.Right, depth, w)
+	c.weighExpr(n.Arg, depth, w)
+	c.weighExpr(n.Base, depth, w)
 	for _, a := range n.Args {
-		weighExpr(a, depth, w)
+		c.weighExpr(a, depth, w)
 	}
 }
 
@@ -462,23 +531,6 @@ func exprCalls(n *ir.Node) bool {
 		return true
 	}
 	return exprCalls(n.Left) || exprCalls(n.Right) || exprCalls(n.Arg) || exprCalls(n.Base)
-}
-
-func collectVars(stmts []*ir.Node, out *[]named) {
-	for _, s := range stmts {
-		if s == nil {
-			continue
-		}
-		switch s.Op {
-		case "var":
-			*out = append(*out, named{s.Name})
-		case "if":
-			collectVars(s.Then, out)
-			collectVars(s.Else, out)
-		case "while":
-			collectVars(s.Body, out)
-		}
-	}
 }
 
 func stmtsMax(stmts []*ir.Node) int {
@@ -582,20 +634,22 @@ func (c *cg) emitStmts(stmts []*ir.Node) error {
 func (c *cg) emitStmt(s *ir.Node) error {
 	switch s.Op {
 	case "var", "assign":
-		if _, ok := c.locals[s.Name]; !ok {
+		i, ok := c.ref[s]
+		if !ok {
 			return fmt.Errorf("%s %s", s.Op, s.Name)
 		}
 		if s.Val == nil && s.Op == "var" {
 			// A declaration without a value makes the local zero, each
-			// time it runs: the frame is not cleared on entry.
-			if r, ok := c.regs[s.Name]; ok {
+			// time it runs: the frame is not cleared on entry, and the
+			// slot may have been a sibling block's.
+			if r, ok := c.regs[i]; ok {
 				c.b.MovRegImm(r, 0)
 			} else {
-				c.b.MovMemRbpImm(c.locals[s.Name], 0)
+				c.b.MovMemRbpImm(c.locals[i].disp, 0)
 			}
 			return nil
 		}
-		return c.emitAssign(s.Name, s.Val)
+		return c.emitAssign(i, s.Val)
 	case "setfield":
 		off, err := c.fieldOff(s.Base, s.Name)
 		if err != nil {
@@ -719,10 +773,11 @@ func (c *cg) operand(n *ir.Node) (int, int64) {
 				return kNone, 0
 			}
 			v = pv
-		} else if r, ok := c.regs[n.Name]; ok {
-			return kReg, int64(r)
-		} else if disp, ok := c.locals[n.Name]; ok {
-			return kMem, int64(disp)
+		} else if i, ok := c.ref[n]; ok {
+			if r, ok := c.regs[i]; ok {
+				return kReg, int64(r)
+			}
+			return kMem, int64(c.locals[i].disp)
 		} else if cv, ok := c.consts[n.Name]; ok {
 			v = cv
 		} else {
@@ -1093,10 +1148,10 @@ func (c *cg) emitStore(addr, val *ir.Node, width int, off int32) error {
 	return nil
 }
 
-// emitAssign sets the local name to val.
-func (c *cg) emitAssign(name string, val *ir.Node) error {
-	reg, inReg := c.regs[name]
-	disp := c.locals[name]
+// emitAssign sets local i to val.
+func (c *cg) emitAssign(i int, val *ir.Node) error {
+	reg, inReg := c.regs[i]
+	disp := c.locals[i].disp
 	k, v := c.operand(val)
 	if inReg && k != kNone {
 		c.loadOpnd(reg, k, v)
@@ -1112,7 +1167,7 @@ func (c *cg) emitAssign(name string, val *ir.Node) error {
 	}
 	// x = x op operand works on x in place.
 	if n := uncast(val); n != nil && aluOf(n.Op) >= 0 {
-		if l := uncast(n.Left); l != nil && l.Op == "name" && l.Pkg == "" && l.Name == name {
+		if j, ok := c.ref[uncast(n.Left)]; ok && j == i {
 			if k, v := c.operand(n.Right); k != kNone {
 				switch {
 				case inReg:
@@ -1219,12 +1274,12 @@ func (c *cg) emitExpr(n *ir.Node, lv int) error {
 			c.b.MovRegImm(asm.RAX, v)
 			return nil
 		}
-		if r, ok := c.regs[n.Name]; ok {
-			c.b.MovRegReg(asm.RAX, r)
-			return nil
-		}
-		if disp, ok := c.locals[n.Name]; ok {
-			c.b.MovRaxMemRbp(disp)
+		if i, ok := c.ref[n]; ok {
+			if r, ok := c.regs[i]; ok {
+				c.b.MovRegReg(asm.RAX, r)
+			} else {
+				c.b.MovRaxMemRbp(c.locals[i].disp)
+			}
 			return nil
 		}
 		if v, ok := c.consts[n.Name]; ok {
@@ -1396,9 +1451,8 @@ func (c *cg) typeOf(n *ir.Node) string {
 		if n.Pkg != "" {
 			return "i64"
 		}
-		if _, ok := c.locals[n.Name]; ok {
-			// Recover the declared type from params and vars by scanning.
-			return c.localType(n.Name)
+		if i, ok := c.ref[n]; ok {
+			return c.locals[i].typ
 		}
 		if _, ok := c.consts[n.Name]; ok {
 			return "i64"
@@ -1425,38 +1479,6 @@ func (c *cg) typeOf(n *ir.Node) string {
 	default:
 		return "invalid"
 	}
-}
-
-func (c *cg) localType(name string) string {
-	for _, pa := range c.fn.Params {
-		if pa.Name == name {
-			return c.resolve(c.pkg, pa.Type)
-		}
-	}
-	var found string
-	var walk func(stmts []*ir.Node)
-	walk = func(stmts []*ir.Node) {
-		for _, s := range stmts {
-			if s == nil {
-				continue
-			}
-			if s.Op == "var" && s.Name == name {
-				found = c.resolve(c.pkg, s.Type)
-			}
-			if s.Op == "if" {
-				walk(s.Then)
-				walk(s.Else)
-			}
-			if s.Op == "while" {
-				walk(s.Body)
-			}
-		}
-	}
-	walk(c.fn.Body)
-	if found == "" {
-		return "invalid"
-	}
-	return found
 }
 
 func (c *cg) fieldType(baseType, field string) (string, error) {

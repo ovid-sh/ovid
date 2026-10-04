@@ -1,0 +1,30 @@
+// Declarations inside a loop body, and inside a block in it, are new on
+// every iteration: a var without a value starts at zero each time round.
+// exit: 130
+package demo
+
+import ovid/io
+
+type T struct {
+  a i64
+}
+
+func main(io *ovid/io.Cap) i64 {
+  var i i64 = 0
+  var sum i64 = 0
+  while i < 5 {
+    var sq i64 = i * i
+    var p *T = ovid/io.Alloc(io, sizeof(T)) as *T
+    p.a = sq
+    sum = sum + p.a
+    if i == 2 {
+      var q i64 = 100
+      sum = sum + q
+    }
+    var z i64
+    sum = sum + z
+    z = 1000
+    i = i + 1
+  }
+  return sum
+}
