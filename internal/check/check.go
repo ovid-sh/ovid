@@ -4,10 +4,14 @@ package check
 
 import (
 	"fmt"
+	"io/fs"
+	"path"
+	"slices"
 	"sort"
 	"strings"
 
 	"ovid/internal/ir"
+	"ovid/std"
 )
 
 // Issue is one error. ID names the node; the caller maps it to a location.
@@ -181,8 +185,23 @@ func Run(p *ir.Program) *Result {
 	return r
 }
 
-// StdHint lists the packages the toolchain ships.
-var StdHint = []string{"ovid/io", "ovid/mem"}
+// StdHint lists the packages the toolchain ships: every directory of the
+// embedded std that holds a .ov file.
+var StdHint = stdPackages()
+
+func stdPackages() []string {
+	var pkgs []string
+	fs.WalkDir(std.FS, ".", func(p string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() && strings.HasSuffix(p, ".ov") {
+			if dir := path.Dir(p); !slices.Contains(pkgs, dir) {
+				pkgs = append(pkgs, dir)
+			}
+		}
+		return nil
+	})
+	sort.Strings(pkgs)
+	return pkgs
+}
 
 func (c *checker) checkEntry(p *ir.Program) {
 	ep, ok := c.pkgs[p.Entry]
