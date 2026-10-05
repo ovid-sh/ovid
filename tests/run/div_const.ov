@@ -1,0 +1,510 @@
+// stdout: "ok\n"
+package demo
+import ovid/io
+
+// A division or remainder by a constant other than 0 and -1 is a
+// shift or a multiply, by one that fits 32 bits; it must agree with
+// idiv, which a division by a param still uses, on dividends at the
+// edges, near multiples of the divisor, and at every magnitude.
+
+func rdiv(n i64, d i64) i64 {
+  return n / d
+}
+
+func rmod(n i64, d i64) i64 {
+  return n % d
+}
+
+func chk0(n i64) i64 {
+  var bad i64 = 0
+  if n / 2 != rdiv(n, 2) {
+    bad = 1
+  }
+  if n % 2 != rmod(n, 2) {
+    bad = 1
+  }
+  return bad
+}
+
+func chk1(n i64) i64 {
+  var bad i64 = 0
+  if n / 3 != rdiv(n, 3) {
+    bad = 1
+  }
+  if n % 3 != rmod(n, 3) {
+    bad = 1
+  }
+  return bad
+}
+
+func chk2(n i64) i64 {
+  var bad i64 = 0
+  if n / 5 != rdiv(n, 5) {
+    bad = 1
+  }
+  if n % 5 != rmod(n, 5) {
+    bad = 1
+  }
+  return bad
+}
+
+func chk3(n i64) i64 {
+  var bad i64 = 0
+  if n / 6 != rdiv(n, 6) {
+    bad = 1
+  }
+  if n % 6 != rmod(n, 6) {
+    bad = 1
+  }
+  return bad
+}
+
+func chk4(n i64) i64 {
+  var bad i64 = 0
+  if n / 7 != rdiv(n, 7) {
+    bad = 1
+  }
+  if n % 7 != rmod(n, 7) {
+    bad = 1
+  }
+  return bad
+}
+
+func chk5(n i64) i64 {
+  var bad i64 = 0
+  if n / 9 != rdiv(n, 9) {
+    bad = 1
+  }
+  if n % 9 != rmod(n, 9) {
+    bad = 1
+  }
+  return bad
+}
+
+func chk6(n i64) i64 {
+  var bad i64 = 0
+  if n / 10 != rdiv(n, 10) {
+    bad = 1
+  }
+  if n % 10 != rmod(n, 10) {
+    bad = 1
+  }
+  return bad
+}
+
+func chk7(n i64) i64 {
+  var bad i64 = 0
+  if n / 16 != rdiv(n, 16) {
+    bad = 1
+  }
+  if n % 16 != rmod(n, 16) {
+    bad = 1
+  }
+  return bad
+}
+
+func chk8(n i64) i64 {
+  var bad i64 = 0
+  if n / 25 != rdiv(n, 25) {
+    bad = 1
+  }
+  if n % 25 != rmod(n, 25) {
+    bad = 1
+  }
+  return bad
+}
+
+func chk9(n i64) i64 {
+  var bad i64 = 0
+  if n / 60 != rdiv(n, 60) {
+    bad = 1
+  }
+  if n % 60 != rmod(n, 60) {
+    bad = 1
+  }
+  return bad
+}
+
+func chk10(n i64) i64 {
+  var bad i64 = 0
+  if n / 64 != rdiv(n, 64) {
+    bad = 1
+  }
+  if n % 64 != rmod(n, 64) {
+    bad = 1
+  }
+  return bad
+}
+
+func chk11(n i64) i64 {
+  var bad i64 = 0
+  if n / 100 != rdiv(n, 100) {
+    bad = 1
+  }
+  if n % 100 != rmod(n, 100) {
+    bad = 1
+  }
+  return bad
+}
+
+func chk12(n i64) i64 {
+  var bad i64 = 0
+  if n / 641 != rdiv(n, 641) {
+    bad = 1
+  }
+  if n % 641 != rmod(n, 641) {
+    bad = 1
+  }
+  return bad
+}
+
+func chk13(n i64) i64 {
+  var bad i64 = 0
+  if n / 1000 != rdiv(n, 1000) {
+    bad = 1
+  }
+  if n % 1000 != rmod(n, 1000) {
+    bad = 1
+  }
+  return bad
+}
+
+func chk14(n i64) i64 {
+  var bad i64 = 0
+  if n / 1024 != rdiv(n, 1024) {
+    bad = 1
+  }
+  if n % 1024 != rmod(n, 1024) {
+    bad = 1
+  }
+  return bad
+}
+
+func chk15(n i64) i64 {
+  var bad i64 = 0
+  if n / 65536 != rdiv(n, 65536) {
+    bad = 1
+  }
+  if n % 65536 != rmod(n, 65536) {
+    bad = 1
+  }
+  return bad
+}
+
+func chk16(n i64) i64 {
+  var bad i64 = 0
+  if n / 1000000000 != rdiv(n, 1000000000) {
+    bad = 1
+  }
+  if n % 1000000000 != rmod(n, 1000000000) {
+    bad = 1
+  }
+  return bad
+}
+
+func chk17(n i64) i64 {
+  var bad i64 = 0
+  if n / 1000000007 != rdiv(n, 1000000007) {
+    bad = 1
+  }
+  if n % 1000000007 != rmod(n, 1000000007) {
+    bad = 1
+  }
+  return bad
+}
+
+func chk18(n i64) i64 {
+  var bad i64 = 0
+  if n / 1073741824 != rdiv(n, 1073741824) {
+    bad = 1
+  }
+  if n % 1073741824 != rmod(n, 1073741824) {
+    bad = 1
+  }
+  return bad
+}
+
+func chk19(n i64) i64 {
+  var bad i64 = 0
+  if n / 2147483646 != rdiv(n, 2147483646) {
+    bad = 1
+  }
+  if n % 2147483646 != rmod(n, 2147483646) {
+    bad = 1
+  }
+  return bad
+}
+
+func chk20(n i64) i64 {
+  var bad i64 = 0
+  if n / 2147483647 != rdiv(n, 2147483647) {
+    bad = 1
+  }
+  if n % 2147483647 != rmod(n, 2147483647) {
+    bad = 1
+  }
+  return bad
+}
+
+func chk21(n i64) i64 {
+  var bad i64 = 0
+  if n / 2147483648 != rdiv(n, 2147483648) {
+    bad = 1
+  }
+  if n % 2147483648 != rmod(n, 2147483648) {
+    bad = 1
+  }
+  return bad
+}
+
+func chk22(n i64) i64 {
+  var bad i64 = 0
+  if n / 4611686018427387905 != rdiv(n, 4611686018427387905) {
+    bad = 1
+  }
+  if n % 4611686018427387905 != rmod(n, 4611686018427387905) {
+    bad = 1
+  }
+  return bad
+}
+
+func chk23(n i64) i64 {
+  var bad i64 = 0
+  if n / 9223372036854775807 != rdiv(n, 9223372036854775807) {
+    bad = 1
+  }
+  if n % 9223372036854775807 != rmod(n, 9223372036854775807) {
+    bad = 1
+  }
+  return bad
+}
+
+func chk24(n i64) i64 {
+  var bad i64 = 0
+  if n / (0 - 2) != rdiv(n, (0 - 2)) {
+    bad = 1
+  }
+  if n % (0 - 2) != rmod(n, (0 - 2)) {
+    bad = 1
+  }
+  return bad
+}
+
+func chk25(n i64) i64 {
+  var bad i64 = 0
+  if n / (0 - 3) != rdiv(n, (0 - 3)) {
+    bad = 1
+  }
+  if n % (0 - 3) != rmod(n, (0 - 3)) {
+    bad = 1
+  }
+  return bad
+}
+
+func chk26(n i64) i64 {
+  var bad i64 = 0
+  if n / (0 - 7) != rdiv(n, (0 - 7)) {
+    bad = 1
+  }
+  if n % (0 - 7) != rmod(n, (0 - 7)) {
+    bad = 1
+  }
+  return bad
+}
+
+func chk27(n i64) i64 {
+  var bad i64 = 0
+  if n / (0 - 8) != rdiv(n, (0 - 8)) {
+    bad = 1
+  }
+  if n % (0 - 8) != rmod(n, (0 - 8)) {
+    bad = 1
+  }
+  return bad
+}
+
+func chk28(n i64) i64 {
+  var bad i64 = 0
+  if n / (0 - 10) != rdiv(n, (0 - 10)) {
+    bad = 1
+  }
+  if n % (0 - 10) != rmod(n, (0 - 10)) {
+    bad = 1
+  }
+  return bad
+}
+
+func chk29(n i64) i64 {
+  var bad i64 = 0
+  if n / (0 - 1024) != rdiv(n, (0 - 1024)) {
+    bad = 1
+  }
+  if n % (0 - 1024) != rmod(n, (0 - 1024)) {
+    bad = 1
+  }
+  return bad
+}
+
+func chk30(n i64) i64 {
+  var bad i64 = 0
+  if n / (0 - 1000000000) != rdiv(n, (0 - 1000000000)) {
+    bad = 1
+  }
+  if n % (0 - 1000000000) != rmod(n, (0 - 1000000000)) {
+    bad = 1
+  }
+  return bad
+}
+
+func chk31(n i64) i64 {
+  var bad i64 = 0
+  if n / (0 - 2147483647) != rdiv(n, (0 - 2147483647)) {
+    bad = 1
+  }
+  if n % (0 - 2147483647) != rmod(n, (0 - 2147483647)) {
+    bad = 1
+  }
+  return bad
+}
+
+func chk32(n i64) i64 {
+  var bad i64 = 0
+  if n / (0 - 2147483648) != rdiv(n, (0 - 2147483648)) {
+    bad = 1
+  }
+  if n % (0 - 2147483648) != rmod(n, (0 - 2147483648)) {
+    bad = 1
+  }
+  return bad
+}
+
+func all(n i64) i64 {
+  var bad i64 = 0
+  bad = bad + chk0(n)
+  bad = bad + chk1(n)
+  bad = bad + chk2(n)
+  bad = bad + chk3(n)
+  bad = bad + chk4(n)
+  bad = bad + chk5(n)
+  bad = bad + chk6(n)
+  bad = bad + chk7(n)
+  bad = bad + chk8(n)
+  bad = bad + chk9(n)
+  bad = bad + chk10(n)
+  bad = bad + chk11(n)
+  bad = bad + chk12(n)
+  bad = bad + chk13(n)
+  bad = bad + chk14(n)
+  bad = bad + chk15(n)
+  bad = bad + chk16(n)
+  bad = bad + chk17(n)
+  bad = bad + chk18(n)
+  bad = bad + chk19(n)
+  bad = bad + chk20(n)
+  bad = bad + chk21(n)
+  bad = bad + chk22(n)
+  bad = bad + chk23(n)
+  bad = bad + chk24(n)
+  bad = bad + chk25(n)
+  bad = bad + chk26(n)
+  bad = bad + chk27(n)
+  bad = bad + chk28(n)
+  bad = bad + chk29(n)
+  bad = bad + chk30(n)
+  bad = bad + chk31(n)
+  bad = bad + chk32(n)
+  return bad
+}
+
+func edge(n i64) i64 {
+  return ((all(n) + all(n + 1)) + all(n - 1)) + all(0 - n)
+}
+
+func main(io *ovid/io.Cap) i64 {
+  var bad i64 = 0
+  var min i64 = (0 - 9223372036854775807) - 1
+  bad = bad + all(min)
+  bad = bad + all(min + 1)
+  bad = bad + all(9223372036854775807)
+  bad = bad + edge(0)
+  var x i64 = 12345
+  var i i64 = 0
+  while i < 5000 {
+    x = (x * 6364136223846793005) + 1442695040888963407
+    bad = bad + edge(x >> (i % 64))
+    i = i + 1
+  }
+  bad = bad + edge(2)
+  bad = bad + edge(2 * 3)
+  bad = bad + edge(3)
+  bad = bad + edge(3 * 3)
+  bad = bad + edge(5)
+  bad = bad + edge(5 * 3)
+  bad = bad + edge(6)
+  bad = bad + edge(6 * 3)
+  bad = bad + edge(7)
+  bad = bad + edge(7 * 3)
+  bad = bad + edge(9)
+  bad = bad + edge(9 * 3)
+  bad = bad + edge(10)
+  bad = bad + edge(10 * 3)
+  bad = bad + edge(16)
+  bad = bad + edge(16 * 3)
+  bad = bad + edge(25)
+  bad = bad + edge(25 * 3)
+  bad = bad + edge(60)
+  bad = bad + edge(60 * 3)
+  bad = bad + edge(64)
+  bad = bad + edge(64 * 3)
+  bad = bad + edge(100)
+  bad = bad + edge(100 * 3)
+  bad = bad + edge(641)
+  bad = bad + edge(641 * 3)
+  bad = bad + edge(1000)
+  bad = bad + edge(1000 * 3)
+  bad = bad + edge(1024)
+  bad = bad + edge(1024 * 3)
+  bad = bad + edge(65536)
+  bad = bad + edge(65536 * 3)
+  bad = bad + edge(1000000000)
+  bad = bad + edge(1000000000 * 3)
+  bad = bad + edge(1000000007)
+  bad = bad + edge(1000000007 * 3)
+  bad = bad + edge(1073741824)
+  bad = bad + edge(1073741824 * 3)
+  bad = bad + edge(2147483646)
+  bad = bad + edge(2147483646 * 3)
+  bad = bad + edge(2147483647)
+  bad = bad + edge(2147483647 * 3)
+  bad = bad + edge(2147483648)
+  bad = bad + edge(2147483648 * 3)
+  bad = bad + edge(4611686018427387905)
+  bad = bad + edge(4611686018427387905 * 3)
+  bad = bad + edge(9223372036854775807)
+  bad = bad + edge(9223372036854775807 * 3)
+  bad = bad + edge((0 - 2))
+  bad = bad + edge((0 - 2) * 3)
+  bad = bad + edge((0 - 3))
+  bad = bad + edge((0 - 3) * 3)
+  bad = bad + edge((0 - 7))
+  bad = bad + edge((0 - 7) * 3)
+  bad = bad + edge((0 - 8))
+  bad = bad + edge((0 - 8) * 3)
+  bad = bad + edge((0 - 10))
+  bad = bad + edge((0 - 10) * 3)
+  bad = bad + edge((0 - 1024))
+  bad = bad + edge((0 - 1024) * 3)
+  bad = bad + edge((0 - 1000000000))
+  bad = bad + edge((0 - 1000000000) * 3)
+  bad = bad + edge((0 - 2147483647))
+  bad = bad + edge((0 - 2147483647) * 3)
+  bad = bad + edge((0 - 2147483648))
+  bad = bad + edge((0 - 2147483648) * 3)
+  if bad > 0 {
+    ovid/io.PrintInt(io, bad)
+    ovid/io.Print(strptr(" wrong\n"))
+    return 1
+  }
+  ovid/io.Print(strptr("ok\n"))
+  return 0
+}

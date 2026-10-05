@@ -186,6 +186,12 @@ func (b *Buf) ShiftRaxImm(sar bool, n byte) {
 	b.emit(0x48, 0xC1, 0xE0, n)
 }
 
+// SarRegImm encodes sar reg, n, for reg one of rax to rdi.
+func (b *Buf) SarRegImm(reg int, n byte) { b.emit(0x48, 0xC1, modrm(3, 7, byte(reg)), n) }
+
+// ShrRegImm encodes shr reg, n, for reg one of rax to rdi.
+func (b *Buf) ShrRegImm(reg int, n byte) { b.emit(0x48, 0xC1, modrm(3, 5, byte(reg)), n) }
+
 // rexMem emits the REX prefix for an instruction with operands reg and
 // [base+index+disp] (index -1 for none), when one is needed or forced.
 func (b *Buf) rexMem(w bool, reg, base, index int, force bool) {
@@ -278,6 +284,9 @@ func (b *Buf) Syscall() { b.emit(0x0F, 0x05) }
 func (b *Buf) Cqo() { b.emit(0x48, 0x99) }
 
 func (b *Buf) IdivRcx() { b.emit(0x48, 0xF7, 0xF9) }
+
+// ImulRcx encodes the one-operand imul rcx: rdx:rax = rax * rcx, signed.
+func (b *Buf) ImulRcx() { b.emit(0x48, 0xF7, 0xE9) }
 
 func (b *Buf) NegRax() { b.emit(0x48, 0xF7, 0xD8) }
 

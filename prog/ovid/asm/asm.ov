@@ -310,6 +310,24 @@ func ShiftRaxImm(c *Code, sar bool, n i64) i64 {
   return 0
 }
 
+// SarRegImm encodes sar reg, n, for reg one of rax to rdi.
+func SarRegImm(c *Code, reg i64, n i64) i64 {
+  E(c, 0x48)
+  E(c, 0xC1)
+  E(c, 0xF8 + reg)
+  E(c, n)
+  return 0
+}
+
+// ShrRegImm encodes shr reg, n, for reg one of rax to rdi.
+func ShrRegImm(c *Code, reg i64, n i64) i64 {
+  E(c, 0x48)
+  E(c, 0xC1)
+  E(c, 0xE8 + reg)
+  E(c, n)
+  return 0
+}
+
 // RexMem emits the REX prefix for an instruction with operands reg and
 // [base+index+disp] (index -1 for none), when one is needed or forced.
 func RexMem(c *Code, w bool, reg i64, base i64, index i64, force bool) i64 {
@@ -448,6 +466,14 @@ func IdivRcx(c *Code) i64 {
   E(c, 0x48)
   E(c, 0xF7)
   E(c, 0xF9)
+  return 0
+}
+
+// ImulRcx encodes the one-operand imul rcx: rdx:rax = rax * rcx, signed.
+func ImulRcx(c *Code) i64 {
+  E(c, 0x48)
+  E(c, 0xF7)
+  E(c, 0xE9)
   return 0
 }
 
