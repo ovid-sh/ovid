@@ -1,4 +1,4 @@
-package demo // error: bad_main 1 expected="func main(io *ovid/io.Cap) i64"
+package demo // error: bad_main 1 expected="func main(io *ovid/io.Cap) i64, or (io *ovid/io.Cap, net *ovid/io.Net) i64"
 import ovid/io
 func Start(io *ovid/io.Cap) i64 {
   return 0

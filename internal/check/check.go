@@ -313,18 +313,24 @@ func (c *checker) checkEntry(p *ir.Program) {
 			main = &ep.Funcs[i]
 		}
 	}
-	want := "func main(io *ovid/io.Cap) i64"
+	want := "func main(io *ovid/io.Cap) i64, or (io *ovid/io.Cap, net *ovid/io.Net) i64"
 	if main == nil {
 		c.issue(Issue{Code: "bad_main", ID: ep.ID, Message: "entry package has no main", Expected: want})
 		return
 	}
 	c.pkg = ep
-	pt := ""
-	if len(main.Params) == 1 {
-		pt, _ = c.resolve(main.Params[0].Type)
+	// main is handed the capabilities it names: always the Cap, and the
+	// network when it asks for it with a second param.
+	sig := true
+	for i, want := range []string{"*ovid/io.Cap", "*ovid/io.Net"} {
+		if i < len(main.Params) {
+			if pt, _ := c.resolve(main.Params[i].Type); pt != want {
+				sig = false
+			}
+		}
 	}
 	res, _ := c.resolve(main.Result)
-	if len(main.Params) != 1 || pt != "*ovid/io.Cap" || res != "i64" {
+	if len(main.Params) < 1 || len(main.Params) > 2 || !sig || res != "i64" {
 		c.issue(Issue{Code: "bad_main", ID: main.ID, Message: "main has the wrong signature", Expected: want, Got: Signature(ep.Path, main)})
 	}
 	if io, ok := c.pkgs["ovid/io"]; ok {
@@ -608,8 +614,22 @@ func (c *checker) unknownName(id, name string, e *env) {
 }
 
 // field checks n.Name on a value of type bt, for a field or setfield node.
+// opaque reports whether t is a pointer to one of ovid/io's types seen from
+// outside ovid/io. Those types are handles on what the program may do
+// (allocate, read arguments, reach the network, use a connection), and a
+// handle is only worth something if it cannot be forged or taken apart: so
+// outside ovid/io one cannot be made by a cast or turned into an address
+// by one, and its fields cannot be read or written.
+func (c *checker) opaque(t string) bool {
+	return strings.HasPrefix(t, "*ovid/io.") && !(c.pkg.Path == "ovid/io" && c.pkg.Sys)
+}
+
 func (c *checker) field(n *ir.Node, bt string) string {
 	if bt == "invalid" {
+		return "invalid"
+	}
+	if c.opaque(bt) {
+		c.issue(Issue{Code: "opaque_type", ID: n.ID, Message: "the fields of " + bt + " belong to ovid/io", Hint: "call an ovid/io func instead"})
 		return "invalid"
 	}
 	ft, fields, err := FieldType(bt, n.Name, c.pkgs)
@@ -707,7 +727,13 @@ func (c *checker) expr0(e *env, n *ir.Node) string {
 			return "invalid"
 		}
 		c.useType(t, n.ID, "type", c.fn.ID, n.TypeSpan)
+		if c.opaque(t) {
+			c.issue(Issue{Code: "opaque_type", ID: n.ID, Message: "a " + t + " cannot be made by a cast", Hint: "ovid/io's types are handles: get one from main or from an ovid/io func"})
+		}
 		src := c.expr(e, n.Arg)
+		if c.opaque(src) {
+			c.issue(Issue{Code: "opaque_type", ID: n.ID, Message: "a " + src + " cannot be cast: it is not an address to compute with", Hint: "ovid/io's types are handles: ask an ovid/io func about one"})
+		}
 		if src != "invalid" && !scalar(t) {
 			c.mismatch(n.ID, "cast", src, "i64, bool, or a pointer type")
 		}

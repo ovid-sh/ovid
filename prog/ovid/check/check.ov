@@ -587,7 +587,15 @@ func CheckExpr(c *Ch, n *ovid/parse.Node) i64 {
       Err(c, strptr("bad_type"), strlen("bad_type"), n.typp, n.typn)
       return SetBad(c)
     }
+    if Opaque(c, n.typp, n.typn) {
+      Here(c, n)
+      Err(c, strptr("opaque_type"), strlen("opaque_type"), n.typp, n.typn)
+    }
     CheckExpr(c, n.arg)
+    if !Bad(c) && Opaque(c, c.typ, c.tyn) {
+      Here(c, n)
+      Err(c, strptr("opaque_type"), strlen("opaque_type"), c.typ, c.tyn)
+    }
     if ck == 1 {
       if !Bad(c) {
         Here(c, n)
@@ -599,6 +607,11 @@ func CheckExpr(c *Ch, n *ovid/parse.Node) i64 {
   if op == ovid/parse.OP_FIELD {
     CheckExpr(c, n.base)
     if Bad(c) {
+      return SetBad(c)
+    }
+    if Opaque(c, c.typ, c.tyn) {
+      Here(c, n)
+      Err(c, strptr("opaque_type"), strlen("opaque_type"), n.namep, n.namen)
       return SetBad(c)
     }
     if FieldTy(c, c.typ, c.tyn, n.namep, n.namen) != 0 {
@@ -751,6 +764,11 @@ func CheckStmt(c *Ch, s *ovid/parse.Node) i64 {
     var was bool = Bad(c)
     var fp i64 = 0
     var fn i64 = 0
+    if !was && Opaque(c, c.typ, c.tyn) {
+      Here(c, s)
+      Err(c, strptr("opaque_type"), strlen("opaque_type"), s.namep, s.namen)
+      was = true
+    }
     if !was {
       if FieldTy(c, c.typ, c.tyn, s.namep, s.namen) != 0 {
         Err(c, strptr("unknown_field"), strlen("unknown_field"), s.namep, s.namen)
@@ -863,12 +881,15 @@ func CheckMain(c *Ch) i64 {
     Err(c, strptr("bad_main"), strlen("bad_main"), strptr("entry package has no main"), strlen("entry package has no main"))
     return 0
   }
+  // main is handed the capabilities it names: always the Cap, and the
+  // network when it asks for it with a second param.
   var ok bool = false
   var p *ovid/parse.Decl = fn.sub
-  if ovid/parse.CountDecls(p) == 1 {
+  var np i64 = ovid/parse.CountDecls(p)
+  if np == 1 || np == 2 {
     if ovid/mem.Eq(p.typp, p.typn, strptr("*ovid/io.Cap"), strlen("*ovid/io.Cap")) {
       if ovid/mem.Eq(fn.typp, fn.typn, strptr("i64"), strlen("i64")) {
-        ok = true
+        ok = np == 1 || ovid/mem.Eq(p.next.typp, p.next.typn, strptr("*ovid/io.Net"), strlen("*ovid/io.Net"))
       }
     }
   }
@@ -879,6 +900,18 @@ func CheckMain(c *Ch) i64 {
     Err(c, strptr("bad_main"), strlen("bad_main"), strptr("main must be (io *ovid/io.Cap) i64"), strlen("main must be (io *ovid/io.Cap) i64"))
   }
   return CheckAbi(c)
+}
+
+// Opaque reports whether the type is a pointer to one of ovid/io's types
+// seen from outside ovid/io. Those types are handles on what the program
+// may do, and a handle is only worth something if it cannot be forged or
+// taken apart: so outside ovid/io one cannot be made by a cast or turned
+// into an address by one, and its fields cannot be read or written.
+func Opaque(c *Ch, tp i64, tn i64) bool {
+  if tn < strlen("*ovid/io.") || !ovid/mem.Eq(tp, strlen("*ovid/io."), strptr("*ovid/io."), strlen("*ovid/io.")) {
+    return false
+  }
+  return !ovid/mem.Eq(c.pathp, c.pathn, strptr("ovid/io"), strlen("ovid/io")) || c.pkg.std == 0
 }
 
 // CheckAbi checks that ovid/io.Cap starts with the five fields the runtime

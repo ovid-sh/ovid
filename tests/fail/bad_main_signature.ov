@@ -1,5 +1,5 @@
 package demo
 import ovid/io
-func main() i64 { // error: bad_main 1 expected="func main(io *ovid/io.Cap) i64" got="func main() i64"
+func main() i64 { // error: bad_main 1 expected="func main(io *ovid/io.Cap) i64, or (io *ovid/io.Cap, net *ovid/io.Net) i64" got="func main() i64"
   return 0
 }

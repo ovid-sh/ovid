@@ -6,24 +6,36 @@ import (
 	"testing"
 )
 
-// envProg prints every string the kernel put after argv on its stack, the
-// environment, reading past the arguments by address; and says whether
-// ovid/io.Arg will hand one over.
+// envProg prints every string the kernel put after the arguments on its
+// stack that has an "=" in it, which is what an environment entry looks
+// like (the program's own path follows them and has none); and says
+// whether ovid/io.Arg will hand one over. It finds them by address from
+// the last argument: a Cap's fields are not readable outside ovid/io.
 const envProg = `package demo
 
 import ovid/io
 
 func Dump(io *ovid/io.Cap) i64 {
   var n i64 = 0
-  var at i64 = io.argv + ((io.argc + 1) * 8)
-  while load64(at) != 0 {
-    var p i64 = load64(at)
-    ovid/io.Stdout(p, ovid/io.CLen(p))
-    ovid/io.Print(strptr("\n"))
-    n = n + 1
-    at = at + 8
+  var argc i64 = ovid/io.Argc(io)
+  var p i64 = ovid/io.Arg(io, argc - 1)
+  p = (p + ovid/io.CLen(p)) + 1
+  while load8(p) != 0 {
+    var len i64 = ovid/io.CLen(p)
+    var eq bool = false
+    var i i64 = 0
+    while i < len {
+      eq = eq || load8(p + i) == 61
+      i = i + 1
+    }
+    if eq {
+      ovid/io.Stdout(p, len)
+      ovid/io.Print(strptr("\n"))
+      n = n + 1
+    }
+    p = (p + len) + 1
   }
-  if ovid/io.Arg(io, io.argc + 1) != 0 || ovid/io.Arg(io, io.argc) != 0 || ovid/io.Arg(io, -1) != 0 {
+  if ovid/io.Arg(io, argc + 1) != 0 || ovid/io.Arg(io, argc) != 0 || ovid/io.Arg(io, -1) != 0 {
     ovid/io.Print(strptr("Arg reads past the arguments\n"))
   }
   ovid/io.Print(strptr("entries: "))

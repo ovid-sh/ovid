@@ -147,6 +147,13 @@ Programs: the entry package (ovid.mod "entry") has
   func main(io *ovid/io.Cap) i64    // result is the exit code
 io is the capability for argv, heap, and syscalls. syscall(...) is only
 allowed inside ovid/io; everyone else calls ovid/io funcs.
+A program that uses the network asks for it:
+  func main(io *ovid/io.Cap, net *ovid/io.Net) i64
+net reaches ovid/io.Listen and ovid/io.Dial, and only a func that is passed
+it, or a Listener, Conn, or Poller made from it, can touch the network.
+ovid/io's types are handles: outside ovid/io a pointer to one cannot be made
+by a cast, cast to anything, or have its fields read (opaque_type), and one
+is never 0: ask ovid/io.ConnErr(c) or ovid/io.ListenErr(l).
 
 Tests: any func TestX(io *ovid/io.Cap) i64 in any module package; 0 passes,
 anything else fails (the value is reported as the exit code). build and run

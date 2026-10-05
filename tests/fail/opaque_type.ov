@@ -1,0 +1,17 @@
+package demo
+import ovid/io
+
+// Each line tries to get a capability it was not handed, or to take one
+// apart. Outside ovid/io none of them is allowed.
+func Sneaky(raw i64, io *ovid/io.Cap) i64 {
+  var net *ovid/io.Net = raw as *ovid/io.Net // error: opaque_type 26 hint="ovid/io's types are handles: get one from main or from an ovid/io func"
+  var c *ovid/io.Conn = 0 as *ovid/io.Conn // error: opaque_type 25 hint="ovid/io's types are handles: get one from main or from an ovid/io func"
+  var addr i64 = io as i64 // error: opaque_type 18 hint="ovid/io's types are handles: ask an ovid/io func about one"
+  var argc i64 = io.argc // error: opaque_type 18 hint="call an ovid/io func instead"
+  io.used = 0 // error: opaque_type 3 hint="call an ovid/io func instead"
+  return ((ovid/io.ConnErr(c) + addr) + argc) + ovid/io.ListenErr(ovid/io.Listen(net, 0, 0, 1))
+}
+
+func main(io *ovid/io.Cap) i64 {
+  return Sneaky(0, io)
+}

@@ -1,0 +1,86 @@
+// stdout: "server got: GET /greeting HTTP/1.0\nclient got: HTTP/1.0 200 OK\nnone waiting: -11\nafter close: -9\n"
+// exit: 0
+package demo
+import ovid/io
+import ovid/mem
+
+// Request is all a client needs: the Net to dial with. It sends one HTTP
+// request and returns the connection.
+func Request(net *ovid/io.Net, port i64) *ovid/io.Conn {
+  var c *ovid/io.Conn = ovid/io.Dial(net, 0x7f000001, port)
+  if ovid/io.ConnErr(c) == 0 {
+    ovid/io.ConnWrite(c, strptr("GET /greeting HTTP/1.0\r\n\r\n"), strlen("GET /greeting HTTP/1.0\r\n\r\n"))
+  }
+  return c
+}
+
+// Answer is given one connection and nothing else: it cannot open another,
+// or listen. It prints the request line and replies.
+func Answer(c *ovid/io.Conn, buf i64) i64 {
+  var n i64 = ovid/io.ConnRead(c, buf, 512)
+  if n <= 0 {
+    return 1
+  }
+  ovid/io.Print(strptr("server got: "))
+  ovid/io.Stdout(buf, FirstLine(buf, n))
+  ovid/io.Print(strptr("\n"))
+  ovid/io.ConnWrite(c, strptr("HTTP/1.0 200 OK\r\n\r\nhello"), strlen("HTTP/1.0 200 OK\r\n\r\nhello"))
+  return 0
+}
+
+// FirstLine is given no capability at all: it can compute, and that is all.
+func FirstLine(p i64, n i64) i64 {
+  var i i64 = 0
+  while i < n && load8(p + i) != 13 {
+    i = i + 1
+  }
+  return i
+}
+
+func main(io *ovid/io.Cap, net *ovid/io.Net) i64 {
+  var buf i64 = ovid/io.Alloc(io, 512)
+  // Port 0: the kernel picks a free one, so two runs never collide.
+  var l *ovid/io.Listener = ovid/io.Listen(net, 0x7f000001, 0, 8)
+  if ovid/io.ListenErr(l) != 0 {
+    return 1
+  }
+  var p *ovid/io.Poller = ovid/io.NewPoller(net, 8)
+  ovid/io.PollListener(p, l, 1)
+  var client *ovid/io.Conn = Request(net, ovid/io.ListenPort(l))
+  if ovid/io.ConnErr(client) != 0 {
+    return 2
+  }
+  // The listener is ready, then the accepted connection is.
+  if ovid/io.PollWait(p, 5000) != 1 || ovid/io.PollData(p, 0) != 1 {
+    return 3
+  }
+  var server *ovid/io.Conn = ovid/io.Accept(l)
+  if ovid/io.ConnErr(server) != 0 {
+    return 4
+  }
+  ovid/io.PollConn(p, server, ovid/io.EPOLLIN, 2)
+  if ovid/io.PollWait(p, 5000) != 1 || ovid/io.PollData(p, 0) != 2 || (ovid/io.PollEvents(p, 0) & ovid/io.EPOLLIN) == 0 {
+    return 5
+  }
+  if Answer(server, buf) != 0 {
+    return 6
+  }
+  var n i64 = ovid/io.ConnRead(client, buf, 512)
+  if n <= 0 || !ovid/mem.Eq(buf + (n - 5), 5, strptr("hello"), 5) {
+    return 7
+  }
+  ovid/io.Print(strptr("client got: "))
+  ovid/io.Stdout(buf, FirstLine(buf, n))
+  ovid/io.Print(strptr("\n"))
+  // No second connection is waiting: Accept says so instead of blocking.
+  ovid/io.Print(strptr("none waiting: "))
+  ovid/io.PrintInt(io, ovid/io.ConnErr(ovid/io.Accept(l)))
+  ovid/io.Print(strptr("\n"))
+  // A closed Conn is dead, not a descriptor someone else may now own.
+  ovid/io.ConnClose(server)
+  ovid/io.Print(strptr("after close: "))
+  ovid/io.PrintInt(io, ovid/io.ConnRead(server, buf, 1))
+  ovid/io.Print(strptr("\n"))
+  ovid/io.ConnClose(client)
+  return 0
+}

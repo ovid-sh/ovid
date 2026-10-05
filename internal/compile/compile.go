@@ -250,9 +250,15 @@ func (c *cg) emitStartup(mainLab int) error {
 	c.b.MovMemRegDispRax(asm.RCX, heap)
 	c.b.MovRegImm64(asm.RAX, 0)
 	c.b.MovMemRegDispRax(asm.RCX, used)
+	// Cap's sixth field, net, starts as 0: ovid/io fills it on first use.
+	// It is the last of the 48 bytes reserved above.
+	c.b.MovMemRegDispRax(asm.RCX, 40)
 	c.b.MovRegImm64(asm.RAX, heapSize)
 	c.b.MovMemRegDispRax(asm.RCX, size)
 	c.b.MovRegReg(asm.RDI, asm.RSP)
+	// The network handle, for a main that takes one: the same block as
+	// the Cap under another type, so it costs nothing to make.
+	c.b.MovRegReg(asm.RSI, asm.RSP)
 	c.b.Call(mainLab)
 	c.b.MovRegReg(asm.RDI, asm.RAX)
 	c.b.MovRegImm64(asm.RAX, 60)
