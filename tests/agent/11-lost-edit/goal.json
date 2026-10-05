@@ -1,6 +1,5 @@
 {
   "check": true,
-  "start_passes": true,
   "runs": [{"stdout": "5\n"}],
   "contains": [
     {"re": "^    x = x \\+ 1$", "count": 1},

@@ -1,0 +1,5 @@
+{"ops":[
+  {"op":"delete","id":"st:tally.Count:5","expect":"a443c3bd1540"},
+  {"op":"append","into":"tally","text":"// Total counts the events of two days.\nfunc Total(a i64, b i64) i64 {\n  return Count(a) + Count(b)\n}"},
+  {"op":"replace","id":"st:tally.main:1","expect":"e9757589f400","text":"ovid/io.PrintInt(io, Total(2, 3))"}
+]}
