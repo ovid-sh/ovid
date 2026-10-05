@@ -54,7 +54,7 @@ type Xfail struct {
 }
 
 // Run is one execution of the built program, in a fresh directory that
-// holds Files.
+// holds Files (by slash-separated path; directories are made as needed).
 type Run struct {
 	Args   []string          `json:"args"`
 	Stdin  string            `json:"stdin"`
@@ -118,8 +118,23 @@ func Load(dir string) ([]Task, error) {
 	return ts, nil
 }
 
-// Setup copies the task's start/ (if any) into work, which must exist.
+// Setup fills work, which must exist: first with the directory of this
+// repository that the task's start_from file names, if it has one (less
+// its bin/, which holds build output), then with the task's start/ (if
+// any), whose files win. start_from lets a task begin from a large module
+// the repository already has, such as prog/, without a copy of it.
 func (t Task) Setup(work string) error {
+	if b, err := os.ReadFile(filepath.Join(t.Dir, "start_from")); err == nil {
+		from := filepath.Join(t.Dir, "..", "..", "..", filepath.FromSlash(strings.TrimSpace(string(b))))
+		if err := copyTree(from, work); err != nil {
+			return err
+		}
+		if err := os.RemoveAll(filepath.Join(work, "bin")); err != nil {
+			return err
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
 	src := filepath.Join(t.Dir, "start")
 	if _, err := os.Stat(src); os.IsNotExist(err) {
 		return nil
@@ -252,7 +267,11 @@ func run(exe, dir string, r Run) string {
 		return err.Error()
 	}
 	for f, s := range r.Files {
-		if err := os.WriteFile(filepath.Join(dir, f), []byte(s), 0o644); err != nil {
+		p := filepath.Join(dir, filepath.FromSlash(f))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			return err.Error()
+		}
+		if err := os.WriteFile(p, []byte(s), 0o644); err != nil {
 			return err.Error()
 		}
 	}
