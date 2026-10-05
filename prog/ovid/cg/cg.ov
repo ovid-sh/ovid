@@ -1793,9 +1793,15 @@ func EmitStartup(c *C, mainLab i64) i64 {
   ovid/asm.MovMemRegDispRax(c.code, 1, heapOff)
   ovid/asm.MovRegImm64(c.code, 0, 0)
   ovid/asm.MovMemRegDispRax(c.code, 1, usedOff)
+  // Cap's sixth field, net, starts as 0: ovid/io fills it on first use.
+  // It is the last of the 48 bytes reserved above.
+  ovid/asm.MovMemRegDispRax(c.code, 1, 40)
   ovid/asm.MovRegImm64(c.code, 0, HEAP)
   ovid/asm.MovMemRegDispRax(c.code, 1, sizeOff)
   ovid/asm.MovRegReg(c.code, 7, 4)
+  // The network handle, for a main that takes one: the same block as
+  // the Cap under another type, so it costs nothing to make.
+  ovid/asm.MovRegReg(c.code, 6, 4)
   ovid/asm.Call(c.code, mainLab)
   ovid/asm.MovRegReg(c.code, 7, 0)
   ovid/asm.MovRegImm64(c.code, 0, 60)

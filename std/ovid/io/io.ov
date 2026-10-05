@@ -8,6 +8,7 @@ type Cap struct {
   heap i64
   used i64
   size i64
+  net i64
 }
 
 const SYS_READ i64 = 0
@@ -475,4 +476,278 @@ func WriteInt(io *Cap, fd i64, v i64) i64 {
     io.used = mark
   }
   return r
+}
+
+// The network.
+//
+// Net is the capability to reach it. The runtime hands one to a main that
+// asks for it, func main(io *Cap, net *Net) i64, and nothing else makes
+// one: outside this package a *Net cannot come from a cast. So a func
+// reaches the network only if it is passed a Net, a Listener, a Conn, or a
+// Poller, and its signature says so.
+//
+// A Listener or a Conn is never 0. One that could not be made says why:
+// ListenErr and ConnErr are 0, or the kernel's negative errno.
+
+const SYS_SOCKET i64 = 41
+const SYS_CONNECT i64 = 42
+const SYS_SENDTO i64 = 44
+const SYS_BIND i64 = 49
+const SYS_LISTEN i64 = 50
+const SYS_GETSOCKNAME i64 = 51
+const SYS_SETSOCKOPT i64 = 54
+const SYS_EPOLL_WAIT i64 = 232
+const SYS_EPOLL_CTL i64 = 233
+const SYS_ACCEPT4 i64 = 288
+const SYS_EPOLL_CREATE1 i64 = 291
+
+const EINTR i64 = -4
+const EBADF i64 = -9
+const EAGAIN i64 = -11
+
+const EPOLLIN i64 = 1
+const EPOLLOUT i64 = 4
+const EPOLLERR i64 = 8
+const EPOLLHUP i64 = 16
+
+// Net is the same block as the Cap, under a type that grants less.
+type Net struct {
+  block i64
+}
+
+// NetState is what the network funcs share: closed Conns to hand out
+// again, the Conn that stands for "none", and scratch for system calls.
+type NetState struct {
+  io *Cap
+  free *Conn
+  none *Conn
+  cell i64
+}
+
+type Listener struct {
+  st *NetState
+  fd i64
+  err i64
+}
+
+type Conn struct {
+  st *NetState
+  fd i64
+  err i64
+  next *Conn
+}
+
+// Poller waits for several Conns and Listeners at once.
+type Poller struct {
+  fd i64
+  evs i64
+  max i64
+  ev i64
+}
+
+func netState(net *Net) *NetState {
+  var io *Cap = (net as i64) as *Cap
+  if io.net == 0 {
+    var st *NetState = Alloc(io, sizeof(NetState)) as *NetState
+    st.io = io
+    st.cell = Alloc(io, 16)
+    st.none = Alloc(io, sizeof(Conn)) as *Conn
+    st.none.st = st
+    st.none.fd = -1
+    io.net = st as i64
+  }
+  return io.net as *NetState
+}
+
+// sockaddr fills st.cell with a struct sockaddr_in for ip (four bytes, the
+// first in the high byte: 127.0.0.1 is 0x7f000001) and port.
+func sockaddr(st *NetState, ip i64, port i64) i64 {
+  var sa i64 = st.cell
+  store64(sa, 0)
+  store64(sa + 8, 0)
+  store8(sa, 2)
+  store8(sa + 2, port >> 8)
+  store8(sa + 3, port)
+  store8(sa + 4, ip >> 24)
+  store8(sa + 5, ip >> 16)
+  store8(sa + 6, ip >> 8)
+  store8(sa + 7, ip)
+  return sa
+}
+
+// Listen returns a Listener on the IPv4 address ip and port; port 0 lets
+// the kernel choose one, which ListenPort then reports. Check ListenErr.
+func Listen(net *Net, ip i64, port i64, backlog i64) *Listener {
+  var st *NetState = netState(net)
+  var l *Listener = Alloc(st.io, sizeof(Listener)) as *Listener
+  l.st = st
+  // AF_INET, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC.
+  l.fd = syscall(SYS_SOCKET, 2, 526337, 0, 0, 0, 0)
+  if l.fd < 0 {
+    l.err = l.fd
+    return l
+  }
+  // SOL_SOCKET, SO_REUSEADDR.
+  store64(st.cell, 1)
+  syscall(SYS_SETSOCKOPT, l.fd, 1, 2, st.cell, 4, 0)
+  l.err = syscall(SYS_BIND, l.fd, sockaddr(st, ip, port), 16, 0, 0, 0)
+  if l.err == 0 {
+    l.err = syscall(SYS_LISTEN, l.fd, backlog, 0, 0, 0, 0)
+  }
+  if l.err != 0 {
+    Close(l.fd)
+    l.fd = -1
+  }
+  return l
+}
+
+func ListenErr(l *Listener) i64 {
+  return l.err
+}
+
+// ListenPort is the port l listens on, or < 0.
+func ListenPort(l *Listener) i64 {
+  var sa i64 = l.st.cell
+  store64(sa + 8, 16)
+  var r i64 = syscall(SYS_GETSOCKNAME, l.fd, sa, sa + 8, 0, 0, 0)
+  if r < 0 {
+    return r
+  }
+  return (load8(sa + 2) << 8) | load8(sa + 3)
+}
+
+func newConn(st *NetState, fd i64) *Conn {
+  var c *Conn = st.free
+  if c == 0 as *Conn {
+    c = Alloc(st.io, sizeof(Conn)) as *Conn
+    c.st = st
+  } else {
+    st.free = c.next
+  }
+  c.fd = fd
+  c.err = 0
+  return c
+}
+
+// Accept takes one waiting connection from l. It does not block: when
+// none is waiting, the Conn it returns has ConnErr EAGAIN.
+func Accept(l *Listener) *Conn {
+  // SOCK_NONBLOCK | SOCK_CLOEXEC.
+  var fd i64 = syscall(SYS_ACCEPT4, l.fd, 0, 0, 526336, 0, 0)
+  if fd < 0 {
+    l.st.none.err = fd
+    return l.st.none
+  }
+  // IPPROTO_TCP, TCP_NODELAY: a small write is sent at once.
+  store64(l.st.cell, 1)
+  syscall(SYS_SETSOCKOPT, fd, 6, 1, l.st.cell, 4, 0)
+  return newConn(l.st, fd)
+}
+
+// Dial connects to the IPv4 address ip and port, and waits until it has.
+// Check ConnErr. The Conn blocks on ConnRead and ConnWrite.
+func Dial(net *Net, ip i64, port i64) *Conn {
+  var st *NetState = netState(net)
+  // AF_INET, SOCK_STREAM | SOCK_CLOEXEC.
+  var fd i64 = syscall(SYS_SOCKET, 2, 524289, 0, 0, 0, 0)
+  var r i64 = fd
+  if fd >= 0 {
+    r = syscall(SYS_CONNECT, fd, sockaddr(st, ip, port), 16, 0, 0, 0)
+    if r < 0 {
+      Close(fd)
+    }
+  }
+  if r < 0 {
+    st.none.err = r
+    return st.none
+  }
+  return newConn(st, fd)
+}
+
+// ConnErr is 0 for a Conn that is open, or why it is not.
+func ConnErr(c *Conn) i64 {
+  if c.fd < 0 && c.err == 0 {
+    return EBADF
+  }
+  return c.err
+}
+
+// ConnRead reads up to n bytes into p. It returns the count, 0 when the
+// peer has closed, or < 0 (EAGAIN when a non-blocking Conn has nothing).
+func ConnRead(c *Conn, p i64, n i64) i64 {
+  if c.fd < 0 {
+    return EBADF
+  }
+  return syscall(SYS_READ, c.fd, p, n, 0, 0, 0)
+}
+
+// ConnWrite sends up to n bytes at p and returns how many were taken, or
+// < 0. A peer that has gone is an error, not the end of the program.
+func ConnWrite(c *Conn, p i64, n i64) i64 {
+  if c.fd < 0 {
+    return EBADF
+  }
+  // MSG_NOSIGNAL.
+  return syscall(SYS_SENDTO, c.fd, p, n, 16384, 0, 0)
+}
+
+// ConnClose closes c. The handle is dead from here on; ovid/io may hand
+// its memory out again as another Conn.
+func ConnClose(c *Conn) i64 {
+  if c.fd < 0 {
+    return EBADF
+  }
+  var r i64 = Close(c.fd)
+  c.fd = -1
+  c.next = c.st.free
+  c.st.free = c
+  return r
+}
+
+// NewPoller makes a Poller that reports up to max events per PollWait.
+func NewPoller(net *Net, max i64) *Poller {
+  var st *NetState = netState(net)
+  var p *Poller = Alloc(st.io, sizeof(Poller)) as *Poller
+  // EPOLL_CLOEXEC.
+  p.fd = syscall(SYS_EPOLL_CREATE1, 524288, 0, 0, 0, 0, 0)
+  p.max = max
+  p.evs = Alloc(st.io, max * 12)
+  p.ev = Alloc(st.io, 16)
+  return p
+}
+
+func pollCtl(p *Poller, op i64, fd i64, events i64, data i64) i64 {
+  store64(p.ev, events)
+  store64(p.ev + 4, data)
+  return syscall(SYS_EPOLL_CTL, p.fd, op, fd, p.ev, 0, 0)
+}
+
+// PollListener has p report, with data, when l has a connection waiting.
+func PollListener(p *Poller, l *Listener, data i64) i64 {
+  return pollCtl(p, 1, l.fd, EPOLLIN, data)
+}
+
+// PollConn has p report events on c (EPOLLIN, EPOLLOUT) with data, or
+// changes what it reports if c is already watched. Closing c ends it.
+func PollConn(p *Poller, c *Conn, events i64, data i64) i64 {
+  var r i64 = pollCtl(p, 1, c.fd, events, data)
+  // EEXIST: watched already, so this is a change.
+  if r == -17 {
+    r = pollCtl(p, 3, c.fd, events, data)
+  }
+  return r
+}
+
+// PollWait waits up to ms milliseconds (-1: forever) and returns how many
+// events there are, or < 0. Event i is PollEvents(p, i) on PollData(p, i).
+func PollWait(p *Poller, ms i64) i64 {
+  return syscall(SYS_EPOLL_WAIT, p.fd, p.evs, p.max, ms, 0, 0)
+}
+
+func PollEvents(p *Poller, i i64) i64 {
+  return load32(p.evs + (i * 12))
+}
+
+func PollData(p *Poller, i i64) i64 {
+  return load64((p.evs + (i * 12)) + 4)
 }
