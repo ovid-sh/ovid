@@ -308,7 +308,7 @@ func runAgent(ctx context.Context, work, bin, prompt, model string, budget float
 					}
 				}
 				s := string(c.Input)
-				if strings.Contains(s, repo) || strings.Contains(s, "tests/agent") || strings.Contains(s, "ovid-sh") {
+				if namesDir(s, repo) || strings.Contains(s, "tests/agent") || strings.Contains(s, "ovid-sh") {
 					a.Outside = append(a.Outside, cut(s, 200))
 				}
 			}
@@ -352,6 +352,24 @@ func resultText(raw json.RawMessage) string {
 		b.WriteString(x.Text)
 	}
 	return b.String()
+}
+
+// namesDir reports whether s names dir itself or something under it. A
+// sibling whose name merely starts the same way (dir-out next to dir) is
+// not a match.
+func namesDir(s, dir string) bool {
+	for i := strings.Index(s, dir); i >= 0; {
+		rest := s[i+len(dir):]
+		if rest == "" || strings.ContainsRune("/\"' \t\n\\;)", rune(rest[0])) {
+			return true
+		}
+		j := strings.Index(rest, dir)
+		if j < 0 {
+			break
+		}
+		i += len(dir) + j
+	}
+	return false
 }
 
 // childEnv is this process's environment with ovid first on PATH and

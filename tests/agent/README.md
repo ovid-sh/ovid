@@ -80,3 +80,7 @@ passing runs only, so a cheap failure does not count as progress.
 
 `-model` picks the model (default: Claude Code's), `-budget` the spending
 limit per agent (USD 2), `-timeout` the time limit per run (20 minutes).
+`-preamble FILE` uses another preamble in place of `preamble.md`, to
+compare two wordings on the same tasks; `preamble.guided.md` is one that
+tells the agent to navigate and edit through ovid. Each record's
+`ovid_cmds` counts its ovid calls by subcommand.
