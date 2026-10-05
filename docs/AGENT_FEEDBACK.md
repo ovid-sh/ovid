@@ -30,7 +30,7 @@ more: a median of $0.20 against $0.15, 52 KB read against 30 KB, twice
 the input tokens. ovid's read commands print more than the shell tools
 they stand in for: on prog/, `show` of one func is 1.7 times its text,
 `grep` 3.7 times `grep -rn`, and `outline` of a package 6.2 times
-`grep -n '^func'`. Even when told to, the agents did not edit through
+`grep -n '^func\|^type\|^const'`. Even when told to, the agents did not edit through
 ovid: one run of five used `ovid insert`, the rest python and `sed`
 (611c7e2, below; #125).
 
@@ -64,13 +64,15 @@ failed run):
 | plain | 4/5 | 13 | 10 | 1 | 30056 | 7504 | 166222 | 6471 | $0.15 | 56 |
 | guided | 5/5 | 16 | 15 | 0 | 52036 | 8640 | 321401 | 7212 | $0.20 | 61 |
 
-ovid calls by subcommand, summed over the five runs (the new `ovid_cmds`
-field), and the shell tools counted from the transcripts:
+ovid calls by subcommand, summed over the five runs, and the shell tools,
+all counted from the transcripts. (The records' `ovid_cmds` field has one
+`check` fewer for guided run 4: it was written as `ovid -C DIR check`,
+which the counter did not see past until the fix in this PR.)
 
 | | check | build | test | help | outline | show | grep | refs | insert | shell grep | sed | cat | python3 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | plain | 28 | 10 | 8 | 12 | 2 | 0 | 0 | 0 | 0 | 40 | 23 | 18 | 11 |
-| guided | 31 | 13 | 8 | 8 | 10 | 39 | 24 | 1 | 4 | 16 | 23 | 22 | 13 |
+| guided | 32 | 13 | 8 | 8 | 10 | 39 | 24 | 1 | 4 | 16 | 23 | 22 | 13 |
 
 What it shows:
 
@@ -98,6 +100,14 @@ What it shows:
   4 times, all in run 2; no run used `replace` or `edit`. Edits were made
   with python (13 uses) and `sed`, as without the guidance. The ids that
   `show` printed were paid for and not used.
+- **The guided preamble misdescribed `show`, and is corrected since.** The
+  wording these runs used (sha256 `153196d9…`) said `show` prints "the id
+  and hash of each statement". It prints each statement's id and the
+  declaration's hash, which is the guard an edit to those statements
+  takes. An agent that looked for per-statement hashes would not have
+  found them, so this run cannot say how much of the missing `ovid edit`
+  use is the wording's doing. The corrected file names the declaration's
+  hash and `--expect`; it has not been run.
 - **A fault in the runner, fixed in this commit's PR.** All ten runs were
   flagged as looking outside their directory, because the output
   directories (`/tmp/ovid-exp-plain`, `-guided`) began with the

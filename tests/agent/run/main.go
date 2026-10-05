@@ -219,8 +219,16 @@ func runTask(t agent.Task, i int, repo, bin, ovid, pre, model string, budget flo
 
 var ovidCmd = regexp.MustCompile(`(^|[\s;&|(])ovid\s`)
 
-// ovidSub finds each ovid invocation's subcommand in a shell command.
-var ovidSub = regexp.MustCompile(`(?:^|[\s;&|(])ovid\s+([a-z]+)`)
+// ovidSub finds each ovid invocation's subcommand in a shell command,
+// past any leading -C DIR (ovid -C mod check).
+var ovidSub = regexp.MustCompile(`(?:^|[\s;&|(])ovid\s+(?:-C\s+\S+\s+)*([a-z]+)`)
+
+// ovidSubs counts the ovid subcommands in a shell command.
+func ovidSubs(command string, into map[string]int) {
+	for _, m := range ovidSub.FindAllStringSubmatch(command, -1) {
+		into[m[1]]++
+	}
+}
 
 // runAgent runs one Claude Code process in work and reads its stream.
 func runAgent(ctx context.Context, work, bin, prompt, model string, budget float64, transcript, repo string) Agent {
@@ -300,12 +308,10 @@ func runAgent(ctx context.Context, work, bin, prompt, model string, budget float
 				json.Unmarshal(c.Input, &in)
 				if c.Name == "Bash" && ovidCmd.MatchString(in.Command) {
 					a.OvidCalls++
-					for _, m := range ovidSub.FindAllStringSubmatch(in.Command, -1) {
-						if a.OvidCmds == nil {
-							a.OvidCmds = map[string]int{}
-						}
-						a.OvidCmds[m[1]]++
+					if a.OvidCmds == nil {
+						a.OvidCmds = map[string]int{}
 					}
+					ovidSubs(in.Command, a.OvidCmds)
 				}
 				s := string(c.Input)
 				if namesDir(s, repo) || strings.Contains(s, "tests/agent") || strings.Contains(s, "ovid-sh") {
@@ -354,22 +360,29 @@ func resultText(raw json.RawMessage) string {
 	return b.String()
 }
 
-// namesDir reports whether s names dir itself or something under it. A
-// sibling whose name merely starts the same way (dir-out next to dir) is
-// not a match.
+// namesDir reports whether s names dir itself or something under it: dir
+// must appear as a whole path, not as the tail of a longer one
+// (/var/tmp/ovid for /tmp/ovid) and not as the start of a sibling's name
+// (/tmp/ovid-out). Whatever cannot be part of a file name ends it, so
+// `cd /tmp/ovid&&ls` counts.
 func namesDir(s, dir string) bool {
-	for i := strings.Index(s, dir); i >= 0; {
-		rest := s[i+len(dir):]
-		if rest == "" || strings.ContainsRune("/\"' \t\n\\;)", rune(rest[0])) {
+	nameByte := func(c byte) bool {
+		return c == '.' || c == '_' || c == '-' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= 0x80
+	}
+	for from := 0; ; {
+		i := strings.Index(s[from:], dir)
+		if i < 0 {
+			return false
+		}
+		i += from
+		end := i + len(dir)
+		before := i == 0 || !(nameByte(s[i-1]) || s[i-1] == '/')
+		after := end == len(s) || !nameByte(s[end])
+		if before && after {
 			return true
 		}
-		j := strings.Index(rest, dir)
-		if j < 0 {
-			break
-		}
-		i += len(dir) + j
+		from = i + 1
 	}
-	return false
 }
 
 // childEnv is this process's environment with ovid first on PATH and
