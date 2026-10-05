@@ -8,8 +8,9 @@ Each run's raw records are in `docs/agent-runs/`.
 ## Current state (verified 2026-10-05)
 
 The four harder tasks (12–15) separate the models where the first eleven
-did not. `claude-haiku-4-5` passes 9 of 20: it never checks for i64
-overflow in `12-sortn` (0/5), and in `13-stock` fixes only the bug the
+did not. `claude-haiku-4-5` passes 9 of 20: it accepts integers that do
+not fit in i64 in `12-sortn` (0/5: four runs have no overflow check, one
+an incomplete one), and in `13-stock` fixes only the bug the
 task reports (0/5). `claude-opus-5-5` and `claude-sonnet-5-5` pass 20 of
 20 each; sonnet costs less than half of what opus does ($1.51 against
 $3.65) in fewer calls. Sonnet remains the cheapest model that passes
@@ -76,7 +77,7 @@ haiku-4-5 ($5.56 in all, $2.28 of it on the 11 failed runs):
 
 What the transcripts show:
 
-- **`12-sortn`, haiku: no overflow check, and a report that says
+- **`12-sortn`, haiku: no working overflow check, and a report that says
   otherwise.** All five runs accept `9223372036854775808`,
   `-9223372036854775809` (runs 7 and 8 of the goal), and in four of them
   `99999999999999999999` (run 9), printing the wrapped value with exit 0.
@@ -109,7 +110,8 @@ What the transcripts show:
   sonnet, 48 KB for opus, 93 KB for haiku, medians). Haiku's failed run 5
   built its messages in the checker's output buffer `c.b`, so each message
   also appeared raw in stdout ahead of its JSON line.
-- **Cost.** Sonnet costs 36–51% of what opus does on each task, 41% in all.
+- **Cost.** Sonnet costs 31–47% of what opus does on each task (per-task
+  totals), 41% in all.
   Haiku is not cheap where it struggles: its `15-selfhost-messages` runs
   cost $3.15 against opus's $1.90, with 13 times the median input tokens.
 
