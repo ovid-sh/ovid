@@ -189,6 +189,11 @@ ovid test [--run substr] [--list]
   in its output.
   Output past 4000 bytes is cut ("...(truncated)") and "output_bytes" gives
   its full size.
+  If a test changed a file of the module, the summary is not ok and adds
+  "module_changed":true, changed_files, revision_before, and, when the
+  module still loads, revision_after; run --json adds the same fields.
+  scan_error is there when the module's directory could not be read
+  through: changed_files is then incomplete.
   A crash adds "signal", "at" (the statement that faulted), "stack" (it and
   each call leading to it, innermost first), and for a bad load or store
   "fault_addr"; a hung test reads "signal":"timeout".

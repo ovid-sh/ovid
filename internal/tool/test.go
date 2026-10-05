@@ -182,11 +182,44 @@ func Test(dir, filter string, list bool, w io.Writer) int {
 		}
 		emit(w, r)
 	}
-	emit(w, map[string]any{"fact": "summary", "ok": failed == 0, "passed": passed, "failed": failed})
-	if failed > 0 {
+	sum := map[string]any{"fact": "summary", "ok": failed == 0, "passed": passed, "failed": failed}
+	// A test is a program that can write files, its own module's among
+	// them. What was tested is then no longer what is on disk.
+	changed := moduleChanged(m, sum)
+	if changed {
+		sum["ok"] = false
+	}
+	emit(w, sum)
+	if failed > 0 || changed {
 		return ExitFail
 	}
 	return ExitOK
+}
+
+// moduleChanged reports whether the module on disk differs from m, which
+// was loaded before a program was run, and if so records in r which files,
+// and the revision before and, when the module still loads, after.
+func moduleChanged(m *module.Module, r map[string]any) bool {
+	files, err := m.ChangedOnDisk()
+	if len(files) == 0 && err == nil {
+		return false
+	}
+	if files == nil {
+		files = []string{}
+	}
+	r["module_changed"], r["changed_files"], r["revision_before"] = true, files, m.Revision()
+	if err != nil {
+		// The directory could not be read through, so nothing shows the
+		// module is unchanged: say it changed, and why the list is short.
+		r["scan_error"] = err.Error()
+	}
+	// Read again as m was (run leaves out the test files), or the two
+	// revisions would cover different files. Left out if it no longer loads.
+	if now, err := m.Reload(); err == nil {
+		r["revision_after"] = now.Revision()
+	}
+	r["hint"] = "the module on disk is no longer the one that was loaded: the program wrote to it, or it was edited meanwhile; look at changed_files before relying on this result"
+	return true
 }
 
 // isTest reports whether fn has a test's signature, func(io *ovid/io.Cap) i64.

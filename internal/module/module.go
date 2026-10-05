@@ -91,13 +91,14 @@ type Module struct {
 	// node, the first in load order when several share it (check reports
 	// the duplicate); order lists each id once; copies lists every node of
 	// an id that more than one node has, and locs every node.
-	index  map[string]*Loc
-	order  []string
-	locs   []*Loc
-	copies map[string][]*Loc
-	byNode map[any]*Loc
-	hashes map[*Loc]string // full digests, filled on first Hash
-	modSrc []byte          // ovid.mod as read
+	index   map[string]*Loc
+	order   []string
+	locs    []*Loc
+	copies  map[string][]*Loc
+	byNode  map[any]*Loc
+	hashes  map[*Loc]string // full digests, filled on first Hash
+	modSrc  []byte          // ovid.mod as read
+	noTests bool            // loaded without its _test.ov files
 }
 
 // Diag is one error with its location resolved.
@@ -151,7 +152,7 @@ func load(dir string, overlay map[string][]byte, noTests bool) (*Module, error) 
 	if err != nil {
 		return nil, err
 	}
-	m := &Module{Root: root, Std: map[string]bool{}}
+	m := &Module{Root: root, Std: map[string]bool{}, noTests: noTests}
 	modSrc, err := os.ReadFile(filepath.Join(root, "ovid.mod"))
 	if err != nil {
 		return nil, err
@@ -192,21 +193,10 @@ func load(dir string, overlay map[string][]byte, noTests bool) (*Module, error) 
 		}
 		byPkg[pkg] = append(byPkg[pkg], &File{Path: rel, Abs: p, Src: src})
 	}
-	err = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			if p != root && (strings.HasPrefix(d.Name(), ".") || exists(filepath.Join(p, "ovid.mod"))) {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(p, ".ov") || noTests && strings.HasSuffix(p, "_test.ov") {
-			return nil
-		}
+	err = walkSources(root, noTests, func(p string) error {
 		src, ok := overlay[p]
 		if !ok {
+			var err error
 			if src, err = os.ReadFile(p); err != nil {
 				return err
 			}
@@ -262,6 +252,79 @@ func load(dir string, overlay map[string][]byte, noTests bool) (*Module, error) 
 		m.Prog.Files = append(m.Prog.Files, f.Path)
 	}
 	return m, nil
+}
+
+// walkSources calls fn with the absolute path of every source file of the
+// module at root: each .ov file, not in a dot directory and not under
+// another module, and not a _test.ov file when noTests.
+func walkSources(root string, noTests bool, fn func(abs string) error) error {
+	return filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if p != root && (strings.HasPrefix(d.Name(), ".") || exists(filepath.Join(p, "ovid.mod"))) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(p, ".ov") || noTests && strings.HasSuffix(p, "_test.ov") {
+			return nil
+		}
+		return fn(p)
+	})
+}
+
+// ChangedOnDisk lists the files of the module whose contents on disk differ
+// from what was loaded: a source file that changed, is gone, or is new, and
+// ovid.mod. The paths are as DisplayPath gives them, sorted. An empty
+// result with a nil error means the module on disk is still the one in m.
+// An error means the directory could not be read through, and the list is
+// only what was found before it: the module may have changed in ways it
+// does not show. Files of shipped packages are not compared.
+func (m *Module) ChangedOnDisk() ([]string, error) {
+	loaded := map[string]*File{}
+	for _, f := range m.Files {
+		if f.Abs != "" && !strings.HasPrefix(f.Path, "std:") {
+			loaded[f.Abs] = f
+		}
+	}
+	var out []string
+	walkErr := walkSources(m.Root, m.noTests, func(p string) error {
+		f, ok := loaded[p]
+		delete(loaded, p)
+		if src, err := os.ReadFile(p); !ok || err != nil || !bytes.Equal(src, f.Src) {
+			out = append(out, m.DisplayPath(&File{Abs: p}))
+		}
+		return nil
+	})
+	if walkErr == nil {
+		// Only a complete walk shows that a loaded file is gone.
+		for _, f := range loaded {
+			out = append(out, m.DisplayPath(f))
+		}
+	}
+	mod := filepath.Join(m.Root, "ovid.mod")
+	if src, err := os.ReadFile(mod); err != nil || !bytes.Equal(src, m.modSrc) {
+		out = append(out, m.DisplayPath(&File{Abs: mod}))
+	}
+	sort.Strings(out)
+	return out, walkErr
+}
+
+// Reload reads the module from disk again, the way m was read: without
+// its _test.ov files if m was loaded without them, so that the two have
+// revisions over the same set of files.
+//
+// It fails if m's ovid.mod is gone. Loading would then find the module
+// above, if m lies inside one, and answer for a different module.
+func (m *Module) Reload() (*Module, error) {
+	if root, err := Find(m.Root); err != nil {
+		return nil, err
+	} else if root != m.Root {
+		return nil, fmt.Errorf("%s is no longer a module: its ovid.mod is gone", m.Root)
+	}
+	return load(m.Root, nil, m.noTests)
 }
 
 func exists(p string) bool {
