@@ -156,3 +156,61 @@ func TestRunReportsAChangedModule(t *testing.T) {
 		t.Fatalf("revisions %v -> %v, want the program's own %s -> %s", r["revision_before"], r["revision_after"], before, rev())
 	}
 }
+
+// TestChangedModuleEdgeCases: two ways the module can stop being readable
+// as it was. Neither may pass for "unchanged", and neither may answer with
+// some other module's revision.
+func TestChangedModuleEdgeCases(t *testing.T) {
+	needExec(t)
+	t.Setenv(module.PathsEnv, "module")
+	summary := func(dir string) (map[string]any, int) {
+		t.Helper()
+		var b bytes.Buffer
+		code := Test(dir, "", false, &b)
+		return last(t, b.String()), code
+	}
+	testFile := func(body string) string {
+		return "package inner\nimport ovid/io\nfunc TestIt(io *ovid/io.Cap) i64 {\n" + body + "\n}\n"
+	}
+
+	// A module inside another deletes its own ovid.mod. Loading its
+	// directory again would find the outer module.
+	outer := mkmod(t, demo("package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  return 0\n}\n"))
+	inner := filepath.Join(outer, "nested")
+	mod := filepath.Join(inner, "ovid.mod")
+	for rel, text := range map[string]string{
+		"ovid.mod":           "module inner\nentry inner\n",
+		"inner/main.ov":      "package inner\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  return 0\n}\n",
+		"inner/main_test.ov": testFile(fmt.Sprintf("  return ovid/io.Unlink(strptr(%q))", mod)),
+	} {
+		os.MkdirAll(filepath.Dir(filepath.Join(inner, rel)), 0o755)
+		if err := os.WriteFile(filepath.Join(inner, rel), []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sum, code := summary(inner)
+	if code != ExitFail || sum["module_changed"] != true || !reflect.DeepEqual(sum["changed_files"], []any{"ovid.mod"}) || sum["revision_after"] != nil || sum["revision_before"] == nil {
+		t.Fatalf("a module that removed its ovid.mod: exit %d %v", code, sum)
+	}
+
+	// A test moves a directory that cannot be read into the module's view.
+	// The walk fails partway; that is not the same as finding no change.
+	if os.Getuid() == 0 {
+		return // root reads any directory
+	}
+	dir := mkmod(t, map[string]string{"ovid.mod": "module inner\nentry inner\n",
+		"inner/main.ov": "package inner\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  return 0\n}\n"})
+	hidden, shown := filepath.Join(dir, ".hidden"), filepath.Join(dir, "zzz")
+	os.MkdirAll(hidden, 0o755)
+	os.WriteFile(filepath.Join(hidden, "x.ov"), []byte("package zzz\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, "inner", "main_test.ov"),
+		[]byte(testFile(fmt.Sprintf("  return ovid/io.Rename(strptr(%q), strptr(%q))", hidden, shown))), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	os.Chmod(hidden, 0)
+	t.Cleanup(func() { os.Chmod(hidden, 0o755); os.Chmod(shown, 0o755) })
+	sum, code = summary(dir)
+	if code != ExitFail || sum["ok"] != false || sum["module_changed"] != true || sum["scan_error"] == nil {
+		t.Fatalf("a module with a directory that cannot be read: exit %d %v", code, sum)
+	}
+}

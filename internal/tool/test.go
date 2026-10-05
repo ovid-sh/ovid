@@ -200,11 +200,19 @@ func Test(dir, filter string, list bool, w io.Writer) int {
 // was loaded before a program was run, and if so records in r which files,
 // and the revision before and, when the module still loads, after.
 func moduleChanged(m *module.Module, r map[string]any) bool {
-	files := m.ChangedOnDisk()
-	if len(files) == 0 {
+	files, err := m.ChangedOnDisk()
+	if len(files) == 0 && err == nil {
 		return false
 	}
+	if files == nil {
+		files = []string{}
+	}
 	r["module_changed"], r["changed_files"], r["revision_before"] = true, files, m.Revision()
+	if err != nil {
+		// The directory could not be read through, so nothing shows the
+		// module is unchanged: say it changed, and why the list is short.
+		r["scan_error"] = err.Error()
+	}
 	// Read again as m was (run leaves out the test files), or the two
 	// revisions would cover different files. Left out if it no longer loads.
 	if now, err := m.Reload(); err == nil {

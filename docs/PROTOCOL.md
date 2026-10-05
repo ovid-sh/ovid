@@ -115,7 +115,9 @@ the module on disk is no longer the one ovid loaded, the last line says so:
 
 `changed_files` are the source files, and `ovid.mod`, that changed, went
 away, or appeared; `revision_after` is missing when the module no longer
-loads. For `test` the summary is then `"ok":false` and the exit code 1 even
+loads (its `ovid.mod` gone, for one). If the module's directory cannot be
+read through, the module counts as changed, `"scan_error"` says why, and
+`changed_files` holds only what was found before that. For `test` the summary is then `"ok":false` and the exit code 1 even
 if every test passed: what passed is not what is on disk. For `run --json`
 the fields are added and `ok` keeps its meaning (the program ran). An edit
 by someone else while the program ran is reported the same way. Files
