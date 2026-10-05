@@ -1,0 +1,141 @@
+package tool
+
+import (
+	"bytes"
+	"fmt"
+	"os"
+	"path/filepath"
+	"reflect"
+	"testing"
+
+	"ovid/internal/module"
+)
+
+// writerMod is a module whose tests and whose main write the files named,
+// by absolute path: plant creates one, and each test rewrites or removes
+// what its name says.
+func writerMod(t *testing.T, outside string) string {
+	t.Helper()
+	dir := mkmod(t, demo("package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  return 0\n}\n"))
+	lit := func(rel string) string {
+		p := filepath.Join(dir, rel)
+		return fmt.Sprintf("strptr(%q), %d", p, len(p))
+	}
+	out := filepath.Join(outside, "notes.txt")
+	src := `package demo
+
+import ovid/io
+
+func Put(io *ovid/io.Cap, path i64, n i64) i64 {
+  return ovid/io.WriteFile(io, path, n, strptr("package demo\n"), 13, 420)
+}
+
+func TestA_Passes(io *ovid/io.Cap) i64 {
+  return 0
+}
+
+func TestB_PlantsAFile(io *ovid/io.Cap) i64 {
+  return Put(io, ` + lit("demo/planted.ov") + `)
+}
+
+func TestC_RewritesASource(io *ovid/io.Cap) i64 {
+  return Put(io, ` + lit("demo/other.ov") + `)
+}
+
+func TestD_RewritesOvidMod(io *ovid/io.Cap) i64 {
+  return ovid/io.WriteFile(io, ` + lit("ovid.mod") + `, strptr("module demo\nentry demo\n\n"), 24, 420)
+}
+
+func TestE_RemovesASource(io *ovid/io.Cap) i64 {
+  return ovid/io.Unlink(` + fmt.Sprintf("strptr(%q)", filepath.Join(dir, "demo/gone.ov")) + `)
+}
+
+func TestF_WritesElsewhere(io *ovid/io.Cap) i64 {
+  return ovid/io.WriteFile(io, ` + fmt.Sprintf("strptr(%q), %d", out, len(out)) + `, strptr("fine\n"), 5, 420)
+}
+`
+	for rel, text := range map[string]string{
+		"demo/writer_test.ov": src,
+		"demo/other.ov":       "package demo\n\nconst Other i64 = 1\n",
+		"demo/gone.ov":        "package demo\n\nconst Gone i64 = 2\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, rel), []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+// TestTestReportsAChangedModule: a test can write files, its own module's
+// among them. When the module on disk is no longer the one that was tested,
+// the summary says so, names the files, and is not ok, though every test
+// passed. Writing anywhere else is nobody's concern.
+func TestTestReportsAChangedModule(t *testing.T) {
+	needExec(t)
+	t.Setenv(module.PathsEnv, "module")
+	run := func(filter string) (map[string]any, int, string) {
+		t.Helper()
+		dir := writerMod(t, t.TempDir())
+		var b bytes.Buffer
+		code := Test(dir, filter, false, &b)
+		rs := lines(t, b.String())
+		for _, r := range rs[:len(rs)-1] {
+			if r["ok"] != true {
+				t.Fatalf("--run %s: a test failed: %v", filter, r)
+			}
+		}
+		return rs[len(rs)-1], code, dir
+	}
+	for filter, want := range map[string][]string{
+		"PlantsAFile":     {"demo/planted.ov"},
+		"RewritesASource": {"demo/other.ov"},
+		"RewritesOvidMod": {"ovid.mod"},
+		"RemovesASource":  {"demo/gone.ov"},
+		"s":               {"demo/gone.ov", "demo/other.ov", "demo/planted.ov", "ovid.mod"}, // all six tests
+		"Passes":          nil,
+		"WritesElsewhere": nil,
+	} {
+		sum, code, _ := run(filter)
+		if want == nil {
+			if code != ExitOK || sum["ok"] != true || sum["module_changed"] != nil || sum["changed_files"] != nil {
+				t.Fatalf("--run %s: exit %d %v", filter, code, sum)
+			}
+			continue
+		}
+		var got []string
+		for _, f := range sum["changed_files"].([]any) {
+			got = append(got, f.(string))
+		}
+		if code != ExitFail || sum["ok"] != false || sum["module_changed"] != true || !reflect.DeepEqual(got, want) || sum["failed"] != float64(0) {
+			t.Fatalf("--run %s: exit %d, changed %v, want %v: %v", filter, code, got, want, sum)
+		}
+		before, _ := sum["revision_before"].(string)
+		after, _ := sum["revision_after"].(string)
+		if len(before) != 16 || len(after) != 16 || before == after {
+			t.Fatalf("--run %s: revisions %q and %q", filter, before, after)
+		}
+	}
+}
+
+// TestRunReportsAChangedModule: run --json says the same of a program that
+// writes into its own module. ok still means the program ran.
+func TestRunReportsAChangedModule(t *testing.T) {
+	needExec(t)
+	t.Setenv(module.PathsEnv, "module")
+	dir := mkmod(t, demo("package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  return 0\n}\n"))
+	p := filepath.Join(dir, "demo", "gen.ov")
+	main := fmt.Sprintf("package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  if ovid/io.Argc(io) > 1 {\n    return ovid/io.WriteFile(io, strptr(%q), %d, strptr(\"package demo\\n\"), 13, 420)\n  }\n  return 0\n}\n", p, len(p))
+	if err := os.WriteFile(filepath.Join(dir, "demo", "main.ov"), []byte(main), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var b bytes.Buffer
+	if code := RunWith(dir, nil, RunOpts{JSON: true}, &b); code != 0 || last(t, b.String())["module_changed"] != nil {
+		t.Fatalf("a program that writes nothing: %s", b.String())
+	}
+	b.Reset()
+	code := RunWith(dir, []string{"write"}, RunOpts{JSON: true}, &b)
+	r := last(t, b.String())
+	if code != 0 || r["ok"] != true || r["exit"] != float64(0) || r["module_changed"] != true || !reflect.DeepEqual(r["changed_files"], []any{"demo/gen.ov"}) {
+		t.Fatalf("exit %d: %s", code, b.String())
+	}
+}

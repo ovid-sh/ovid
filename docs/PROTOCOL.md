@@ -105,6 +105,22 @@ after `argv`, where a program can read it by address, and a caller's
 environment is where its secrets usually are. ovid itself still reads its
 own (`TMPDIR`, `OVID_PATHS`, `OVID_LOCK_TIMEOUT`).
 
+A program can write files, the files of its own module among them. When
+the module on disk is no longer the one ovid loaded, the last line says so:
+
+```json
+{"module_changed":true,"changed_files":["demo/planted.ov"],
+ "revision_before":REV,"revision_after":REV,"hint":TEXT}
+```
+
+`changed_files` are the source files, and `ovid.mod`, that changed, went
+away, or appeared; `revision_after` is missing when the module no longer
+loads. For `test` the summary is then `"ok":false` and the exit code 1 even
+if every test passed: what passed is not what is on disk. For `run --json`
+the fields are added and `ok` keeps its meaning (the program ran). An edit
+by someone else while the program ran is reported the same way. Files
+written anywhere else are not looked at.
+
 `test` keeps the first 4,000 bytes of a test's output in its record. Longer
 output ends in `...(truncated)` and the record adds `"output_bytes"`, the
 size of all of it. The rest is discarded as it is written, so a test that
