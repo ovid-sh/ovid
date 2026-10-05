@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -110,7 +111,7 @@ func runCheck(m *module.Module) *checked {
 		c.res = &check.Result{Types: map[string]string{}}
 		return c
 	}
-	c.res = check.Run(m.Prog)
+	c.res = check.Errors(m.Prog)
 	for _, is := range c.res.Issues {
 		d := module.Diag{Fact: "error", Code: is.Code, Message: is.Message, ID: is.ID,
 			Expected: is.Expected, Got: is.Got, Hint: is.Hint}
@@ -147,7 +148,7 @@ func Check(dir string, facts bool, w io.Writer) int {
 	c.writeDiags(w)
 	if facts {
 		for _, f := range c.res.Facts {
-			if l := m.Index[fmt.Sprint(f["id"])]; l != nil {
+			if l := m.Index()[fmt.Sprint(f["id"])]; l != nil {
 				file, a, _, _ := m.Where(l.Span)
 				f["file"], f["line"] = file, a.Line
 			}
@@ -168,13 +169,13 @@ func DefaultOut(m *module.Module) string {
 	return filepath.Join(m.Root, "bin", filepath.Base(m.Name))
 }
 
-func compileTo(m *module.Module, p *ir.Program, out string) (int, error) {
-	bin, err := compile.Compile(p)
+// compileTo compiles p and writes the program to out.
+func compileTo(m *module.Module, p *ir.Program, out string) (*compile.Output, error) {
+	o, err := compile.CompileAll(p)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	err = module.ReplaceFile(out, bin, 0o755)
-	return len(bin), err
+	return o, module.ReplaceFile(out, o.Bin, 0o755)
 }
 
 func Build(dir, out string, w io.Writer) int {
@@ -191,11 +192,17 @@ func Build(dir, out string, w io.Writer) int {
 	if out == "" {
 		out = DefaultOut(m)
 	}
-	n, err := compileTo(m, m.Prog, out)
+	o, err := compileTo(m, m.Prog, out)
 	if err != nil {
 		return fail(w, "compile", err.Error(), "")
 	}
-	emit(w, map[string]any{"ok": true, "output": out, "bytes": n})
+	// syscalls: every system call the program can make, so that a sandbox
+	// can allow those and no others.
+	r := map[string]any{"ok": true, "output": out, "bytes": len(o.Bin), "syscalls": o.Syscalls}
+	if o.SyscallsUnknown > 0 {
+		r["syscalls_unknown"] = o.SyscallsUnknown
+	}
+	emit(w, r)
 	return ExitOK
 }
 
@@ -346,7 +353,10 @@ func RunWith(dir string, args []string, o RunOpts, w io.Writer) int {
 
 // Dump prints the program tree as JSON. A string literal that is not valid
 // UTF-8 is written as value_hex, so the dump is valid JSON and loses nothing.
-func Dump(dir string, w io.Writer) int {
+// The dump is one document and is not paged: pkg, if set, limits it to one
+// package, and out, if set, sends it to a file (or a device) and prints a
+// one-line receipt in its place.
+func Dump(dir, pkg, out string, w io.Writer) int {
 	m, err := load(dir)
 	if err != nil {
 		return fail(w, "load", err.Error(), "")
@@ -357,11 +367,48 @@ func Dump(dir string, w io.Writer) int {
 		emit(w, map[string]any{"ok": false, "errors": len(m.Errors)})
 		return ExitFail
 	}
-	m.Prog.Revision = m.Revision()
-	raw, err := ir.Marshal(m.Prog)
+	prog := *m.Prog
+	prog.Revision = m.Revision()
+	if pkg != "" {
+		var keep []ir.Package
+		var paths []string
+		for _, p := range prog.Packages {
+			paths = append(paths, p.Path)
+			if p.Path == pkg {
+				keep = append(keep, p)
+			}
+		}
+		if len(keep) == 0 {
+			return fail(w, "not_found", "no package "+pkg, "packages: "+strings.Join(paths, ", "))
+		}
+		prog.Packages = keep
+	}
+	raw, err := ir.Marshal(&prog)
 	if err != nil {
 		return fail(w, "dump", err.Error(), "")
 	}
-	w.Write(raw)
+	if out == "" {
+		w.Write(raw)
+		return ExitOK
+	}
+	// Written in place, not by rename: out may be a device.
+	f, err := os.OpenFile(out, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err == nil {
+		if _, err = f.Write(raw); err == nil {
+			// Only what has storage behind it can be synced: a character
+			// device (/dev/null) or a FIFO answers EINVAL to a sync that
+			// has nothing to do.
+			if st, serr := f.Stat(); serr == nil && (st.Mode().IsRegular() || st.Mode()&(os.ModeDevice|os.ModeCharDevice) == os.ModeDevice) {
+				err = f.Sync()
+			}
+		}
+		if cerr := f.Close(); err == nil {
+			err = cerr
+		}
+	}
+	if err != nil {
+		return fail(w, "write", err.Error(), "")
+	}
+	emit(w, map[string]any{"ok": true, "output": out, "bytes": len(raw), "revision": prog.Revision})
 	return ExitOK
 }

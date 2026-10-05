@@ -1,0 +1,26 @@
+{
+  "check": true,
+  "tests": ["TestGoalSortLarge"],
+  "inject": {
+    "sortn/zz_goal_test.ov": "package sortn\n\nimport ovid/io\n\n// TestGoalSortLarge sorts two million pseudo-random values, extremes\n// included: the result must be ascending and hold the same values.\nfunc TestGoalSortLarge(io *ovid/io.Cap) i64 {\n  var n i64 = 2000000\n  var p i64 = ovid/io.Alloc(io, n * 8)\n  var x i64 = 88172645463325252\n  var sum i64 = 0\n  var mix i64 = 0\n  var i i64 = 0\n  while i < n {\n    x = x ^ (x << 13)\n    x = x ^ ((x >> 7) & 144115188075855871)\n    x = x ^ (x << 17)\n    var v i64 = x\n    if i % 1000 == 0 {\n      v = x % 50\n    }\n    if i == 7 {\n      v = -9223372036854775807 - 1\n    }\n    if i == 9 {\n      v = 9223372036854775807\n    }\n    store64(p + i * 8, v)\n    sum = sum + v\n    mix = mix ^ (v * 31 + (v >> 3))\n    i = i + 1\n  }\n  Sort(io, p, n)\n  i = 0\n  while i < n {\n    var v i64 = load64(p + i * 8)\n    if i > 0 && load64(p + i * 8 - 8) > v {\n      return 1\n    }\n    sum = sum - v\n    mix = mix ^ (v * 31 + (v >> 3))\n    i = i + 1\n  }\n  if sum != 0 || mix != 0 {\n    return 2\n  }\n  if load64(p) != -9223372036854775807 - 1 || load64(p + n * 8 - 8) != 9223372036854775807 {\n    return 3\n  }\n  if Sort(io, p, 0) != 0 || Sort(io, p, 1) != 0 {\n    return 4\n  }\n  return 0\n}\n"
+  },
+  "runs": [
+    {"stdin": "3\n1\n2\n", "stdout": "1\n2\n3\n"},
+    {"stdin": "", "stdout": ""},
+    {"stdin": "5\n-3", "stdout": "-3\n5\n"},
+    {"stdin": "\n\n7\n\n", "stdout": "7\n"},
+    {"stdin": "4\n-4\n4\n0\n-4\n", "stdout": "-4\n-4\n0\n4\n4\n"},
+    {"stdin": "9223372036854775807\n-9223372036854775808\n0\n-1\n", "stdout": "-9223372036854775808\n-1\n0\n9223372036854775807\n"},
+    {"stdin": "-0\n00012\n", "stdout": "0\n12\n"},
+    {"stdin": "1\n9223372036854775808\n", "stdout": "", "stderr": "\\S", "exit": 1},
+    {"stdin": "1\n-9223372036854775809\n", "stdout": "", "stderr": "\\S", "exit": 1},
+    {"stdin": "1\n99999999999999999999\n", "stdout": "", "stderr": "\\S", "exit": 1},
+    {"stdin": "12a\n", "stdout": "", "stderr": "\\S", "exit": 1},
+    {"stdin": "-\n", "stdout": "", "stderr": "\\S", "exit": 1},
+    {"stdin": " 1\n", "stdout": "", "stderr": "\\S", "exit": 1},
+    {"stdin": "+1\n", "stdout": "", "stderr": "\\S", "exit": 1},
+    {"stdin": "1\r\n", "stdout": "", "stderr": "\\S", "exit": 1},
+    {"stdin": "1\n2 \n", "stdout": "", "stderr": "\\S", "exit": 1}
+  ],
+  "contains": [{"re": "^func Sort\\(io \\*ovid/io\\.Cap, p i64, n i64\\) i64"}]
+}

@@ -1,0 +1,156 @@
+package stock
+
+import ovid/io
+import ovid/mem
+
+// Table holds the distinct names seen so far, in the order first seen,
+// and the total count of each. names holds a pointer and a length per
+// name, 16 bytes; counts holds one i64 per name.
+type Table struct {
+  names i64
+  counts i64
+  len i64
+  cap i64
+}
+
+// NewTable returns an empty table with room for 8 names; it grows as
+// needed.
+func NewTable(io *ovid/io.Cap) *Table {
+  var t *Table = ovid/io.Alloc(io, sizeof(Table)) as *Table
+  t.cap = 8
+  t.names = ovid/io.Alloc(io, t.cap * 16)
+  t.counts = ovid/io.Alloc(io, t.cap * 8)
+  return t
+}
+
+// Same reports whether the an bytes at a and the bn bytes at b are the
+// same name.
+func Same(a i64, an i64, b i64, bn i64) bool {
+  var n i64 = an
+  if bn < n {
+    n = bn
+  }
+  return ovid/mem.Eq(a, n, b, n)
+}
+
+// Index returns the index of the name of n bytes at p, adding it with a
+// count of 0 if the table does not have it yet.
+func Index(io *ovid/io.Cap, t *Table, p i64, n i64) i64 {
+  var i i64 = 0
+  while i < t.len {
+    var e i64 = t.names + i * 16
+    if Same(load64(e), load64(e + 8), p, n) {
+      return i
+    }
+    i = i + 1
+  }
+  if t.len == t.cap {
+    var names i64 = ovid/io.Alloc(io, t.cap * 32)
+    var counts i64 = ovid/io.Alloc(io, t.cap * 16)
+    ovid/mem.Copy(names, t.names, t.len * 16)
+    ovid/mem.Copy(counts, t.counts, (t.len - 1) * 8)
+    t.names = names
+    t.counts = counts
+    t.cap = t.cap * 2
+  }
+  store64(t.names + t.len * 16, p)
+  store64(t.names + t.len * 16 + 8, n)
+  t.len = t.len + 1
+  return t.len - 1
+}
+
+// Count is the value of the n decimal digits at p, or -1 if there are
+// none or any byte is not a digit.
+func Count(p i64, n i64) i64 {
+  if n == 0 {
+    return -1
+  }
+  var v i64 = 0
+  var i i64 = 0
+  while i < n {
+    var d i64 = load8(p + i) - 48
+    if d < 0 || d > 9 {
+      return -1
+    }
+    v = v * 10 + d
+    i = i + 1
+  }
+  return v
+}
+
+// Add records one line, NAME COUNT with a single space between, and
+// returns 0, or returns 1 if the line is not of that form.
+func Add(io *ovid/io.Cap, t *Table, p i64, n i64) i64 {
+  var sp i64 = 0
+  while sp < n && load8(p + sp) != 32 {
+    sp = sp + 1
+  }
+  if sp == 0 || sp == n {
+    return 1
+  }
+  var c i64 = Count(p + sp + 1, n - sp - 1)
+  if c < 0 {
+    return 1
+  }
+  var i i64 = Index(io, t, p, sp)
+  store64(t.counts + i * 8, load64(t.counts + i * 8) + c)
+  return 0
+}
+
+// Load adds every line of the n bytes at p. Lines end with a newline; the
+// last may end without one, and empty lines are skipped. It returns the
+// number of the first bad line, counting from 1, or 0.
+func Load(io *ovid/io.Cap, t *Table, p i64, n i64) i64 {
+  var line i64 = 1
+  var start i64 = 0
+  var i i64 = 0
+  while i < n {
+    if load8(p + i) == 10 || i == n - 1 {
+      if i > start && Add(io, t, p + start, i - start) != 0 {
+        return line
+      }
+      start = i + 1
+      line = line + 1
+    }
+    i = i + 1
+  }
+  return 0
+}
+
+// main prints, for each name in the file its argument names, in the order
+// first seen, NAME TOTAL, then the line "total" and the sum of all counts.
+func main(io *ovid/io.Cap) i64 {
+  if ovid/io.Argc(io) < 2 {
+    ovid/io.Eprint(strptr("usage: stock FILE\n"))
+    return 1
+  }
+  var name i64 = ovid/io.Arg(io, 1)
+  var cells i64 = ovid/io.Alloc(io, 16)
+  if ovid/io.ReadFile(io, name, ovid/io.CLen(name), cells, cells + 8) != 0 {
+    ovid/io.Eprint(strptr("stock: cannot read the file\n"))
+    return 1
+  }
+  var t *Table = NewTable(io)
+  var bad i64 = Load(io, t, load64(cells), load64(cells + 8))
+  if bad != 0 {
+    ovid/io.Eprint(strptr("stock: bad line "))
+    ovid/io.WriteInt(io, 2, bad)
+    ovid/io.Eprint(strptr("\n"))
+    return 1
+  }
+  var sum i64 = 0
+  var i i64 = 0
+  while i < t.len {
+    var e i64 = t.names + i * 16
+    ovid/io.Stdout(load64(e), load64(e + 8))
+    ovid/io.Print(strptr(" "))
+    ovid/io.PrintInt(io, load64(t.counts + i * 8))
+    ovid/io.Print(strptr("\n"))
+    sum = sum + load64(t.counts + i * 8)
+    i = i + 1
+  }
+  ovid/io.Print(strptr("total "))
+  ovid/io.PrintInt(io, sum)
+  ovid/io.Print(strptr("\n"))
+  return 0
+}

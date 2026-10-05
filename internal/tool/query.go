@@ -13,8 +13,9 @@ import (
 )
 
 // Outline lists packages, or with pkg set, that package's declarations as
-// one line each with signature, location, and hash.
-func Outline(dir, pkg string, all, uses bool, w io.Writer) int {
+// one line each with signature, location, and hash. It prints the records
+// of page; the last line counts them all and says where the next page starts.
+func Outline(dir, pkg string, all, uses bool, page Page, w io.Writer) int {
 	m, err := load(dir)
 	if err != nil {
 		return fail(w, "load", err.Error(), "")
@@ -23,7 +24,7 @@ func Outline(dir, pkg string, all, uses bool, w io.Writer) int {
 		emit(w, d)
 	}
 	found := pkg == ""
-	count := 0
+	pg := pager{Page: page}
 	for pi := range m.Prog.Packages {
 		p := &m.Prog.Packages[pi]
 		if pkg != "" && p.Path != pkg {
@@ -35,6 +36,9 @@ func Outline(dir, pkg string, all, uses bool, w io.Writer) int {
 			for _, im := range p.Imports {
 				ims = append(ims, im.Path)
 			}
+			if !pg.take() {
+				continue
+			}
 			r := map[string]any{"kind": "package", "id": p.ID, "path": p.Path, "funcs": len(p.Funcs),
 				"types": len(p.Types), "consts": len(p.Consts), "imports": ims}
 			if m.Std[p.Path] {
@@ -43,7 +47,6 @@ func Outline(dir, pkg string, all, uses bool, w io.Writer) int {
 				r["files"] = pkgFiles(m, p)
 			}
 			emit(w, r)
-			count++
 			continue
 		}
 		var res *check.Result
@@ -51,6 +54,9 @@ func Outline(dir, pkg string, all, uses bool, w io.Writer) int {
 			res = check.Run(m.Prog)
 		}
 		for _, l := range declLocs(m, p) {
+			if !pg.take() {
+				continue
+			}
 			d := declLine(m, l)
 			if res != nil && (l.Kind == "func" || l.Kind == "type" || l.Kind == "const") {
 				if rs, err := findRefs(m, res, l); err == nil {
@@ -58,7 +64,6 @@ func Outline(dir, pkg string, all, uses bool, w io.Writer) int {
 				}
 			}
 			emit(w, d)
-			count++
 		}
 	}
 	if !found {
@@ -68,8 +73,9 @@ func Outline(dir, pkg string, all, uses bool, w io.Writer) int {
 		}
 		return fail(w, "not_found", "no package "+pkg, "packages: "+strings.Join(paths, ", "))
 	}
-	r := map[string]any{"ok": true, "count": count, "revision": m.Revision()}
-	if pkg == "" && !all {
+	r := map[string]any{"ok": true, "revision": m.Revision()}
+	pg.finish(r)
+	if pkg == "" && !all && r["hint"] == nil {
 		r["hint"] = "`ovid outline --pkg <path>` lists declarations; `ovid show <id>` prints source"
 	}
 	emit(w, r)
@@ -98,13 +104,13 @@ func pkgFiles(m *module.Module, p *ir.Package) []string {
 func declLocs(m *module.Module, p *ir.Package) []*module.Loc {
 	var out []*module.Loc
 	for _, c := range p.Consts {
-		out = append(out, m.Index[c.ID])
+		out = append(out, m.Index()[c.ID])
 	}
 	for _, t := range p.Types {
-		out = append(out, m.Index[t.ID])
+		out = append(out, m.Index()[t.ID])
 	}
 	for _, f := range p.Funcs {
-		out = append(out, m.Index[f.ID])
+		out = append(out, m.Index()[f.ID])
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		a, b := out[i].Span, out[j].Span
@@ -249,7 +255,7 @@ func Show(dir string, ids []string, withIDs, asJSON, exprs bool, w io.Writer) in
 func exprsIn(m *module.Module, l *module.Loc) []*module.Loc {
 	var out []*module.Loc
 	visit := func(c *ir.Node) {
-		if e := m.Index[c.ID]; e != nil && e.Kind == "expr" {
+		if e := m.Index()[c.ID]; e != nil && e.Kind == "expr" {
 			out = append(out, e)
 		}
 	}
@@ -350,7 +356,7 @@ type ref struct {
 }
 
 // Refs prints every use of the named declaration.
-func Refs(dir, q string, w io.Writer) int {
+func Refs(dir, q string, page Page, w io.Writer) int {
 	m, err := load(dir)
 	if err != nil {
 		return fail(w, "load", err.Error(), "")
@@ -377,7 +383,11 @@ func Refs(dir, q string, w io.Writer) int {
 	if err != nil {
 		return fail(w, "unsupported", err.Error(), "")
 	}
+	pg := pager{Page: page}
 	for _, r := range rs {
+		if !pg.take() {
+			continue
+		}
 		file, a, _, line := m.Where(r.span)
 		emit(w, map[string]any{"id": r.id, "kind": r.kind, "in": r.decl, "file": file, "line": a.Line, "col": a.Col, "source": strings.TrimSpace(line)})
 	}
@@ -392,8 +402,11 @@ func Refs(dir, q string, w io.Writer) int {
 			external += n
 		}
 	}
-	emit(w, map[string]any{"ok": true, "target": target.ID, "count": len(rs), "files": len(files),
-		"by_pkg": byPkg, "external": external})
+	// files, by_pkg, and external describe every use, on the page or not.
+	last := map[string]any{"ok": true, "target": target.ID, "files": len(files),
+		"by_pkg": byPkg, "external": external, "revision": m.Revision()}
+	pg.finish(last)
+	emit(w, last)
 	return ExitOK
 }
 
@@ -426,10 +439,10 @@ func findRefs(m *module.Module, res *check.Result, target *module.Loc) ([]ref, e
 		}
 		r := ref{id: u.ID, kind: u.Kind, span: u.Span, tok: u.Span, decl: u.In}
 		if u.Kind == "result" {
-			if l := m.Index[u.ID]; l != nil {
+			if l := m.Index()[u.ID]; l != nil {
 				r.span = headerSpan(m, l.Node.(*ir.Func))
 			}
-		} else if l := m.Index[u.ID]; l != nil {
+		} else if l := m.Index()[u.ID]; l != nil {
 			r.span = l.Span
 		}
 		out = append(out, r)

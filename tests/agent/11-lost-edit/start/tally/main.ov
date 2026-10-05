@@ -1,0 +1,21 @@
+package tally
+
+import ovid/io
+
+// Count counts the events of n sessions.
+func Count(n i64) i64 {
+  var x i64 = 0
+  var i i64 = 0
+  while i < n {
+    x = x + 1
+    x = x + 1
+    i = i + 1
+  }
+  return x
+}
+
+func main(io *ovid/io.Cap) i64 {
+  ovid/io.PrintInt(io, Count(3))
+  ovid/io.Print(strptr("\n"))
+  return 0
+}

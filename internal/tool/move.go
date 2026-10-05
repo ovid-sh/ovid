@@ -150,8 +150,8 @@ func move(dir, q, to, file string, dryRun bool, w io.Writer) int {
 	}
 	// Inside the moved text, uses of its old and new neighbours change too.
 	for _, pk := range []string{from, to} {
-		for _, id := range m.Order {
-			l := m.Index[id]
+		for _, id := range m.Order() {
+			l := m.Index()[id]
 			if l.Pkg != pk || l.ID == t.ID || (l.Kind != "func" && l.Kind != "type" && l.Kind != "const") {
 				continue
 			}
@@ -288,8 +288,8 @@ func move(dir, q, to, file string, dryRun bool, w io.Writer) int {
 
 // filePkg is the package a module file belongs to.
 func filePkg(m *module.Module, fi int) string {
-	for _, id := range m.Order {
-		if l := m.Index[id]; l.Span.File == fi {
+	for _, id := range m.Order() {
+		if l := m.Index()[id]; l.Span.File == fi {
 			return l.Pkg
 		}
 	}

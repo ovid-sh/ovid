@@ -154,7 +154,7 @@ func TestDocCommentShow(t *testing.T) {
 	}
 	// outline's doc is the same comment.
 	b.Reset()
-	Outline(dir, "demo", false, false, &b)
+	Outline(dir, "demo", false, false, Page{}, &b)
 	for _, d := range lines(t, b.String()) {
 		if d["id"] == "fn:demo.H" && (d["doc"] != "H returns zero. It is never more." || d["line"] != 12.0) {
 			t.Fatalf("outline H: %v", d)

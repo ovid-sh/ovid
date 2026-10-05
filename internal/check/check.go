@@ -69,11 +69,15 @@ type checker struct {
 	res      string
 	dup      map[*ir.Func]bool // funcs whose name was already declared
 	dupName  map[string]bool   // those funcs, as pkg.Name
+	lean     bool              // record no Types and no Uses
 }
 
 func (c *checker) issue(is Issue) { c.r.Issues = append(c.r.Issues, is) }
 
 func (c *checker) use(target, id, kind, in string, sp ir.Span) {
+	if c.lean {
+		return
+	}
 	c.r.Uses = append(c.r.Uses, Use{Target: target, ID: id, Kind: kind, In: in, Span: sp})
 }
 
@@ -94,10 +98,18 @@ func (c *checker) mismatch(id, what, got, want string) {
 	c.issue(Issue{Code: "type_mismatch", ID: id, Message: fmt.Sprintf("%s: got %s, want %s", what, got, want), Expected: want, Got: got})
 }
 
-// Run checks p.
-func Run(p *ir.Program) *Result {
+// Run checks p and records, besides the issues, the type of every
+// expression and every use the checker resolved.
+func Run(p *ir.Program) *Result { return run(p, false) }
+
+// Errors checks p for its issues only: Types and Uses stay empty. That is
+// all check, build, run, test, and an edit's before and after need, and the
+// two tables are a seventh of a checked module's memory.
+func Errors(p *ir.Program) *Result { return run(p, true) }
+
+func run(p *ir.Program, lean bool) *Result {
 	r := &Result{Types: map[string]string{}}
-	c := &checker{r: r, pkgs: map[string]*ir.Package{}, sigs: map[string]sig{}, dup: map[*ir.Func]bool{}, dupName: map[string]bool{}}
+	c := &checker{r: r, pkgs: map[string]*ir.Package{}, sigs: map[string]sig{}, dup: map[*ir.Func]bool{}, dupName: map[string]bool{}, lean: lean}
 	if strings.TrimSpace(p.Module) == "" {
 		c.err("", "bad_module", "ovid.mod has no module line")
 	}
@@ -666,7 +678,9 @@ func (c *checker) expr(e *env, n *ir.Node) string {
 		return "invalid"
 	}
 	t := c.expr0(e, n)
-	c.r.Types[n.ID] = t
+	if !c.lean {
+		c.r.Types[n.ID] = t
+	}
 	return t
 }
 

@@ -12,6 +12,7 @@ import (
 	"ovid/internal/module"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -488,8 +489,8 @@ func stmtsWith(t *testing.T, dir, decl, text string) []string {
 		t.Fatal(err)
 	}
 	var out []string
-	for _, id := range m.Order {
-		if l := m.Index[id]; l.Kind == "stmt" && l.Decl == decl && m.Text(l.Span) == text {
+	for _, id := range m.Order() {
+		if l := m.Index()[id]; l.Kind == "stmt" && l.Decl == decl && m.Text(l.Span) == text {
 			out = append(out, id)
 		}
 	}
@@ -764,6 +765,74 @@ func TestEditStrictKeys(t *testing.T) {
 	r, code := editJSON(t, dir, map[string]any{"op": "replace", "id": "main", "expect": h, "text": "func main(io *ovid/io.Cap) i64 {\n  return 1\n}"})
 	if code != 0 || r["written"] != true {
 		t.Fatalf("well-formed: %d %v", code, r)
+	}
+}
+
+// TestEditStrayFields: a field that belongs to another op is refused, not
+// ignored. A replace that names a before was meant as an insert; doing a
+// replace would drop the code the caller meant to keep.
+func TestEditStrayFields(t *testing.T) {
+	src := "package demo\n\nimport ovid/io\n\nfunc main(io *ovid/io.Cap) i64 {\n  var x i64 = 1\n  return x\n}\n"
+	dir := mkmod(t, demo(src))
+	h := hashOf(t, dir, "fn:demo.main")
+	for _, c := range []struct {
+		op  EditOp
+		key string
+	}{
+		{EditOp{Op: "replace", ID: "st:demo.main:2", Before: "st:demo.main:2", Text: "return 0"}, `replace takes no "before"`},
+		{EditOp{Op: "replace", ID: "st:demo.main:2", After: "st:demo.main:1", Text: "return 0"}, `replace takes no "after"`},
+		{EditOp{Op: "replace", ID: "st:demo.main:2", File: "demo/x.ov", Text: "return 0"}, `replace takes no "file"`},
+		{EditOp{Op: "delete", ID: "st:demo.main:1", Text: "var x i64 = 2"}, `delete takes no "text"`},
+		{EditOp{Op: "delete", ID: "st:demo.main:1", Into: "fn:demo.main"}, `delete takes no "into"`},
+		{EditOp{Op: "insert", ID: "st:demo.main:1", After: "st:demo.main:1", Text: "x = 2"}, `insert takes no "id"`},
+		{EditOp{Op: "insert", After: "st:demo.main:1", File: "demo/x.ov", Text: "x = 2"}, `insert takes no "file"`},
+		{EditOp{Op: "append", Into: "fn:demo.main", Before: "st:demo.main:2", Text: "x = 2"}, `append takes no "before"`},
+		// Given, even empty: "before":"" or --before= is still a field
+		// the op does not take.
+		{EditOp{Op: "replace", ID: "st:demo.main:2", Text: "return 0", Given: []string{"before"}}, `replace takes no "before"`},
+		{EditOp{Op: "delete", ID: "st:demo.main:1", Given: []string{"text"}}, `delete takes no "text"`},
+	} {
+		c.op.Expect = h
+		// Both forms: one op from the command line, and a JSON request.
+		var b bytes.Buffer
+		code := EditOne(dir, c.op, "", EditOpts{}, &b)
+		r := last(t, b.String())
+		if code != ExitFail || r["error"] != "bad_edit" || !strings.Contains(fmt.Sprint(r["message"]), c.key) || r["hint"] == nil {
+			t.Errorf("%s: %d %s", c.key, code, b.String())
+		}
+		// In JSON a given field is a key, here spelled out empty.
+		raw, _ := json.Marshal(c.op)
+		var req map[string]any
+		json.Unmarshal(raw, &req)
+		for _, k := range c.op.Given {
+			req[k] = ""
+		}
+		r, code = editJSON(t, dir, req)
+		if code != ExitFail || r["error"] != "bad_edit" || !strings.Contains(fmt.Sprint(r["message"]), c.key) {
+			t.Errorf("%s (JSON): %d %v", c.key, code, r)
+		}
+		if got, _ := os.ReadFile(filepath.Join(dir, "demo/main.ov")); string(got) != src {
+			t.Fatalf("%s: written:\n%s", c.key, got)
+		}
+	}
+}
+
+// TestHelpCommand: ovid help <command> prints that command's entry, since
+// agents ask for it by name; the edit ops share one entry.
+func TestHelpCommand(t *testing.T) {
+	for _, c := range []string{"init", "check", "build", "run", "test", "outline", "show", "refs", "grep",
+		"replace", "insert", "append", "delete", "rename", "move", "dump", "version", "help"} {
+		var b bytes.Buffer
+		if code := Help(c, &b); code != ExitOK || !regexp.MustCompile(`(?m)(^ovid |\| )`+c+`\b`).MatchString(b.String()) {
+			t.Errorf("help %s: %d\n%s", c, code, b.String())
+		}
+	}
+	var b bytes.Buffer
+	if Help("show", &b); strings.Contains(b.String(), "ovid refs") {
+		t.Errorf("help show includes other entries:\n%s", b.String())
+	}
+	if code := Help("nope", &b); code != ExitUsage {
+		t.Errorf("help nope: %d", code)
 	}
 }
 
@@ -1102,13 +1171,13 @@ func TestNil(io *ovid/io.Cap) i64 {
 func TestRefsAndOutline(t *testing.T) {
 	dir := mkmod(t, demo(addSrc))
 	var b bytes.Buffer
-	Refs(dir, "Add", &b)
+	Refs(dir, "Add", Page{}, &b)
 	rs := lines(t, b.String())
 	if len(rs) != 2 || rs[0]["kind"] != "call" || rs[0]["line"] != float64(10) {
 		t.Fatalf("refs %v", rs)
 	}
 	b.Reset()
-	Outline(dir, "demo", false, false, &b)
+	Outline(dir, "demo", false, false, Page{}, &b)
 	if rs := lines(t, b.String()); len(rs) != 3 || rs[0]["sig"] != "func Add(a i64, b i64) i64" {
 		t.Fatalf("outline %v", rs)
 	}
@@ -1116,7 +1185,7 @@ func TestRefsAndOutline(t *testing.T) {
 		t.Fatalf("refs summary %v", s)
 	}
 	b.Reset()
-	Outline(dir, "demo", false, true, &b)
+	Outline(dir, "demo", false, true, Page{}, &b)
 	if rs := lines(t, b.String()); rs[0]["used_by"].(map[string]any)["demo"] != float64(1) {
 		t.Fatalf("outline --uses %v", rs)
 	}
@@ -1517,7 +1586,7 @@ func TestSelfHost(t *testing.T) {
 	lit := mkmod(t, demo("package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  return load8(strptr(\"\\xb8\\n\") + 1) + strlen(\"é\")\n}\n"))
 	for _, dir := range []string{prog, lit} {
 		b.Reset()
-		Dump(dir, &b)
+		Dump(dir, "", "", &b)
 		out, code := run(t, s1, "dump", dir, "--std", stdDir)
 		var g, o any
 		if !utf8.ValidString(out) || json.Unmarshal(b.Bytes(), &g) != nil || json.Unmarshal([]byte(out), &o) != nil || code != 0 {
@@ -1527,7 +1596,7 @@ func TestSelfHost(t *testing.T) {
 			t.Fatalf("dumps of %s differ", dir)
 		}
 	}
-	if b.Reset(); Dump(lit, &b) != 0 || !strings.Contains(b.String(), `"value_hex": "b80a"`) || !strings.Contains(b.String(), `"value": "é"`) {
+	if b.Reset(); Dump(lit, "", "", &b) != 0 || !strings.Contains(b.String(), `"value_hex": "b80a"`) || !strings.Contains(b.String(), `"value": "é"`) {
 		t.Fatalf("dump of literals: %s", b.String())
 	}
 	// A source line that is not UTF-8 is still valid JSON in a diagnostic.

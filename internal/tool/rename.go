@@ -196,14 +196,14 @@ func collision(m *module.Module, t *module.Loc, to string) string {
 			}
 		}
 	case "field":
-		ty := m.Index[t.Decl].Node.(*ir.TypeDecl)
+		ty := m.Index()[t.Decl].Node.(*ir.TypeDecl)
 		for _, f := range ty.Fields {
 			if f.Name == to {
 				return f.ID
 			}
 		}
 	case "param", "stmt":
-		fn := m.Index[t.Decl].Node.(*ir.Func)
+		fn := m.Index()[t.Decl].Node.(*ir.Func)
 		if localNamed(fn, to) {
 			return "a param or local in " + fn.ID
 		}

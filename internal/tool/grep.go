@@ -7,7 +7,7 @@ import (
 )
 
 // GrepLimit is how many matches grep prints when no limit is given.
-const GrepLimit = 200
+const GrepLimit = PageLimit
 
 // Grep finds a regexp in the module's own source (not shipped packages
 // unless std) and names, for each match, the decl and the innermost
@@ -27,8 +27,8 @@ func Grep(dir, pattern, pkg string, std bool, offset, limit int, w io.Writer) in
 	// with the nodes of its own file.
 	filePkg := map[int]string{}
 	byFile := map[int][]string{}
-	for _, id := range m.Order {
-		l := m.Index[id]
+	for _, id := range m.Order() {
+		l := m.Index()[id]
 		if _, ok := filePkg[l.Span.File]; !ok {
 			filePkg[l.Span.File] = l.Pkg
 		}
@@ -37,7 +37,7 @@ func Grep(dir, pattern, pkg string, std bool, offset, limit int, w io.Writer) in
 			byFile[l.Span.File] = append(byFile[l.Span.File], id)
 		}
 	}
-	total, shown := 0, 0
+	pg := pager{Page: Page{offset, limit}}
 	for fi, f := range m.Files {
 		if m.IsStd(fi) && !std {
 			continue
@@ -46,18 +46,16 @@ func Grep(dir, pattern, pkg string, std bool, offset, limit int, w io.Writer) in
 			continue
 		}
 		for _, loc := range re.FindAllIndex(f.Src, -1) {
-			total++
-			if total <= offset || (limit > 0 && shown >= limit) {
+			if !pg.take() {
 				continue
 			}
-			shown++
 			p := f.Pos(loc[0])
 			r := map[string]any{"file": m.DisplayPath(f), "line": p.Line, "col": p.Col,
 				"match": string(f.Src[loc[0]:loc[1]]), "source": lineText(f.Src, loc[0])}
 			// The smallest decl and statement spans that hold the match.
 			declLen, stLen := 1<<62, 1<<62
 			for _, id := range byFile[fi] {
-				l := m.Index[id]
+				l := m.Index()[id]
 				if loc[0] < l.Full.Off || loc[0] >= l.Full.End {
 					continue
 				}
@@ -75,12 +73,12 @@ func Grep(dir, pattern, pkg string, std bool, offset, limit int, w io.Writer) in
 			emit(w, r)
 		}
 	}
-	res := map[string]any{"ok": true, "count": shown, "total": total, "offset": offset, "has_more": offset+shown < total}
-	if offset+shown < total {
-		res["next_offset"] = offset + shown
-		res["hint"] = fmt.Sprintf("%d more; --offset %d for the next page, or narrow with --pkg or a tighter pattern", total-offset-shown, offset+shown)
+	res := map[string]any{"ok": true, "revision": m.Revision()}
+	if pg.more() > 0 {
+		res["hint"] = fmt.Sprintf("%d more; --offset %d for the next page, or narrow with --pkg or a tighter pattern", pg.more(), pg.Offset+pg.shown)
 	}
-	if total == 0 {
+	pg.finish(res)
+	if pg.total == 0 {
 		res["hint"] = fmt.Sprintf("no match for %q; ovid refs <name> finds uses by meaning", pattern)
 	}
 	emit(w, res)

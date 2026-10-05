@@ -1,6 +1,10 @@
 {
   "check": true,
   "start_passes": true,
-  "runs": [{"stdout": "1\n"}],
-  "contains": [{"re": "^  x = x \\+ 1$", "count": 1}]
+  "runs": [{"stdout": "5\n"}],
+  "contains": [
+    {"re": "^    x = x \\+ 1$", "count": 1},
+    {"re": "^func Total\\(", "count": 1},
+    {"re": "Total\\(2, 3\\)", "count": 1}
+  ]
 }

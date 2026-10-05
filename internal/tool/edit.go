@@ -38,6 +38,10 @@ type EditOp struct {
 	File   string `json:"file,omitempty"`
 	Text   string `json:"text,omitempty"`
 	Expect string `json:"expect,omitempty"`
+	// Given names the fields the caller spelled out, even as "": the JSON
+	// keys of a request, or the flags of a single-op command. A field given
+	// empty is still one the op may not take.
+	Given []string `json:"-"`
 }
 
 type EditReq struct {
@@ -137,6 +141,7 @@ func parseEditReq(raw []byte) (req *EditReq, op int, err error) {
 		if err := json.Unmarshal(o, &one); err != nil {
 			return nil, i, fmt.Errorf("op %d: %v", i, err)
 		}
+		one.Given = keys
 		req.Ops = append(req.Ops, one)
 	}
 	return req, -1, nil
@@ -479,8 +484,8 @@ func checkExpect(m *module.Module, l *module.Loc, expect string, force, rev bool
 		extra["decl"], extra["decl_hash"] = l.Decl, m.Hash(l.Decl)
 		// A statement's hash is bound to its decl as it is now, so this is
 		// an id and a hash read together but passed apart, not a move.
-		for _, id := range m.Order {
-			if o := m.Index[id]; o.Decl == l.Decl && o.ID != l.ID && m.Hash(id) == expect {
+		for _, id := range m.Order() {
+			if o := m.Index()[id]; o.Decl == l.Decl && o.ID != l.ID && m.Hash(id) == expect {
 				return &editErr{code: "stale", exit: ExitStale, extra: extra,
 					msg:  "that hash belongs to " + id + ", not " + l.ID,
 					hint: "edit " + id + " if that is the node you read, or re-read with `ovid show " + l.Decl + "`"}
@@ -518,8 +523,8 @@ func newIDs(m *module.Module, sps []*splice, nops int, show bool) []map[string]a
 		// The top-level decl around the splice, so the caller can chain
 		// another edit on it without re-reading.
 		at := s.newOff + len(s.text)/2
-		for _, id := range m.Order {
-			l := m.Index[id]
+		for _, id := range m.Order() {
+			l := m.Index()[id]
 			if l.Kind != "func" && l.Kind != "type" && l.Kind != "const" {
 				continue
 			}
@@ -544,12 +549,12 @@ func newIDs(m *module.Module, sps []*splice, nops int, show bool) []map[string]a
 		lo := s.newOff + strings.Index(s.text, text)
 		hi := lo + len(text)
 		var ids []string
-		for _, id := range m.Order {
-			l := m.Index[id]
+		for _, id := range m.Order() {
+			l := m.Index()[id]
 			if l.Span.File != fi || l.Span.Off < lo || l.Span.End > hi {
 				continue
 			}
-			if p := m.Index[l.Parent]; p != nil && p.Span.File == fi && p.Span.Off >= lo && p.Span.End <= hi {
+			if p := m.Index()[l.Parent]; p != nil && p.Span.File == fi && p.Span.Off >= lo && p.Span.End <= hi {
 				continue
 			}
 			ids = append(ids, id)
@@ -560,7 +565,47 @@ func newIDs(m *module.Module, sps []*splice, nops int, show bool) []map[string]a
 	return out
 }
 
+// opFields are the fields each op reads, besides op and expect. A field
+// that belongs to another op is refused, not ignored: a replace that names
+// a before was meant as an insert, and replacing would drop the code the
+// caller meant to keep.
+var opFields = map[string][]string{
+	"replace": {"id", "text"},
+	"delete":  {"id"},
+	"insert":  {"before", "after", "text"},
+	"append":  {"into", "file", "text"},
+}
+
+// strayField is the first field op sets that its kind does not read.
+func strayField(op EditOp) *editErr {
+	set := []struct {
+		k  string
+		on bool
+	}{{"id", op.ID != ""}, {"before", op.Before != ""}, {"after", op.After != ""},
+		{"into", op.Into != ""}, {"file", op.File != ""}, {"text", op.Text != ""}}
+	for _, f := range set {
+		if !(f.on || slices.Contains(op.Given, f.k)) || slices.Contains(opFields[op.Op], f.k) {
+			continue
+		}
+		hint := map[string]string{
+			"id":     map[string]string{"insert": "insert names its node with before or after", "append": "append names its node with into"}[op.Op],
+			"before": `to add code next to a node, insert: {"op":"insert","before":ID,"text":T}, or ovid insert --before ID`,
+			"after":  `to add code next to a node, insert: {"op":"insert","after":ID,"text":T}, or ovid insert --after ID`,
+			"into":   `to add code at the end of a body or package, append: {"op":"append","into":ID,"text":T}, or ovid append ID`,
+			"file":   "only append into a package takes a file",
+			"text":   "delete removes the node; to change it, replace",
+		}[f.k]
+		return &editErr{code: "bad_edit", msg: fmt.Sprintf("%s takes no %q; it reads %s", op.Op, f.k, strings.Join(opFields[op.Op], ", ")), hint: hint}
+	}
+	return nil
+}
+
 func planOp(m *module.Module, i int, op EditOp, force, rev bool) ([]*splice, *editErr) {
+	if _, ok := opFields[op.Op]; ok {
+		if e := strayField(op); e != nil {
+			return nil, e
+		}
+	}
 	target := op.ID
 	switch op.Op {
 	case "insert":
@@ -586,7 +631,7 @@ func planOp(m *module.Module, i int, op EditOp, force, rev bool) ([]*splice, *ed
 			return appendDecl(m, i, p, op, force)
 		}
 	}
-	l := m.Index[target]
+	l := m.Index()[target]
 	if l == nil {
 		ls, err := m.Lookup(target)
 		if err != nil || len(ls) != 1 {

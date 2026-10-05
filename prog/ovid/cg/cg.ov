@@ -566,6 +566,9 @@ func SysReg(i i64) i64 {
 // name it. KIMM is a constant that fits a signed 32-bit immediate; KMEM is
 // a local in the frame, by its rbp displacement; KREG is a local in a
 // register, by the register's number.
+// SYSMAX bounds the system call numbers Mod.sys can mark.
+const SYSMAX i64 = 1024
+
 const KNONE i64 = 0
 const KIMM i64 = 1
 const KMEM i64 = 2
@@ -1325,6 +1328,12 @@ func EmitSys(c *C, n *ovid/parse.Node, lv i64) i64 {
   if ovid/parse.CountNodes(n.args) != 7 {
     return Fail(c, strptr("syscall arity"), strlen("syscall arity"))
   }
+  // The number is the first argument; record it for the build receipt.
+  if Operand(c, n.args) == KIMM && c.opv >= 0 && c.opv < SYSMAX {
+    store8(c.mod.sys + c.opv, 1)
+  } else {
+    c.mod.sysunk = c.mod.sysunk + 1
+  }
   if EmitArgs(c, n.args, true, lv) != 0 {
     return c.err
   }
@@ -1829,6 +1838,14 @@ func Compile(io *ovid/io.Cap, m *ovid/parse.Mod, errp i64) *ovid/mem.Buf {
     store64(errp, c.msg as i64)
     return z as *ovid/mem.Buf
   }
+  // m.sys marks the numbers of the system calls the program can make.
+  // The startup code maps the heap, exits with main's result, and writes
+  // "out of memory" when the heap is refused.
+  m.sys = ovid/io.Alloc(io, SYSMAX)
+  m.sysunk = 0
+  store8(m.sys + 1, 1)
+  store8(m.sys + 9, 1)
+  store8(m.sys + 60, 1)
   if EmitStartup(c, mainFn.lab) != 0 {
     store64(errp, c.msg as i64)
     return z as *ovid/mem.Buf
