@@ -7,28 +7,113 @@ Each run's raw records are in `docs/agent-runs/`.
 
 ## Current state (verified 2026-10-05)
 
-Two models, `claude-opus-5-5` and `claude-sonnet-5-5`, pass all ten tasks
-there were at b4c231f, 30 of 30 runs each. Sonnet is cheaper ($0.56 for all 30,
-against opus's $1.34) and as reliable here. The tasks remain a floor: they
-do not separate these models, and harder tasks would.
+The four harder tasks (12–15) separate the models where the first eleven
+did not. `claude-haiku-4-5` passes 9 of 20: it accepts integers that do
+not fit in i64 in `12-sortn` (0/5: four runs have no overflow check, one
+an incomplete one), and in `13-stock` fixes only the bug the
+task reports (0/5). `claude-opus-5-5` and `claude-sonnet-5-5` pass 20 of
+20 each; sonnet costs less than half of what opus does ($1.51 against
+$3.65) in fewer calls. Sonnet remains the cheapest model that passes
+everything.
 
-The two bugs the first run hit are gone in practice, not only in the
-deterministic test: every `05-rename-type` run got the rename right in one
-`ovid rename` and none touched the file by hand (#21), and a statement
-edit with no hash is now refused (#22), which sonnet hit and recovered from
-seven times.
+`ovid`'s agent commands do not pay off on a large module, because agents
+do not reach for them: given a copy of prog/ (7.6k lines) in
+`15-selfhost-messages`, none of the 15 runs called `ovid outline`, `refs`,
+or `grep`, one called `ovid show`, and none edited through ovid. They
+navigated with `grep`, `sed -n`, and `cat` and edited with python, `sed`,
+or Edit, reading 29–93 KB of the 180 KB.
 
-The replay is now exercised by agents, not only by the deterministic test:
+In the small modules ovid's guard still does its job: in `14-rename-vs-call`
+an edit that named the function the other agent had just renamed was
+refused with `unknown_name` and nothing written, and the agent re-read and
+used the new name (opus run 1).
+
+The replay is exercised by agents, not only by the deterministic test:
 told to retry a lost `ovid edit` first, every agent in `07-replay` got
 `stale`, confirmed the change was already in, and made it no second time
-(d8c0be0, below).
+(d8c0be0, below). The two problems the b4c231f run found are fixed by #100
+(#98, #99), not yet re-run with a model.
 
-The two problems the b4c231f run found are fixed by #100, not yet re-run with a
-model: an edit op now refuses a field that belongs to another op, so
-`ovid replace --before` is `bad_edit` rather than a replace (#98), and
-`ovid help replace` prints that command's entry instead of exiting 64
-(#99). Agents may still skip ovid's edits and use `sed`; the hash guard
-then still protects the other writer, as in `09-same-func`.
+## 2026-10-05, 5d9f9d9 / 3d0c0f9: four harder tasks, opus, sonnet, and haiku
+
+Tasks 12–15 (#110), five runs each, models `us.anthropic.claude-opus-5-5`,
+`us.anthropic.claude-sonnet-5-5`, and
+`us.anthropic.claude-haiku-4-5-20251001-v1:0` (Bedrock), the three at the
+same time on starship, Claude Code 2.1.286, $5 budget per agent. #110 was
+merged while they ran, and the runner builds ovid from the checkout for each
+task, so some tasks ran at 3d0c0f9, which also has #107 and #109 (the
+syscall list in the build receipt, and less indexing in check, build, run,
+and test; both change prog/, the start of 15). Each task ran at one commit
+per model: opus 12–13 and sonnet 12–15 and haiku 12 at 5d9f9d9, the rest
+at 3d0c0f9. `go test ./tests/agent` passes at both. Records:
+`2026-10-05-hard-{opus,sonnet,haiku}.jsonl`.
+
+opus-5-5 ($3.65 in all):
+
+| task | passed | calls | ovid calls | failed calls | bytes read | bytes written | tokens in | tokens out | cost | seconds |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 12-sortn | 5/5 | 6 | 6 | 0 | 16070 | 6026 | 52023 | 4229 | $0.15 | 56 |
+| 13-stock | 5/5 | 5 | 4 | 0 | 14547 | 1218 | 40456 | 1558 | $0.08 | 28 |
+| 14-rename-vs-call | 5/5 | 11 | 10 | 0 | 25920 | 1663 | 69391 | 1738 | $0.11 | 71 |
+| 15-selfhost-messages | 5/5 | 17 | 11 | 4 | 48223 | 8853 | 356326 | 6803 | $0.35 | 105 |
+
+sonnet-5-5 ($1.51 in all):
+
+| task | passed | calls | ovid calls | failed calls | bytes read | bytes written | tokens in | tokens out | cost | seconds |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 12-sortn | 5/5 | 3 | 3 | 0 | 15458 | 3682 | 26069 | 3099 | $0.06 | 25 |
+| 13-stock | 5/5 | 4 | 3 | 0 | 9855 | 905 | 18043 | 1009 | $0.03 | 10 |
+| 14-rename-vs-call | 5/5 | 6 | 6 | 0 | 12787 | 1111 | 34685 | 1435 | $0.04 | 11 |
+| 15-selfhost-messages | 5/5 | 17 | 11 | 1 | 29111 | 9156 | 245982 | 7700 | $0.18 | 61 |
+
+haiku-4-5 ($5.56 in all, $2.28 of it on the 11 failed runs):
+
+| task | passed | calls | ovid calls | failed calls | bytes read | bytes written | tokens in | tokens out | cost | seconds |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 12-sortn | 0/5 | – | – | – | – | – | – | – | – | – |
+| 13-stock | 0/5 | – | – | – | – | – | – | – | – | – |
+| 14-rename-vs-call | 5/5 | 28 | 13 | 2 | 11372 | 2780 | 122369 | 3773 | $0.08 | 26 |
+| 15-selfhost-messages | 4/5 | 94 | 24 | 6.5 | 92932 | 52504 | 4559703 | 31509 | $0.70 | 260 |
+
+What the transcripts show:
+
+- **`12-sortn`, haiku: no working overflow check, and a report that says
+  otherwise.** All five runs accept `9223372036854775808`,
+  `-9223372036854775809` (runs 7 and 8 of the goal), and in four of them
+  `99999999999999999999` (run 9), printing the wrapped value with exit 0.
+  Only run 1 wrote a check (`value > 922337203685477580` before the
+  multiply), which misses the last digit. Run 2 ended with "correctly
+  handles edge cases including ... boundary values for i64". Every other
+  edge case (`-0`, `+1`, spaces, CR, a missing final newline) passed, and
+  so did the 2M-value sort. Runs took 36–90 calls, many of them tests of
+  speed after early versions timed out.
+- **`13-stock` tests reading, not debugging.** All ten opus and sonnet runs
+  read the whole 156-line file with `cat` before running anything and fixed
+  the three bugs in their first edit (one python rewrite; opus run 3 used
+  three Edits). Haiku read it too (with Read) but reproduced the reported failure,
+  fixed that one (the dropped last byte), and stopped; in all five runs the
+  prefix compare and the short copy on growth remain. A run-time bug
+  that separates opus from sonnet needs a module too large to read.
+- **`14-rename-vs-call`**: every opus and sonnet run renamed with
+  `ovid rename`, and haiku did in four of five runs. In opus run 1, agent
+  b's `ovid edit` appended `Bulk` calling `Calc` after a's rename had
+  landed; it was refused with `unknown_name` and nothing written, and b
+  re-read and sent it with `WithTax`. Sonnet run 1's agent b wrote the call
+  with python instead, `ovid check` failed, and it fixed the name with
+  `sed`. All of haiku's b agents edited with Edit.
+- **`15-selfhost-messages`: no agent used ovid to find its way.** Across
+  15 runs the agents called `ovid outline`, `refs`, and `grep` zero times
+  and `ovid show` once; they used `grep -n` over the `.ov` files (3–65
+  times per run), `sed -n` ranges, and `cat`, and edited with python,
+  `sed`, or Edit, never `ovid edit`. `ovid check`, `build`, and `test` were
+  the only ovid commands they relied on. Nobody read all 180 KB (29 KB for
+  sonnet, 48 KB for opus, 93 KB for haiku, medians). Haiku's failed run 5
+  built its messages in the checker's output buffer `c.b`, so each message
+  also appeared raw in stdout ahead of its JSON line.
+- **Cost.** Sonnet costs 31–47% of what opus does on each task (per-task
+  totals), 41% in all.
+  Haiku is not cheap where it struggles: its `15-selfhost-messages` runs
+  cost $3.15 against opus's $1.90, with 13 times the median input tokens.
 
 ## 2026-10-05, d8c0be0: the replay tasks, opus-5-5 and sonnet-5-5
 
