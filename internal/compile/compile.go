@@ -4,6 +4,7 @@ package compile
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"ovid/internal/asm"
@@ -36,6 +37,42 @@ type Mark struct {
 // CompileMap is Compile plus the code map, in increasing Off order, which
 // turns a crash address back into a statement.
 func CompileMap(p *ir.Program) ([]byte, []Mark, error) {
+	o, err := CompileAll(p)
+	if err != nil {
+		return nil, nil, err
+	}
+	return o.Bin, o.Marks, nil
+}
+
+// Output is a compiled program and what the compiler knows about it.
+type Output struct {
+	Bin   []byte
+	Marks []Mark
+	// Syscalls are the numbers of the system calls the program can make,
+	// in increasing order: those of every syscall in a func reachable from
+	// main, and the three the startup code makes. A call listed is
+	// reachable, not necessarily made.
+	Syscalls []int64
+	// SyscallsUnknown counts the reachable syscalls whose number is not a
+	// constant, which Syscalls therefore cannot name.
+	SyscallsUnknown int
+}
+
+// CompileAll is CompileMap plus the system calls the program can make.
+func CompileAll(p *ir.Program) (*Output, error) {
+	bin, c, err := compileProg(p)
+	if err != nil {
+		return nil, err
+	}
+	o := &Output{Bin: bin, Marks: c.marks, SyscallsUnknown: c.sysUnknown}
+	for n := range c.sys {
+		o.Syscalls = append(o.Syscalls, n)
+	}
+	sort.Slice(o.Syscalls, func(i, j int) bool { return o.Syscalls[i] < o.Syscalls[j] })
+	return o, nil
+}
+
+func compileProg(p *ir.Program) ([]byte, *cg, error) {
 	if p == nil {
 		return nil, nil, fmt.Errorf("nil program")
 	}
@@ -45,6 +82,9 @@ func CompileMap(p *ir.Program) ([]byte, []Mark, error) {
 		funcLabel: map[string]int{},
 		sigs:      map[string]sig{},
 		pkgs:      map[string]*ir.Package{},
+		// The startup code maps the heap, exits with main's result, and
+		// writes "out of memory" when the heap is refused.
+		sys: map[int64]bool{1: true, 9: true, 60: true},
 	}
 	for i := range p.Packages {
 		pkg := &p.Packages[i]
@@ -85,7 +125,7 @@ func CompileMap(p *ir.Program) ([]byte, []Mark, error) {
 		return nil, nil, err
 	}
 	c.b.PatchAbs(elf.RodataVAddr(len(c.b.Code)))
-	return elf.Link(c.b.Code, c.ro, 0), c.marks, nil
+	return elf.Link(c.b.Code, c.ro, 0), c, nil
 }
 
 type sig struct {
@@ -115,6 +155,8 @@ type cg struct {
 	pkg        *ir.Package
 	fn         *ir.Func
 	marks      []Mark
+	sys        map[int64]bool // the numbers of the system calls emitted
+	sysUnknown int            // syscalls whose number is not a constant
 }
 
 func (c *cg) mark(id string) {
@@ -1385,6 +1427,12 @@ func (c *cg) emitExpr(n *ir.Node, lv int) error {
 	case "syscall":
 		if len(n.Args) != 7 {
 			return fmt.Errorf("syscall arity")
+		}
+		// The number is the first argument; record it for the receipt.
+		if k, v := c.operand(n.Args[0]); k == kImm {
+			c.sys[v] = true
+		} else {
+			c.sysUnknown++
 		}
 		if err := c.emitArgs(n.Args, []int{asm.RAX, asm.RDI, asm.RSI, asm.RDX, asm.R10, asm.R8, asm.R9}, lv); err != nil {
 			return err
