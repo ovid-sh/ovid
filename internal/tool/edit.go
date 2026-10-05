@@ -3,8 +3,10 @@ package tool
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -298,6 +300,94 @@ func runEdit(dir string, req *EditReq, o EditOpts, w io.Writer) int {
 
 // applySplices applies text splices, reparses, checks, and writes.
 func applySplices(w io.Writer, dir string, m *module.Module, sps []*splice, ops []EditOp, dryRun bool, guard int, show bool, extra map[string]any) int {
+	p, code := planSplices(w, dir, m, nil, sps, ops, guard, show, extra)
+	if p == nil {
+		return code
+	}
+	if !dryRun {
+		if code := commitFiles(w, p.m, p.loaded, p.overlay); code != ExitOK {
+			return code
+		}
+	}
+	return p.emit(w, dryRun)
+}
+
+// planned is an edit applied in memory and checked, not yet written.
+type planned struct {
+	// loaded is the source each file was planned from; overlay is the new
+	// source of the changed files. Both are keyed by absolute path.
+	loaded, overlay map[string][]byte
+	m               *module.Module // the module the plan was made from
+	after           *checked
+	worse           bool
+	res             map[string]any // the receipt, less "written"
+}
+
+// emit writes the receipt of p, as written or as a dry run.
+func (p *planned) emit(w io.Writer, dryRun bool) int {
+	p.after.writeDiags(w)
+	res := map[string]any{"written": !dryRun}
+	for k, v := range p.res {
+		res[k] = v
+	}
+	// A dry run asks "would this be fine?": not if it adds errors.
+	if dryRun && p.worse {
+		res["ok"] = false
+		res["error"] = "check"
+		res["message"] = "the change would add check errors"
+		emit(w, res)
+		return ExitFail
+	}
+	emit(w, res)
+	return ExitOK
+}
+
+// commitFiles writes files (new source by absolute path) in one
+// module.WriteFiles, once it is sure that none of them changed on disk
+// since loaded (the source the plan was made from) was read. A file loaded
+// does not have is one the plan creates, so it must not exist yet. It
+// returns ExitOK, or writes why not and returns the exit code.
+func commitFiles(w io.Writer, m *module.Module, loaded, files map[string][]byte) int {
+	// Ovid writers are serialized by the module lock; this catches an
+	// editor or script that changed a file while the edit was planned.
+	var paths []string
+	for abs := range files {
+		paths = append(paths, abs)
+	}
+	sort.Strings(paths)
+	for _, abs := range paths {
+		now, err := os.ReadFile(abs)
+		was, known := loaded[abs]
+		// A file the plan read must read the same; a file it creates must
+		// still be absent: any read of it, even empty, or any error but
+		// "does not exist" means something else got there first.
+		changed := err != nil || string(now) != string(was)
+		if !known {
+			changed = !errors.Is(err, fs.ErrNotExist)
+		}
+		if changed {
+			emit(w, map[string]any{"ok": false, "error": "stale", "message": rel(m, abs) + " changed on disk while the edit ran; nothing was written",
+				"hint": "run the edit again; ids and hashes are read fresh each time"})
+			return ExitStale
+		}
+	}
+	if done, err := module.WriteFiles(files, 0); err != nil {
+		var files []string
+		for _, abs := range done {
+			files = append(files, rel(m, abs))
+		}
+		emit(w, map[string]any{"ok": false, "error": "write", "message": err.Error(), "written_files": files,
+			"hint": "files in written_files have the new text and the rest the old; check git status"})
+		return ExitFail
+	}
+	return ExitOK
+}
+
+// planSplices applies splices to m's sources in memory, reparses, and
+// checks the result. base holds the files earlier steps changed in memory
+// (m was loaded over it); the new module is loaded over base and this
+// step's changes. On failure it writes why and returns a nil plan.
+func planSplices(w io.Writer, dir string, m *module.Module, base map[string][]byte, sps []*splice, ops []EditOp, guard int, show bool, extra map[string]any) (*planned, int) {
 	loaded := map[string][]byte{}
 	for _, f := range m.Files {
 		if f.Abs != "" {
@@ -314,14 +404,14 @@ func applySplices(w io.Writer, dir string, m *module.Module, sps []*splice, ops 
 		sort.SliceStable(list, func(i, j int) bool { return list[i].off < list[j].off })
 		for i := 1; i < len(list); i++ {
 			if list[i].off < list[i-1].end {
-				return fail(w, "overlap", fmt.Sprintf("ops %d and %d touch overlapping source", list[i-1].op, list[i].op),
+				return nil, fail(w, "overlap", fmt.Sprintf("ops %d and %d touch overlapping source", list[i-1].op, list[i].op),
 					"split them into separate edits, or replace the enclosing node once")
 			}
 		}
 		// Splice the bytes the plan was made from, not a fresh read.
 		old, known := loaded[abs]
 		if !list[0].isNew && !known {
-			return fail(w, "read", abs+" is not a file of this module", "")
+			return nil, fail(w, "read", abs+" is not a file of this module", "")
 		}
 		var out []byte
 		prev := 0
@@ -350,13 +440,20 @@ func applySplices(w io.Writer, dir string, m *module.Module, sps []*splice, ops 
 			}
 			emit(w, map[string]any{"ok": false, "error": "syntax", "message": perr.Msg, "op": op, "file": rel(m, abs),
 				"line": pos.Line, "col": pos.Col, "source": f.Line(pos.Line), "hint": "nothing was written"})
-			return ExitFail
+			return nil, ExitFail
 		}
 	}
 	before := runCheck(m)
-	nm, err := module.LoadOverlay(dir, overlay)
+	full := map[string][]byte{}
+	for k, v := range base {
+		full[k] = v
+	}
+	for k, v := range overlay {
+		full[k] = v
+	}
+	nm, err := module.LoadOverlay(dir, full)
 	if err != nil {
-		return fail(w, "load", err.Error(), "")
+		return nil, fail(w, "load", err.Error(), "")
 	}
 	after := runCheck(nm)
 	added := newDiags(before.diags, after.diags)
@@ -371,34 +468,13 @@ func applySplices(w io.Writer, dir string, m *module.Module, sps []*splice, ops 
 		emit(w, map[string]any{"ok": false, "error": "check", "message": "the change leaves check errors; nothing was written",
 			"errors": len(after.diags), "errors_before": len(before.diags),
 			"hint": "fix the text, or pass --allow-broken to write it anyway"})
-		return ExitFail
+		return nil, ExitFail
 	}
-	if !dryRun {
-		// Ovid writers are serialized by the module lock; this catches an
-		// editor or script that changed a file while the edit was planned.
-		for _, abs := range changed {
-			if now, err := os.ReadFile(abs); err == nil && string(now) != string(loaded[abs]) {
-				emit(w, map[string]any{"ok": false, "error": "stale", "message": rel(m, abs) + " changed on disk while the edit ran; nothing was written",
-					"hint": "run the edit again; ids and hashes are read fresh each time"})
-				return ExitStale
-			}
-		}
-		if done, err := module.WriteFiles(overlay, 0); err != nil {
-			var files []string
-			for _, abs := range done {
-				files = append(files, rel(m, abs))
-			}
-			emit(w, map[string]any{"ok": false, "error": "write", "message": err.Error(), "written_files": files,
-				"hint": "files in written_files have the new text and the rest the old; check git status"})
-			return ExitFail
-		}
-	}
-	after.writeDiags(w)
 	var files []string
 	for _, abs := range changed {
 		files = append(files, rel(m, abs))
 	}
-	res := map[string]any{"ok": true, "written": !dryRun, "files": files, "check_ok": len(after.diags) == 0,
+	res := map[string]any{"ok": true, "files": files, "check_ok": len(after.diags) == 0,
 		"errors": len(after.diags), "errors_before": len(before.diags), "revision": nm.Revision()}
 	if ops != nil {
 		res["ops"] = newIDs(nm, sps, len(ops), show)
@@ -406,16 +482,7 @@ func applySplices(w io.Writer, dir string, m *module.Module, sps []*splice, ops 
 	for k, v := range extra {
 		res[k] = v
 	}
-	// A dry run asks "would this be fine?": not if it adds errors.
-	if dryRun && worse {
-		res["ok"] = false
-		res["error"] = "check"
-		res["message"] = "the change would add check errors"
-		emit(w, res)
-		return ExitFail
-	}
-	emit(w, res)
-	return ExitOK
+	return &planned{m: m, loaded: loaded, overlay: overlay, after: after, worse: worse, res: res}, ExitOK
 }
 
 // newDiags returns the diagnostics in after that before does not have,
@@ -464,7 +531,7 @@ func declOfID(id string) string {
 // replacing the same func would otherwise both get ok, the second
 // silently undoing the first.
 func checkExpect(m *module.Module, l *module.Loc, expect string, force, rev bool) *editErr {
-	positional := l.Kind == "stmt" || l.Kind == "expr"
+	positional := positionalLoc(l)
 	if force || (expect == "" && rev) {
 		return nil
 	}
@@ -476,19 +543,20 @@ func checkExpect(m *module.Module, l *module.Loc, expect string, force, rev bool
 		return &editErr{code: "expect_required", msg: "an edit to " + l.ID + " needs a guard: --expect with its hash, from `ovid outline`, `ovid show`, or the last edit's receipt",
 			hint: "without one, a second agent's edit would silently replace the first. --rev REV guards with the whole module instead; --force skips the check"}
 	}
-	if expect == m.Hash(l.ID) || (positional && expect == m.Hash(l.Decl)) {
+	d := m.DeclLoc(l)
+	if expect == m.LocHash(l) || (positional && expect == m.LocHash(d)) {
 		return nil
 	}
-	extra := map[string]any{"id": l.ID, "hash": m.Hash(l.ID), "text": m.Text(l.Full)}
+	extra := map[string]any{"id": l.ID, "hash": m.LocHash(l), "text": m.Text(l.Full)}
 	if positional {
-		extra["decl"], extra["decl_hash"] = l.Decl, m.Hash(l.Decl)
+		extra["decl"], extra["decl_hash"] = l.Decl, m.LocHash(d)
 		// A statement's hash is bound to its decl as it is now, so this is
 		// an id and a hash read together but passed apart, not a move.
-		for _, id := range m.Order() {
-			if o := m.Index()[id]; o.Decl == l.Decl && o.ID != l.ID && m.Hash(id) == expect {
+		for _, o := range m.Locs() {
+			if m.DeclLoc(o) == d && o.ID != l.ID && m.LocHash(o) == expect {
 				return &editErr{code: "stale", exit: ExitStale, extra: extra,
-					msg:  "that hash belongs to " + id + ", not " + l.ID,
-					hint: "edit " + id + " if that is the node you read, or re-read with `ovid show " + l.Decl + "`"}
+					msg:  "that hash belongs to " + o.ID + ", not " + l.ID,
+					hint: "edit " + o.ID + " if that is the node you read, or re-read with `ovid show " + l.Decl + "`"}
 			}
 		}
 		return &editErr{code: "stale", exit: ExitStale, extra: extra,
@@ -514,50 +582,73 @@ func newIDs(m *module.Module, sps []*splice, nops int, show bool) []map[string]a
 	for i, f := range m.Files {
 		fileIdx[f.Abs] = i
 	}
-	seen := make([]map[string]bool, nops)
+	seen := make([]map[*module.Loc]bool, nops)
 	for _, s := range sps {
 		fi, ok := fileIdx[s.abs]
 		if !ok {
 			continue
 		}
-		// The top-level decl around the splice, so the caller can chain
-		// another edit on it without re-reading.
-		at := s.newOff + len(s.text)/2
-		for _, id := range m.Order() {
-			l := m.Index()[id]
+		// The top-level decls the splice wrote into: the one around it, or
+		// every one inside it (an append or insert of several decls, or a
+		// decl replaced by several), so the caller can chain another edit
+		// on each without re-reading. The written range leaves out the
+		// blank lines around the text, so a neighbour is not counted.
+		text := strings.TrimSpace(s.text)
+		lo := s.newOff + strings.Index(s.text, text)
+		hi := lo + len(text)
+		touched := func(l *module.Loc) bool { return l.Full.Off < hi && l.Full.End > lo }
+		if text == "" {
+			// A delete: the decl it was in, which still holds the place
+			// strictly inside it. A decl deleted whole leaves its place at
+			// the start of the next decl (or the end of the one before),
+			// which is not one the delete wrote.
+			at := s.newOff + len(s.text)/2
+			touched = func(l *module.Loc) bool { return at > l.Full.Off && at < l.Full.End }
+		}
+		var decls []*module.Loc
+		for _, l := range m.Locs() {
 			if l.Kind != "func" && l.Kind != "type" && l.Kind != "const" {
 				continue
 			}
-			if l.Span.File != fi || at < l.Full.Off || at > l.Full.End || seen[s.op][id] {
+			if l.Span.File != fi || !touched(l) || seen[s.op][l] {
 				continue
 			}
 			if seen[s.op] == nil {
-				seen[s.op] = map[string]bool{}
+				seen[s.op] = map[*module.Loc]bool{}
 			}
-			seen[s.op][id] = true
-			d := map[string]any{"id": id, "hash": m.Hash(id)}
+			seen[s.op][l] = true
+			decls = append(decls, l)
+		}
+		// In source order; Locs has a file's consts, then types, then funcs.
+		sort.SliceStable(decls, func(i, j int) bool { return decls[i].Full.Off < decls[j].Full.Off })
+		for _, l := range decls {
+			id := l.ID
+			d := map[string]any{"id": id, "hash": m.LocHash(l)}
 			if show {
 				d["text"] = m.Text(l.Full)
 			}
 			prev, _ := out[s.op]["decls"].([]map[string]any)
 			out[s.op]["decls"] = append(prev, d)
 		}
-		text := strings.TrimSpace(s.text)
 		if text == "" {
 			continue
 		}
-		lo := s.newOff + strings.Index(s.text, text)
-		hi := lo + len(text)
-		var ids []string
-		for _, id := range m.Order() {
-			l := m.Index()[id]
+		var written []*module.Loc
+		for _, l := range m.Locs() {
 			if l.Span.File != fi || l.Span.Off < lo || l.Span.End > hi {
 				continue
 			}
-			if p := m.Index()[l.Parent]; p != nil && p.Span.File == fi && p.Span.Off >= lo && p.Span.End <= hi {
+			if slices.ContainsFunc(m.Copies(l.Parent), func(p *module.Loc) bool {
+				return p.Span.File == fi && p.Span.Off >= lo && p.Span.End <= hi
+			}) {
 				continue
 			}
-			ids = append(ids, id)
+			written = append(written, l)
+		}
+		sort.SliceStable(written, func(i, j int) bool { return written[i].Span.Off < written[j].Span.Off })
+		var ids []string
+		for _, l := range written {
+			ids = append(ids, l.ID)
 		}
 		prev := out[s.op]["ids"].([]string)
 		out[s.op]["ids"] = append(prev, ids...)
@@ -631,17 +722,21 @@ func planOp(m *module.Module, i int, op EditOp, force, rev bool) ([]*splice, *ed
 			return appendDecl(m, i, p, op, force)
 		}
 	}
-	l := m.Index()[target]
-	if l == nil {
-		ls, err := m.Lookup(target)
-		if err != nil || len(ls) != 1 {
+	ls := m.Copies(target)
+	if ls == nil {
+		var err error
+		ls, err = m.Lookup(target)
+		if err != nil || len(ls) != 1 && !sameID(ls) {
 			msg := "no node " + target
 			if err != nil {
 				msg = err.Error()
 			}
 			return nil, &editErr{code: "not_found", msg: msg, hint: "ids change when the source changes; get fresh ones from `ovid show --ids`"}
 		}
-		l = ls[0]
+	}
+	l, e := pickCopy(m, ls, op.Expect)
+	if e != nil {
+		return nil, e
 	}
 	if m.IsStd(l.Span.File) {
 		return nil, &editErr{code: "std", msg: target + " is in a shipped package", hint: "copy the package into the module to change it"}
@@ -721,6 +816,76 @@ func planOp(m *module.Module, i int, op EditOp, force, rev bool) ([]*splice, *ed
 		sp.end = sp.off
 	}
 	return []*splice{sp}, nil
+}
+
+// positionalLoc reports whether l is a st:/ex: node, numbered by position
+// in its decl: the only kinds an expect of the decl's hash also guards.
+func positionalLoc(l *module.Loc) bool { return l.Kind == "stmt" || l.Kind == "expr" }
+
+// sameID reports whether ls is several nodes that share one id: the
+// copies of a duplicated id (check reports the duplicate).
+func sameID(ls []*module.Loc) bool {
+	if len(ls) < 2 {
+		return false
+	}
+	for _, l := range ls[1:] {
+		if l.ID != ls[0].ID {
+			return false
+		}
+	}
+	return true
+}
+
+// copyList describes each copy of a duplicated id: where it is and its
+// hash (and, for a statement or expression, its decl's hash).
+func copyList(m *module.Module, ls []*module.Loc) []map[string]any {
+	var out []map[string]any
+	for _, l := range ls {
+		file, a, b, _ := m.Where(l.Span)
+		c := map[string]any{"file": file, "line": a.Line, "end_line": b.Line, "hash": m.LocHash(l)}
+		if positionalLoc(l) {
+			c["decl_hash"] = m.LocHash(m.DeclLoc(l))
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
+// pickCopy chooses which of ls, the nodes an op's id names, the op is on.
+// One node is the op's. The copies of a duplicated id are told apart by
+// expect, the hash of the copy (or of its decl) that the caller read:
+// without one the op is ambiguous_id, and with one no copy has it is
+// stale. Copies with the same hash have the same text, so the op takes
+// the first of them, the one outline and show list first.
+func pickCopy(m *module.Module, ls []*module.Loc, expect string) (*module.Loc, *editErr) {
+	if len(ls) == 1 {
+		return ls[0], nil
+	}
+	id := ls[0].ID
+	extra := map[string]any{"id": id, "copies": copyList(m, ls)}
+	if expect == "" {
+		return nil, &editErr{code: "ambiguous_id", extra: extra,
+			msg:  fmt.Sprintf("%s names %d nodes (check reports the duplicate); give the hash of the copy you mean as expect", id, len(ls)),
+			hint: "copies lists each with its file, line, and hash, as outline and show do; --rev and --force do not choose a copy"}
+	}
+	for _, l := range ls {
+		if m.LocHash(l) == expect || positionalLoc(l) && m.LocHash(m.DeclLoc(l)) == expect {
+			return l, nil
+		}
+	}
+	return nil, &editErr{code: "stale", exit: ExitStale, extra: extra,
+		msg:  fmt.Sprintf("no copy of %s has hash %s; it names %d nodes (check reports the duplicate)", id, expect, len(ls)),
+		hint: "copies lists each with its current hash; re-read the one you mean with `ovid show " + id + "`"}
+}
+
+// failAmbiguousID refuses a command that needs one node (refs, rename,
+// move) for a duplicated id, which it has no way to choose a copy of.
+func failAmbiguousID(w io.Writer, m *module.Module, ls []*module.Loc) int {
+	id := ls[0].ID
+	emit(w, map[string]any{"ok": false, "error": "ambiguous_id", "id": id, "copies": copyList(m, ls),
+		"message": fmt.Sprintf("%s names %d nodes (check reports the duplicate)", id, len(ls)),
+		"hint":    "make it unique first: ovid delete " + id + " --expect HASH removes one copy, ovid replace " + id + " --expect HASH can give it another name"})
+	return ExitFail
 }
 
 func findPkg(m *module.Module, q string) *ir.Package {
