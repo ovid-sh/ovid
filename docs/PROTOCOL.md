@@ -262,7 +262,9 @@ statements, and expressions; `check` reports the duplicate. Every copy is
 indexed: `outline` lists each at its own `file` and `line` with its own
 hash and `"id_copies":N`, and `show` and `grep` find each where it is.
 A name reaches every copy as the id does, `Func.param` and `Type.field`
-included. An
+included. The checker checks only the first copy, so `show` gives a
+`type` (JSON) or `type=` (text) only for the first copy's nodes, never
+another copy's. An
 edit addresses one copy by giving its hash as `expect` (for a `st:`/`ex:`
 id, the node's hash or its decl copy's; a param or field copy, only its
 own hash, as for any decl id). Without an `expect`, the op fails

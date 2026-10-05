@@ -183,6 +183,15 @@ func Show(dir string, ids []string, withIDs, asJSON, exprs bool, w io.Writer) in
 	if len(m.Errors) == 0 {
 		types = check.Run(m.Prog).Types
 	}
+	// typeOf is l's checked type. Types is keyed by id, and of the copies
+	// of a duplicated func the checker types only the first, the one the
+	// id indexes, so another copy's nodes get none rather than its types.
+	typeOf := func(l *module.Loc) string {
+		if m.Index[l.ID] != l {
+			return ""
+		}
+		return types[l.ID]
+	}
 	var locs []*module.Loc
 	for _, q := range ids {
 		ls, err := m.Lookup(q)
@@ -205,7 +214,7 @@ func Show(dir string, ids []string, withIDs, asJSON, exprs bool, w io.Writer) in
 				r["doc_line"] = docAt.Line
 				r["doc"] = docComment(f.Src, l.Span.Off)
 			}
-			if t := types[l.ID]; t != "" {
+			if t := typeOf(l); t != "" {
 				r["type"] = t
 			}
 			if s := sigOf(l); s != "" {
@@ -216,7 +225,7 @@ func Show(dir string, ids []string, withIDs, asJSON, exprs bool, w io.Writer) in
 				for _, e := range exprsIn(m, l) {
 					_, ea, _, _ := m.Where(e.Span)
 					x := map[string]any{"id": e.ID, "line": ea.Line, "col": ea.Col, "text": m.Text(e.Span), "hash": m.LocHash(e)}
-					if t := types[e.ID]; t != "" {
+					if t := typeOf(e); t != "" {
 						x["type"] = t
 					}
 					es = append(es, x)
@@ -231,7 +240,7 @@ func Show(dir string, ids []string, withIDs, asJSON, exprs bool, w io.Writer) in
 		if l.Decl != "" && l.Decl != l.ID {
 			hdr += " in=" + l.Decl
 		}
-		if t := types[l.ID]; t != "" {
+		if t := typeOf(l); t != "" {
 			hdr += " type=" + t
 		}
 		fmt.Fprintln(w, hdr)
@@ -243,7 +252,7 @@ func Show(dir string, ids []string, withIDs, asJSON, exprs bool, w io.Writer) in
 			for _, e := range exprsIn(m, l) {
 				_, ea, _, _ := m.Where(e.Span)
 				line := fmt.Sprintf("//   %s %d:%d %s  hash=%s", e.ID, ea.Line, ea.Col, oneLine(m.Text(e.Span), 72), m.LocHash(e))
-				if t := types[e.ID]; t != "" {
+				if t := typeOf(e); t != "" {
 					line += " type=" + t
 				}
 				fmt.Fprintln(w, line)

@@ -295,3 +295,41 @@ func TestDuplicateIDDeclHash(t *testing.T) {
 		t.Fatalf("param by its decl's hash: want the copies listed: %v", r)
 	}
 }
+
+// TestDuplicateIDTypes: the checker types only the first copy of a
+// duplicated func, so show gives no type for an expression of another copy
+// rather than the first copy's, in JSON and in text.
+func TestDuplicateIDTypes(t *testing.T) {
+	dir := dupMod(t, "package app\n\nfunc F() bool {\n  return true\n}\n")
+	var b bytes.Buffer
+	if code := Show(dir, []string{"ex:app.F:1"}, false, true, false, &b); code != ExitOK {
+		t.Fatalf("show --json %d %s", code, b.String())
+	}
+	rs := lines(t, b.String())
+	if len(rs) != 3 || rs[0]["text"] != "1" || rs[0]["type"] != "i64" || rs[1]["text"] != "true" {
+		t.Fatalf("show --json ex:app.F:1: %v", rs)
+	}
+	if ty, ok := rs[1]["type"]; ok {
+		t.Fatalf("the second copy's true has type %v", ty)
+	}
+	b.Reset()
+	if code := Show(dir, []string{"st:app.F:1"}, false, true, false, &b); code != ExitOK {
+		t.Fatalf("show --json %d %s", code, b.String())
+	}
+	rs = lines(t, b.String())
+	ex0, _ := rs[0]["exprs"].([]any)
+	ex1, _ := rs[1]["exprs"].([]any)
+	if len(ex0) != 1 || ex0[0].(map[string]any)["type"] != "i64" || len(ex1) != 1 || ex1[0].(map[string]any)["type"] != nil {
+		t.Fatalf("exprs %v %v", ex0, ex1)
+	}
+	for _, q := range []string{"ex:app.F:1", "F"} {
+		b.Reset()
+		if code := Show(dir, []string{q}, true, false, true, &b); code != ExitOK {
+			t.Fatalf("show %s %d %s", q, code, b.String())
+		}
+		first, second, ok := strings.Cut(b.String(), "app/b.ov")
+		if !ok || !strings.Contains(first, "type=i64") || strings.Contains(second, "type=") {
+			t.Fatalf("show --ids --exprs %s:\n%s", q, b.String())
+		}
+	}
+}

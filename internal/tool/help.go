@@ -354,7 +354,8 @@ that decl, anywhere in it, makes every statement hash read before it stale,
 while a change to another decl leaves them alone (see ovid help edit).
 A name declared twice in a package gives two nodes one id (check reports
 it). outline and show list each copy at its own file:line with its own
-hash; an edit picks one by that hash as expect (else ambiguous_id), and
+hash (show types only the first copy, the one check checks); an edit
+picks one by that hash as expect (else ambiguous_id), and
 refs, rename, and move refuse the id until one copy is gone.
 `
 
