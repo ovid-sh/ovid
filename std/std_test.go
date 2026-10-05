@@ -34,19 +34,21 @@ func TestSyscallsNamed(t *testing.T) {
 			continue
 		}
 		for _, f := range p.Funcs {
-			walk(f.Body, func(c *ir.Node) {
-				if c.Op != "syscall" {
-					return
-				}
-				n++
-				if len(c.Args) > 0 {
-					a := c.Args[0]
-					if a.Op == "name" && strings.HasPrefix(a.Name, "SYS_") && target[a.ID] == "cn:"+p.Path+"."+a.Name {
+			for _, st := range f.Body {
+				st.Walk(func(c *ir.Node) {
+					if c.Op != "syscall" {
 						return
 					}
-				}
-				t.Errorf("%s: in %s, syscall's number is not a SYS_ const of %s", where(m, c), f.Name, p.Path)
-			})
+					n++
+					if len(c.Args) > 0 {
+						a := c.Args[0]
+						if a.Op == "name" && strings.HasPrefix(a.Name, "SYS_") && target[a.ID] == "cn:"+p.Path+"."+a.Name {
+							return
+						}
+					}
+					t.Errorf("%s: in %s, syscall's number is not a SYS_ const of %s", where(m, c), f.Name, p.Path)
+				})
+			}
 		}
 	}
 	if n == 0 {
@@ -106,19 +108,4 @@ func loadStd(t *testing.T) (*module.Module, *check.Result) {
 func where(m *module.Module, n *ir.Node) string {
 	f := m.Files[n.Span.File]
 	return fmt.Sprintf("%s:%d", f.Path, f.Pos(n.Span.Off).Line)
-}
-
-// walk calls f on every node under ns.
-func walk(ns []*ir.Node, f func(*ir.Node)) {
-	for _, n := range ns {
-		if n == nil {
-			continue
-		}
-		f(n)
-		walk([]*ir.Node{n.Left, n.Right, n.Arg, n.Base, n.Addr, n.Val, n.Cond}, f)
-		walk(n.Args, f)
-		walk(n.Then, f)
-		walk(n.Else, f)
-		walk(n.Body, f)
-	}
 }
