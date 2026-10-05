@@ -1449,7 +1449,7 @@ func TestMoveManyRollsBack(t *testing.T) {
 			t.Fatalf("%s not restored:\n%s", rel, got)
 		}
 	}
-	// Into a new package, dry-run: moves and restores, removing the new dir.
+	// Into a new package, dry-run: planned in memory, so no new dir.
 	b.Reset()
 	if code := MoveMany(dir, []string{"K", "Taken"}, "demo/num", "", true, &b); code != 0 {
 		t.Fatalf("dry-run %d %s", code, b.String())

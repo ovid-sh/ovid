@@ -128,10 +128,11 @@ below. Codes:
 | `write` | writing failed | edit: `written_files`, the files already renamed into place |
 | `syntax` | the module does not parse; refs, rename, and move need a parsed module | edit: `op`, `file`, `line`, `col` of the op whose text broke it |
 | `check` | an edit would add check errors (or leave any, with `--require-clean`); nothing was written | `errors`, `errors_before`; the new diagnostics precede it |
-| `stale` | exit 2. An `expect` hash no longer matches, or the module `revision` moved, or a file changed on disk while the edit ran | `id`, `hash`, `text` (the current source), `decl`, `decl_hash`; `revision` for a revision guard |
+| `stale` | exit 2. An `expect` hash no longer matches, or the module `revision` moved, or a file changed on disk while the edit ran (or one it would create appeared) | `id`, `hash`, `text` (the current source), `decl`, `decl_hash`; `revision` for a revision guard; `id`, `copies` (as for `ambiguous_id`) when no copy of a duplicated id has the hash |
 | `expect_required` | an edit op has no guard: no `expect`, no request `revision` (`--rev`), no `--force`. Every op needs one, decl ids included; only `append` into a package path does not | `op` |
 | `not_found` | an id or name resolves to nothing | |
 | `ambiguous` | a name resolves to several decls | the hint lists the full ids |
+| `ambiguous_id` | an id names several nodes (see Duplicated ids) and the edit op has no `expect` to pick one, or the command (refs, rename, move) cannot pick one | `id`, `copies`: `[{file,line,end_line,hash,decl_hash}]` (`decl_hash` for a `st:`/`ex:` id); edit: `op` |
 | `bad_edit` | a malformed op, or a request or op with a key it does not have (misspelled, or in another case), with the same key twice, or with a field that belongs to another op (a replace with a `before`, a delete with a `text`); nothing was written | `op`, when one op is at fault |
 | `overlap` | two ops of one edit touch the same source | |
 | `std` | the target is in a shipped package | |
@@ -139,8 +140,8 @@ below. Codes:
 | `conflict` | a rename or move would collide with an existing name | |
 | `bad_move` | a move to the same package, of `main`, or into a file outside the package dir | |
 | `unsupported` | the command does not work on this kind of node | |
-| `rolled_back` | one move of several failed and every file was put back | `moved_before_failure` |
-| `restore` | putting files back after a failed move failed; the module may be half-moved | |
+| `rolled_back` | one move of several failed; nothing was written | `moved_before_failure` |
+| `restore` | no longer produced: a move of several decls is planned in memory and written once | |
 | `bad_pattern` | grep's regexp does not compile | |
 | `compile`, `run`, `dump` | the backend, the launch (the program could not be placed or started; see above), or the dump failed | |
 | `init`, `exists` | init could not write, or `ovid.mod` already exists | |
@@ -275,6 +276,27 @@ the module, and the files of the shipped packages the module imports, so a
 new toolchain with a changed standard library moves it too. Both are the
 leading digits of a sha256; the tools keep the whole digest internally.
 
+### Duplicated ids
+
+A module that declares a name twice in one package (`func F` in both
+`a.ov` and `b.ov`) has two nodes with one id, and so do their params,
+statements, and expressions; `check` reports the duplicate. Every copy is
+indexed: `outline` lists each at its own `file` and `line` with its own
+hash and `"id_copies":N`, and `show` and `grep` find each where it is.
+A name reaches every copy as the id does, `Func.param` and `Type.field`
+included. The checker checks only the first copy, so `show` gives a
+`type` (JSON) or `type=` (text) only for the first copy's nodes, never
+another copy's. An
+edit addresses one copy by giving its hash as `expect` (for a `st:`/`ex:`
+id, the node's hash or its decl copy's; a param or field copy, only its
+own hash, as for any decl id). Without an `expect`, the op fails
+with `ambiguous_id`, which lists the copies; `--rev` and `--force` do not
+choose one. An `expect` no copy has is `stale` (exit 2). Copies with the
+same hash have the same text, so the op takes the first of them, the one
+`outline` lists first. `refs`, `rename`, and `move` cannot choose a copy
+and fail with `ambiguous_id`: delete one copy, or replace it under another
+name, first.
+
 ## Guards
 
 Every edit op (`edit`, `replace`, `insert`, `append`, `delete`) must carry
@@ -309,8 +331,16 @@ A successful edit, rename, or move ends with
 afterwards (nonzero only with `--allow-broken`). Edit adds
 `"ops":[{"ids":[ID...],"decls":[{"id":ID,"hash":H}]}]`, one per op: the ids
 it wrote and the new hashes of the decls it touched, so a follow-up edit can
-`expect` them without reading again. Rename adds `from`, `id`, `to`, `refs`,
-`edits`; move adds `from`, `to` (the new id), `file`, `refs`, `edits`.
+`expect` them without reading again. `decls` lists, in source order, the
+func, type, or const the op wrote into, or every one its text holds (an
+`append` or `insert` of several decls, or a decl replaced by several),
+each with its `text` under `--show`; a `delete` lists the decl it was in (none for a decl deleted whole, not the neighbour now at its place). Rename adds `from`, `id`, `to`, `refs`,
+`edits`; move adds `from`, `to` (the new id), `file`, `refs`, `edits`. A
+move of several decls prints one such receipt per decl, in order, then
+`{"ok":true,"moved":[NAME...],"to":PKG,"written":BOOL}`. Each move is
+planned in memory over the ones before it, and only when every one has
+passed are the files written, together, as one edit's are; `--dry-run`
+touches no file.
 `refs` counts the uses the checker resolved to the declaration, the same
 ones `ovid refs` lists; rename rewrites exactly their name tokens and the
 declaration's own, so a field, local, or declaration of the same spelling

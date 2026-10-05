@@ -198,7 +198,9 @@ ovid outline [--pkg P] [--all] [--uses] [--offset N] [--limit N]
   between), size (struct bytes), test. --uses adds used_by: {package:
   refs}, so {} is dead code and a decl used by only one other package is a
   candidate to move there. Paged like grep: at most 200 records, and the
-  last line says where the next page starts.
+  last line says where the next page starts. A name declared twice in a
+  package lists each copy where it is, with its own hash and id_copies:N
+  (see ovid help ids).
 ovid show <id|name>... [--plain] [--json] [--exprs]
   Text: "// kind id file:a-b hash=H in=decl type=T" then the source, with
   "  // @id" after each line where a statement starts (--plain omits them).
@@ -246,7 +248,9 @@ ovid move <id|name>... <pkg> [--file pkg/x.ov] [--dry-run]
   Moves funcs, types, or consts (with doc comments) to pkg, creating it if
   needed; requalifies every use and adds the imports files now need.
   Refuses changes that add check errors. Several names move in order, all or
-  none: on a failure every file is put back.
+  none: each move is planned in memory over the ones before it, and only
+  when all pass are the files written, together; --dry-run writes nothing.
+  One receipt per name, then {"ok":true,"moved":[...],"to","written"}.
 ovid init <dir> [--name N]   writes ovid.mod, <N>/main.ov, <N>/main_test.ov
 ovid dump [--pkg P] [-o file]
   the program as one JSON document, not paged and large (megabytes for a
@@ -288,6 +292,11 @@ took its id, not even an identical twin. Edits to different decls do not
 disturb each other. Re-read with ovid show (or use the decl hash in the
 last receipt). A current hash passed with the wrong id is refused and names
 its node. --force skips every guard.
+An id that several nodes share (a name declared twice; check reports it)
+needs the hash of the copy to edit as expect: without one the op fails
+with ambiguous_id and "copies":[{file,line,end_line,hash}], and --rev or
+--force does not pick one. Copies with the same hash are the same text;
+the op takes the first.
 
 ID may be a full id or a decl name (Sum, util.Sum). Text is plain Ovid; its
 indentation is normalised to the target's. insert anchors on statements and
@@ -304,7 +313,10 @@ and names the op) and checked. Result: {"ok":true,"written","files",
 "check_ok","errors","errors_before","revision","ops":[{"ids":[...],
 "decls":[{"id","hash"}]}]}: ids are the nodes the op wrote, decls the
 top-level decls it touched with their new hashes (--show adds "text"), so a
-follow-up edit can "expect" them without reading again.
+follow-up edit can "expect" them without reading again: the decl it wrote
+into, or each decl its text holds (append or insert of several, or a decl
+replaced by several), in source order; a delete lists the decl it was in,
+none for a whole decl.
 
 Examples:
   fix one argument:   {"op":"replace","id":"ex:app.main:2","expect":H,"text":"2"}
@@ -343,6 +355,11 @@ hash of the decl and of every statement in it. A st:/ex: id is a
 position, so its hash also covers the whole decl it is in: any change to
 that decl, anywhere in it, makes every statement hash read before it stale,
 while a change to another decl leaves them alone (see ovid help edit).
+A name declared twice in a package gives two nodes one id (check reports
+it). outline and show list each copy at its own file:line with its own
+hash (show types only the first copy, the one check checks); an edit
+picks one by that hash as expect (else ambiguous_id), and
+refs, rename, and move refuse the id until one copy is gone.
 `
 
 // Help prints a help topic as plain text.

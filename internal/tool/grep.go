@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+
+	"ovid/internal/module"
 )
 
 // GrepLimit is how many matches grep prints when no limit is given.
@@ -26,15 +28,14 @@ func Grep(dir, pattern, pkg string, std bool, offset, limit int, w io.Writer) in
 	// The decls and statements of each file, so a match is only compared
 	// with the nodes of its own file.
 	filePkg := map[int]string{}
-	byFile := map[int][]string{}
-	for _, id := range m.Order() {
-		l := m.Index()[id]
+	byFile := map[int][]*module.Loc{}
+	for _, l := range m.Locs() {
 		if _, ok := filePkg[l.Span.File]; !ok {
 			filePkg[l.Span.File] = l.Pkg
 		}
 		switch l.Kind {
 		case "func", "type", "const", "import", "stmt":
-			byFile[l.Span.File] = append(byFile[l.Span.File], id)
+			byFile[l.Span.File] = append(byFile[l.Span.File], l)
 		}
 	}
 	pg := pager{Page: Page{offset, limit}}
@@ -54,8 +55,8 @@ func Grep(dir, pattern, pkg string, std bool, offset, limit int, w io.Writer) in
 				"match": string(f.Src[loc[0]:loc[1]]), "source": lineText(f.Src, loc[0])}
 			// The smallest decl and statement spans that hold the match.
 			declLen, stLen := 1<<62, 1<<62
-			for _, id := range byFile[fi] {
-				l := m.Index()[id]
+			for _, l := range byFile[fi] {
+				id := l.ID
 				if loc[0] < l.Full.Off || loc[0] >= l.Full.End {
 					continue
 				}
