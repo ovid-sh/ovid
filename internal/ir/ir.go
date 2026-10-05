@@ -130,25 +130,31 @@ func (n *Node) MarshalJSON() ([]byte, error) {
 		return []byte("null"), nil
 	}
 	var b bytes.Buffer
+	n.appendJSON(&b)
+	return b.Bytes(), nil
+}
+
+// appendJSON writes n and everything under it to b in one pass.
+func (n *Node) appendJSON(b *bytes.Buffer) {
 	b.WriteString(`{"id":`)
-	writeJSONString(&b, n.ID)
+	writeJSONString(b, n.ID)
 	b.WriteString(`,"op":`)
-	writeJSONString(&b, n.Op)
+	writeJSONString(b, n.Op)
 	if n.Name != "" {
 		b.WriteString(`,"name":`)
-		writeJSONString(&b, n.Name)
+		writeJSONString(b, n.Name)
 	}
 	if n.Type != "" {
 		b.WriteString(`,"type":`)
-		writeJSONString(&b, n.Type)
+		writeJSONString(b, n.Type)
 	}
 	if n.Pkg != "" {
 		b.WriteString(`,"pkg":`)
-		writeJSONString(&b, n.Pkg)
+		writeJSONString(b, n.Pkg)
 	}
 	if n.Func != "" {
 		b.WriteString(`,"func":`)
-		writeJSONString(&b, n.Func)
+		writeJSONString(b, n.Func)
 	}
 	switch n.ValK {
 	case 1:
@@ -164,25 +170,24 @@ func (n *Node) MarshalJSON() ([]byte, error) {
 	case 3:
 		if utf8.ValidString(n.Str) {
 			b.WriteString(`,"value":`)
-			writeJSONString(&b, n.Str)
+			writeJSONString(b, n.Str)
 		} else {
 			// Bytes JSON cannot carry: hex, so nothing is lost.
 			b.WriteString(`,"value_hex":"` + hex.EncodeToString([]byte(n.Str)) + `"`)
 		}
 	}
-	writeNode(&b, "left", n.Left)
-	writeNode(&b, "right", n.Right)
-	writeNode(&b, "arg", n.Arg)
-	writeNode(&b, "base", n.Base)
-	writeNode(&b, "addr", n.Addr)
-	writeNode(&b, "val", n.Val)
-	writeNode(&b, "cond", n.Cond)
-	writeNodes(&b, "args", n.Args)
-	writeNodes(&b, "then", n.Then)
-	writeNodes(&b, "else", n.Else)
-	writeNodes(&b, "body", n.Body)
+	writeNode(b, "left", n.Left)
+	writeNode(b, "right", n.Right)
+	writeNode(b, "arg", n.Arg)
+	writeNode(b, "base", n.Base)
+	writeNode(b, "addr", n.Addr)
+	writeNode(b, "val", n.Val)
+	writeNode(b, "cond", n.Cond)
+	writeNodes(b, "args", n.Args)
+	writeNodes(b, "then", n.Then)
+	writeNodes(b, "else", n.Else)
+	writeNodes(b, "body", n.Body)
 	b.WriteByte('}')
-	return b.Bytes(), nil
 }
 
 func writeNode(b *bytes.Buffer, key string, n *Node) {
@@ -193,8 +198,7 @@ func writeNode(b *bytes.Buffer, key string, n *Node) {
 	b.WriteByte('"')
 	b.WriteString(key)
 	b.WriteString(`":`)
-	raw, _ := json.Marshal(n)
-	b.Write(raw)
+	n.appendJSON(b)
 }
 
 func writeNodes(b *bytes.Buffer, key string, ns []*Node) {
@@ -209,13 +213,31 @@ func writeNodes(b *bytes.Buffer, key string, ns []*Node) {
 		if i > 0 {
 			b.WriteByte(',')
 		}
-		raw, _ := json.Marshal(n)
-		b.Write(raw)
+		if n == nil {
+			b.WriteString("null")
+		} else {
+			n.appendJSON(b)
+		}
 	}
 	b.WriteByte(']')
 }
 
 func writeJSONString(b *bytes.Buffer, s string) {
+	// Printable ASCII without a quote or a backslash is itself in JSON;
+	// that is nearly every id, op, and name.
+	plain := true
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; c < 0x20 || c >= 0x7f || c == '"' || c == '\\' {
+			plain = false
+			break
+		}
+	}
+	if plain {
+		b.WriteByte('"')
+		b.WriteString(s)
+		b.WriteByte('"')
+		return
+	}
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)

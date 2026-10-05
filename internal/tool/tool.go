@@ -383,32 +383,47 @@ func Dump(dir, pkg, out string, w io.Writer) int {
 		}
 		prog.Packages = keep
 	}
-	raw, err := ir.Marshal(&prog)
-	if err != nil {
-		return fail(w, "dump", err.Error(), "")
-	}
+	// Encoded a func at a time, straight to where it goes: the document is
+	// several times the module's source and is never held whole.
 	if out == "" {
-		w.Write(raw)
+		if err := ir.Encode(w, &prog); err != nil {
+			return fail(w, "dump", err.Error(), "")
+		}
 		return ExitOK
 	}
 	// Written in place, not by rename: out may be a device.
 	f, err := os.OpenFile(out, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		return fail(w, "write", err.Error(), "")
+	}
+	cw := &countWriter{w: f}
+	err = ir.Encode(cw, &prog)
 	if err == nil {
-		if _, err = f.Write(raw); err == nil {
-			// Only what has storage behind it can be synced: a character
-			// device (/dev/null) or a FIFO answers EINVAL to a sync that
-			// has nothing to do.
-			if st, serr := f.Stat(); serr == nil && (st.Mode().IsRegular() || st.Mode()&(os.ModeDevice|os.ModeCharDevice) == os.ModeDevice) {
-				err = f.Sync()
-			}
+		// Only what has storage behind it can be synced: a character
+		// device (/dev/null) or a FIFO answers EINVAL to a sync that
+		// has nothing to do.
+		if st, serr := f.Stat(); serr == nil && (st.Mode().IsRegular() || st.Mode()&(os.ModeDevice|os.ModeCharDevice) == os.ModeDevice) {
+			err = f.Sync()
 		}
-		if cerr := f.Close(); err == nil {
-			err = cerr
-		}
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
 	}
 	if err != nil {
 		return fail(w, "write", err.Error(), "")
 	}
-	emit(w, map[string]any{"ok": true, "output": out, "bytes": len(raw), "revision": prog.Revision})
+	emit(w, map[string]any{"ok": true, "output": out, "bytes": cw.n, "revision": prog.Revision})
 	return ExitOK
+}
+
+// countWriter counts the bytes written through it.
+type countWriter struct {
+	w io.Writer
+	n int64
+}
+
+func (c *countWriter) Write(p []byte) (int, error) {
+	n, err := c.w.Write(p)
+	c.n += int64(n)
+	return n, err
 }
