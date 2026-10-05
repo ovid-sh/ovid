@@ -1,6 +1,9 @@
 package compile
 
 import (
+	"math"
+	"math/bits"
+	"math/rand"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -262,4 +265,65 @@ func TestBind(t *testing.T) {
 	if c.locals[i].disp != c.locals[j].disp {
 		t.Fatalf("sibling b in slots %d and %d", c.locals[i].disp, c.locals[j].disp)
 	}
+}
+
+// TestDivConst checks the instructions divConst emits, simulated, against
+// Go's division, for divisors across the immediate range and dividends
+// at the edges.
+func TestDivConst(t *testing.T) {
+	ds := []int64{math.MinInt32, math.MaxInt32, 1000000000, -1000000000, 1000000007}
+	for d := int64(2); d <= 1000; d++ {
+		ds = append(ds, d, -d)
+	}
+	for k := 2; k <= 31; k++ {
+		for e := int64(-2); e <= 2; e++ {
+			if d := int64(1)<<k + e; d <= math.MaxInt32 {
+				ds = append(ds, d, -d)
+			}
+		}
+	}
+	rng := rand.New(rand.NewSource(55))
+	for i := 0; i < 500; i++ {
+		ds = append(ds, rng.Int63n(math.MaxInt32-2)+2, -rng.Int63n(math.MaxInt32-2)-2)
+	}
+	xs := []int64{0, 1, -1, 2, -2, math.MaxInt64, math.MinInt64, math.MinInt64 + 1, math.MaxInt64 - 1}
+	for i := 0; i < 200; i++ {
+		x := int64(rng.Uint64())
+		xs = append(xs, x, x>>(i%64), -(x >> (i % 64)))
+	}
+	for _, d := range ds {
+		for _, x := range xs {
+			x2 := []int64{x, x / d * d, x/d*d - 1, x/d*d + 1}
+			for _, x := range x2 {
+				if q := simDiv(x, d); q != x/d {
+					t.Fatalf("%d / %d: got %d, want %d", x, d, q, x/d)
+				}
+			}
+		}
+	}
+}
+
+// simDiv computes x / d the way divConst's instructions do.
+func simDiv(x, d int64) int64 {
+	if d > 0 && d&(d-1) == 0 {
+		k := uint(bits.TrailingZeros64(uint64(d)))
+		return (x + int64(uint64(x>>63)>>(64-k))) >> k
+	}
+	m, s := magic(d)
+	// The high half of the signed product rdx:rax = x * m.
+	hi, _ := bits.Mul64(uint64(x), uint64(m))
+	h := int64(hi)
+	if x < 0 {
+		h -= m
+	}
+	if m < 0 {
+		h -= x
+	}
+	if d > 0 && m < 0 {
+		h += x
+	} else if d < 0 && m > 0 {
+		h -= x
+	}
+	h >>= s
+	return h + int64(uint64(h)>>63)
 }
