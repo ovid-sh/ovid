@@ -54,8 +54,8 @@ func TestEncodeIsMarshal(t *testing.T) {
 			t.Fatalf("%s: not JSON", dir)
 		}
 	}
-	// A program without packages has no list to split at.
-	for _, p := range []*ir.Program{{Module: "m", Entry: "m"}, {Module: "m", Packages: []ir.Package{}}, {Packages: []ir.Package{{ID: "pkg:a", Path: "a"}}}} {
+	// A nil program, and one without packages, have no list to split at.
+	for _, p := range []*ir.Program{nil, {Module: "m", Entry: "m"}, {Module: "m", Packages: []ir.Package{}}, {Packages: []ir.Package{{ID: "pkg:a", Path: "a"}}}} {
 		want, _ := ir.Marshal(p)
 		var got bytes.Buffer
 		if err := ir.Encode(&got, p); err != nil || !bytes.Equal(got.Bytes(), want) {

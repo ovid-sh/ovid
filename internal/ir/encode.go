@@ -12,7 +12,7 @@ import (
 // written. Marshal builds the whole text, and several copies of its parts on
 // the way, which cost a dump more memory than checking the module did.
 func Encode(w io.Writer, p *Program) error {
-	if p.Packages == nil {
+	if p == nil || p.Packages == nil {
 		raw, err := Marshal(p)
 		if err != nil {
 			return err
