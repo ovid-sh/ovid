@@ -264,7 +264,8 @@ hash and `"id_copies":N`, and `show` and `grep` find each where it is.
 A name reaches every copy as the id does, `Func.param` and `Type.field`
 included. An
 edit addresses one copy by giving its hash as `expect` (for a `st:`/`ex:`
-id, the node's hash or its decl copy's). Without an `expect`, the op fails
+id, the node's hash or its decl copy's; a param or field copy, only its
+own hash, as for any decl id). Without an `expect`, the op fails
 with `ambiguous_id`, which lists the copies; `--rev` and `--force` do not
 choose one. An `expect` no copy has is `stale` (exit 2). Copies with the
 same hash have the same text, so the op takes the first of them, the one

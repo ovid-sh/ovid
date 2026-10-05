@@ -258,3 +258,40 @@ func TestDuplicateIDQualifiedName(t *testing.T) {
 		t.Fatalf("show F.x %d %s", code, out.String())
 	}
 }
+
+// TestDuplicateIDDeclHash: a copies listing gives decl_hash only for a
+// st:/ex: id, the only kinds whose expect may be the decl's hash; a param
+// or field copy is guarded by its own hash.
+func TestDuplicateIDDeclHash(t *testing.T) {
+	t.Setenv(module.PathsEnv, "module")
+	a := "package app\n\nimport ovid/io\n\ntype P struct {\n  v i64\n}\n\nfunc F(x i64) i64 {\n  return x\n}\n\nfunc main(io *ovid/io.Cap) i64 {\n  return F(1)\n}\n"
+	b := "package app\n\ntype P struct {\n  v i64\n}\n\nfunc F(x i64) i64 {\n  return x + 1\n}\n"
+	dir := mkmod(t, map[string]string{"ovid.mod": "module app\nentry app\n", "app/a.ov": a, "app/b.ov": b})
+	for id, want := range map[string]bool{"pa:app.F.x": false, "fld:app.P.v": false, "st:app.F:1": true} {
+		var out bytes.Buffer
+		op := EditOp{Op: "replace", ID: id, Text: "y i64"}
+		if code := runEdit(dir, &EditReq{Ops: []EditOp{op}}, EditOpts{Force: true}, &out); code != ExitFail {
+			t.Fatalf("%s: %d %s", id, code, out.String())
+		}
+		r := last(t, out.String())
+		cs, _ := r["copies"].([]any)
+		if r["error"] != "ambiguous_id" || len(cs) != 2 {
+			t.Fatalf("%s: %v", id, r)
+		}
+		for _, c := range cs {
+			if _, ok := c.(map[string]any)["decl_hash"]; ok != want {
+				t.Fatalf("%s: copy %v, want decl_hash %v", id, c, want)
+			}
+		}
+	}
+	// A param's decl hash does not guard the param, so it is not a copy's.
+	hs := copyHashes(t, dir, "fn:app.F")
+	var out bytes.Buffer
+	op := EditOp{Op: "replace", ID: "pa:app.F.x", Expect: hs["app/b.ov"], Text: "y i64"}
+	if code := runEdit(dir, &EditReq{Ops: []EditOp{op}}, EditOpts{}, &out); code != ExitStale {
+		t.Fatalf("param by its decl's hash: %d %s", code, out.String())
+	}
+	if r := last(t, out.String()); r["copies"] == nil {
+		t.Fatalf("param by its decl's hash: want the copies listed: %v", r)
+	}
+}

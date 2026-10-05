@@ -531,7 +531,7 @@ func declOfID(id string) string {
 // replacing the same func would otherwise both get ok, the second
 // silently undoing the first.
 func checkExpect(m *module.Module, l *module.Loc, expect string, force, rev bool) *editErr {
-	positional := l.Kind == "stmt" || l.Kind == "expr"
+	positional := positionalLoc(l)
 	if force || (expect == "" && rev) {
 		return nil
 	}
@@ -818,6 +818,10 @@ func planOp(m *module.Module, i int, op EditOp, force, rev bool) ([]*splice, *ed
 	return []*splice{sp}, nil
 }
 
+// positionalLoc reports whether l is a st:/ex: node, numbered by position
+// in its decl: the only kinds an expect of the decl's hash also guards.
+func positionalLoc(l *module.Loc) bool { return l.Kind == "stmt" || l.Kind == "expr" }
+
 // sameID reports whether ls is several nodes that share one id: the
 // copies of a duplicated id (check reports the duplicate).
 func sameID(ls []*module.Loc) bool {
@@ -839,8 +843,8 @@ func copyList(m *module.Module, ls []*module.Loc) []map[string]any {
 	for _, l := range ls {
 		file, a, b, _ := m.Where(l.Span)
 		c := map[string]any{"file": file, "line": a.Line, "end_line": b.Line, "hash": m.LocHash(l)}
-		if d := m.DeclLoc(l); d != l {
-			c["decl_hash"] = m.LocHash(d)
+		if positionalLoc(l) {
+			c["decl_hash"] = m.LocHash(m.DeclLoc(l))
 		}
 		out = append(out, c)
 	}
@@ -865,7 +869,7 @@ func pickCopy(m *module.Module, ls []*module.Loc, expect string) (*module.Loc, *
 			hint: "copies lists each with its file, line, and hash, as outline and show do; --rev and --force do not choose a copy"}
 	}
 	for _, l := range ls {
-		if m.LocHash(l) == expect || m.DeclLoc(l) != l && m.LocHash(m.DeclLoc(l)) == expect {
+		if m.LocHash(l) == expect || positionalLoc(l) && m.LocHash(m.DeclLoc(l)) == expect {
 			return l, nil
 		}
 	}
