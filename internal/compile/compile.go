@@ -763,6 +763,12 @@ func (c *cg) emitStmt(s *ir.Node) error {
 		body := c.b.NewLabel()
 		test := c.b.NewLabel()
 		c.b.Jmp(test)
+		// The body starts on a 32-byte boundary, so where the loop falls
+		// does not decide how fast it runs. The padding follows a jmp and
+		// never runs.
+		for (elf.CodeVAddr()+uint64(c.b.Pos()))%32 != 0 {
+			c.b.Int3()
+		}
 		c.b.Mark(body)
 		if err := c.emitStmts(s.Body); err != nil {
 			return err

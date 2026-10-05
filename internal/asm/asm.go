@@ -288,6 +288,9 @@ func (b *Buf) IdivRcx() { b.emit(0x48, 0xF7, 0xF9) }
 // ImulRcx encodes the one-operand imul rcx: rdx:rax = rax * rcx, signed.
 func (b *Buf) ImulRcx() { b.emit(0x48, 0xF7, 0xE9) }
 
+// Int3 encodes int3, which pads code that never runs.
+func (b *Buf) Int3() { b.emit(0xCC) }
+
 func (b *Buf) NegRax() { b.emit(0x48, 0xF7, 0xD8) }
 
 func (b *Buf) NotRax() { b.emit(0x48, 0xF7, 0xD0) }

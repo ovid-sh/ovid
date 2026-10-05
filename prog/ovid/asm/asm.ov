@@ -477,6 +477,12 @@ func ImulRcx(c *Code) i64 {
   return 0
 }
 
+// Int3 encodes int3, which pads code that never runs.
+func Int3(c *Code) i64 {
+  E(c, 0xCC)
+  return 0
+}
+
 func NegRax(c *Code) i64 {
   E(c, 0x48)
   E(c, 0xF7)

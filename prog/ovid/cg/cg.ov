@@ -1773,6 +1773,12 @@ func EmitStmt(c *C, s *ovid/parse.Node) i64 {
     var top i64 = ovid/asm.NewLabel(c.code)
     var test i64 = ovid/asm.NewLabel(c.code)
     ovid/asm.Jmp(c.code, test)
+    // The body starts on a 32-byte boundary, so where the loop falls does
+    // not decide how fast it runs. The padding follows a jmp and never
+    // runs.
+    while (((ovid/asm.LOADADDR + ovid/asm.HEADERSIZE) + c.code.len) % 32) != 0 {
+      ovid/asm.Int3(c.code)
+    }
     ovid/asm.Mark(c.code, top)
     if EmitStmts(c, s.body) != 0 {
       return c.err
