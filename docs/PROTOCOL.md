@@ -98,6 +98,13 @@ in memory instead and execute it through `/proc/self/fd`, so `/proc` must be
 mounted for that. Neither needs the directory for anything else: a test's
 output comes back through a pipe.
 
+A program run by `run` or `test` is given its arguments and its standard
+streams, and an **empty environment**. Ovid has no way to ask for an
+environment variable, but the kernel puts the environment on the stack right
+after `argv`, where a program can read it by address, and a caller's
+environment is where its secrets usually are. ovid itself still reads its
+own (`TMPDIR`, `OVID_PATHS`, `OVID_LOCK_TIMEOUT`).
+
 `test` keeps the first 4,000 bytes of a test's output in its record. Longer
 output ends in `...(truncated)` and the record adds `"output_bytes"`, the
 size of all of it. The rest is discarded as it is written, so a test that

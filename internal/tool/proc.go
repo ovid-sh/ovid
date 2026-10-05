@@ -29,7 +29,7 @@ type procResult struct {
 }
 
 // procIO is a program's stdio and any further files; a nil stdio field is
-// /dev/null.
+// /dev/null. A program gets these and its arguments, and no environment.
 type procIO struct {
 	stdin          io.Reader
 	stdout, stderr io.Writer
@@ -39,6 +39,10 @@ type procIO struct {
 
 func (pio procIO) command(bin string, args []string) *exec.Cmd {
 	cmd := exec.Command(bin, args...)
+	// An empty environment, not ovid's own: the kernel puts the environment
+	// on the stack after argv, where any program can read it, and the
+	// caller's often holds secrets.
+	cmd.Env = []string{}
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = pio.stdin, pio.stdout, pio.stderr
 	cmd.ExtraFiles = pio.extra
 	if pio.argv0 != "" {

@@ -40,8 +40,13 @@ func Argc(io *Cap) i64 {
 }
 
 // Arg is the address of argument i, NUL-terminated; its length is CLen.
-// Arg(io, 0) is the program name.
+// Arg(io, 0) is the program name. It is 0 for an i that is not an argument:
+// past argv the stack holds the environment, which is not the program's to
+// read through here.
 func Arg(io *Cap, i i64) i64 {
+  if i < 0 || i >= io.argc {
+    return 0
+  }
   return load64(io.argv + (i * 8))
 }
 

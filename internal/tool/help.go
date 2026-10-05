@@ -167,6 +167,8 @@ ovid build [-o out]          default out: <module>/bin/<module name>;
   enough to run it under a filter that allows nothing else.
 ovid run [--] [args...]      program stdio and exit code pass through;
                              if the build fails: errors as JSON, exit 125.
+  A program run by run or test gets its arguments and stdio and an empty
+  environment: none of ovid's own variables reach it.
   run and test execute the program from TMPDIR (else /tmp), or from memory
   where that is missing or noexec and /proc is mounted; if neither works:
   {"ok":false,"error":"run",message,hint}, exit 125 (run) or 1 (test).
