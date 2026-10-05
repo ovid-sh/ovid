@@ -1,6 +1,6 @@
 package app/x
 import app/w
-import app/y // error: import_cycle 1
+import app/y // error: import_cycle 1 message="import cycle: app/x -> app/y -> app/z -> app/x"
 func X() i64 {
   return app/w.W() + 1
 }

@@ -1,0 +1,6 @@
+package p/a
+import p/b // error: import_cycle 1 message="import cycle: p/a -> p/b -> p/a"
+import p/c
+func A() i64 {
+  return p/b.B() + p/c.C()
+}

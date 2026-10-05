@@ -1,0 +1,5 @@
+package q/m
+import q/n // error: import_cycle 1 message="import cycle: q/m -> q/n -> q/m"
+func M() i64 {
+  return q/n.N()
+}

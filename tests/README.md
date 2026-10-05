@@ -40,8 +40,10 @@ Put a comment at the end of each line that should get a diagnostic:
 
 The word is the diagnostic's `code` (see `docs/PROTOCOL.md`), and the
 optional number is its column. After those, any of `expected="..."`,
-`got="..."`, and `hint="..."` (Go-quoted) must equal the diagnostic's field
-of that name:
+`got="..."`, `hint="..."`, and `message="..."` (Go-quoted) must equal the
+diagnostic's field of that name. Messages differ between the two compilers
+in general, so a case names one only where they agree; the self-hosted
+checker must then give it too:
 
 ```
   return Add(1, true) // error: type_mismatch 17 expected="i64" got="bool"
