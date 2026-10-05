@@ -489,8 +489,8 @@ func stmtsWith(t *testing.T, dir, decl, text string) []string {
 		t.Fatal(err)
 	}
 	var out []string
-	for _, id := range m.Order {
-		if l := m.Index[id]; l.Kind == "stmt" && l.Decl == decl && m.Text(l.Span) == text {
+	for _, id := range m.Order() {
+		if l := m.Index()[id]; l.Kind == "stmt" && l.Decl == decl && m.Text(l.Span) == text {
 			out = append(out, id)
 		}
 	}

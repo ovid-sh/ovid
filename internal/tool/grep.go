@@ -27,8 +27,8 @@ func Grep(dir, pattern, pkg string, std bool, offset, limit int, w io.Writer) in
 	// with the nodes of its own file.
 	filePkg := map[int]string{}
 	byFile := map[int][]string{}
-	for _, id := range m.Order {
-		l := m.Index[id]
+	for _, id := range m.Order() {
+		l := m.Index()[id]
 		if _, ok := filePkg[l.Span.File]; !ok {
 			filePkg[l.Span.File] = l.Pkg
 		}
@@ -55,7 +55,7 @@ func Grep(dir, pattern, pkg string, std bool, offset, limit int, w io.Writer) in
 			// The smallest decl and statement spans that hold the match.
 			declLen, stLen := 1<<62, 1<<62
 			for _, id := range byFile[fi] {
-				l := m.Index[id]
+				l := m.Index()[id]
 				if loc[0] < l.Full.Off || loc[0] >= l.Full.End {
 					continue
 				}

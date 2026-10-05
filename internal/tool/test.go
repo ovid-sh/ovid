@@ -58,16 +58,13 @@ func Test(dir, filter string, list bool, w io.Writer) int {
 			if !isTest(fn) {
 				// Outside _test.ov files a Test-named helper (asm's TestRaxRax,
 				// the x86 TEST instruction) is not meant as a test.
-				l := m.Index[fn.ID]
-				if l == nil || !strings.HasSuffix(m.Files[l.Span.File].Abs, "_test.ov") {
+				if !strings.HasSuffix(m.Files[fn.Span.File].Abs, "_test.ov") {
 					continue
 				}
 				d := map[string]any{"fact": "error", "code": "bad_test", "id": fn.ID,
 					"message": fn.Name + " starts with Test but is not func(io *ovid/io.Cap) i64; skipped", "got": sig}
-				if l := m.Index[fn.ID]; l != nil {
-					file, a, _, _ := m.Where(l.Span)
-					d["file"], d["line"] = file, a.Line
-				}
+				file, a, _, _ := m.Where(fn.Span)
+				d["file"], d["line"] = file, a.Line
 				emit(w, d)
 				continue
 			}
@@ -83,10 +80,8 @@ func Test(dir, filter string, list bool, w io.Writer) int {
 	if list {
 		for _, t := range tests {
 			r := map[string]any{"fact": "test", "id": t.id}
-			if l := m.Index[t.id]; l != nil {
-				file, a, _, _ := m.Where(l.Span)
-				r["file"], r["line"] = file, a.Line
-			}
+			file, a, _, _ := m.Where(t.span)
+			r["file"], r["line"] = file, a.Line
 			emit(w, r)
 		}
 		emit(w, map[string]any{"ok": true, "count": len(tests)})
@@ -146,10 +141,8 @@ func Test(dir, filter string, list bool, w io.Writer) int {
 		}
 		returned := retBytes > 0
 		r := map[string]any{"fact": "test", "id": t.id, "ms": ms}
-		if l := m.Index[t.id]; l != nil {
-			file, a, _, _ := m.Where(l.Span)
-			r["file"], r["line"] = file, a.Line
-		}
+		file, a, _, _ := m.Where(t.span)
+		r["file"], r["line"] = file, a.Line
 		code := pr.code
 		ok := pr.exited && code == 0
 		switch {
@@ -204,7 +197,7 @@ func isTest(fn *ir.Func) bool {
 // returnsOf finds the return statements in a test that could have produced
 // exit code: those returning that literal, else every non-literal return.
 func returnsOf(m *module.Module, id string, code int) []map[string]any {
-	l := m.Index[id]
+	l := m.Index()[id]
 	if l == nil {
 		return nil
 	}

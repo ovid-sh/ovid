@@ -105,7 +105,7 @@ func crashStack(m *module.Module, marks []compile.Mark, r procResult) []map[stri
 	var out []map[string]any
 	for _, pc := range pcs {
 		id := crashSite(marks, pc)
-		l := m.Index[id]
+		l := m.Index()[id]
 		if l == nil {
 			continue
 		}
