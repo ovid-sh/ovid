@@ -153,6 +153,7 @@ type cg struct {
 	regs       map[int]int // locals that live in a register
 	saved      []int       // callee-saved registers the func uses
 	saveBase   int32       // their save slots lie below this displacement
+	tregs      []int       // registers for temps at levels 0, 1, ...
 	pkg        *ir.Package
 	fn         *ir.Func
 	marks      []Mark
@@ -312,6 +313,7 @@ func (c *cg) emitFunc(pkg *ir.Package, fn *ir.Func) error {
 		tempBytes = int32((peak + 1) * 8)
 	}
 	c.allocRegs(fn)
+	c.allocTemps()
 	c.saveBase = -(c.localBytes + tempBytes)
 	frame := c.localBytes + tempBytes + int32(8*len(c.saved))
 	if frame%16 != 0 {
@@ -502,6 +504,22 @@ func (c *cg) allocRegs(fn *ir.Func) {
 			callee = callee[1:]
 		} else {
 			return
+		}
+	}
+}
+
+// allocTemps gives the first temp levels the registers a call would
+// clobber that no local uses, r11 first. A temp still keeps its slot in
+// the frame, for the expressions that cannot use the register.
+func (c *cg) allocTemps() {
+	used := map[int]bool{}
+	for _, r := range c.regs {
+		used[r] = true
+	}
+	c.tregs = nil
+	for _, r := range []int{asm.R11, asm.R10, asm.R9, asm.R8, asm.RSI, asm.RDI} {
+		if !used[r] {
+			c.tregs = append(c.tregs, r)
 		}
 	}
 }
@@ -1033,7 +1051,9 @@ func (c *cg) arithRcx(op string) {
 
 // emitArith evaluates a binary arithmetic node into rax. A side that is an
 // operand costs no temp; evaluating the other side first is safe because
-// nothing an expression does can change a local or a constant.
+// nothing an expression does can change a local or a constant. Otherwise
+// the left side waits in a temp: a register when tempReg has one, else a
+// slot in the frame.
 func (c *cg) emitArith(n *ir.Node, lv int) error {
 	if k, v := c.operand(n.Right); k != kNone {
 		if err := c.emitExpr(n.Left, lv); err != nil {
@@ -1052,6 +1072,23 @@ func (c *cg) emitArith(n *ir.Node, lv int) error {
 		}
 		c.b.MovRegReg(asm.RCX, asm.RAX)
 		c.loadOpnd(asm.RAX, k, v)
+		c.arithRcx(n.Op)
+		return nil
+	}
+	if r, ok := c.tempReg(lv, n.Right); ok {
+		if err := c.emitExpr(n.Left, lv); err != nil {
+			return err
+		}
+		c.b.MovRegReg(r, asm.RAX)
+		if err := c.emitExpr(n.Right, lv+1); err != nil {
+			return err
+		}
+		if commutes(n.Op) {
+			c.arithOpnd(n.Op, kReg, int64(r))
+			return nil
+		}
+		c.b.MovRegReg(asm.RCX, asm.RAX)
+		c.b.MovRegReg(asm.RAX, r)
 		c.arithRcx(n.Op)
 		return nil
 	}
@@ -1116,6 +1153,17 @@ func (c *cg) emitCmp(n *ir.Node, lv int) (byte, error) {
 		c.aluOpnd(aluCmp, asm.RAX, k, v)
 		return ccSwap(cc), nil
 	}
+	if r, ok := c.tempReg(lv, n.Right); ok {
+		if err := c.emitExpr(n.Left, lv); err != nil {
+			return 0, err
+		}
+		c.b.MovRegReg(r, asm.RAX)
+		if err := c.emitExpr(n.Right, lv+1); err != nil {
+			return 0, err
+		}
+		c.b.AluRegReg(aluCmp, r, asm.RAX)
+		return cc, nil
+	}
 	if err := c.emitExpr(n.Left, lv); err != nil {
 		return 0, err
 	}
@@ -1125,6 +1173,15 @@ func (c *cg) emitCmp(n *ir.Node, lv int) (byte, error) {
 	}
 	c.b.AluMemReg(aluCmp, c.tempDisp(lv), asm.RAX)
 	return cc, nil
+}
+
+// tempReg is the register temp level lv may use while right is evaluated:
+// none when right calls something, which may clobber it.
+func (c *cg) tempReg(lv int, right *ir.Node) (int, bool) {
+	if lv >= len(c.tregs) || exprCalls(right) {
+		return 0, false
+	}
+	return c.tregs[lv], true
 }
 
 func isCmp(op string) bool {

@@ -1,0 +1,123 @@
+// stdout: "deep 0\nfull 0\ncalls 0\ncmp 0\n"
+package demo
+import ovid/io
+
+// When both sides of an operation need code, the left side waits in a
+// register a call would clobber and no local uses, while the right side
+// is evaluated; in a slot in the frame when the right side calls, or when
+// the registers have run out. Each func here computes a value both ways:
+// nested, and one operation at a time, which needs no temps.
+
+// Id returns x, and clobbers the registers its own temps use.
+func Id(x i64) i64 {
+  return x * ((x * x) - ((x + 1) * (x - 1)))
+}
+
+// Deep nests nine levels. Its params take rdi and rsi, which leaves four
+// registers for the outer levels; the inner ones use the frame.
+func Deep(a i64, b i64) i64 {
+  var nested i64 = (a * b) - ((a + b) * ((a - b) - ((a ^ b) - ((a | b) - ((a & b) - ((a << 3) - ((b >> 1) - (a * 3))))))))
+  var t i64 = a * 3
+  t = (b >> 1) - t
+  t = (a << 3) - t
+  t = (a & b) - t
+  t = (a | b) - t
+  t = (a ^ b) - t
+  t = (a - b) - t
+  t = (a + b) * t
+  t = (a * b) - t
+  return nested - t
+}
+
+// Full calls nothing and has six params and two locals, which take every
+// register a temp could use, so its temps all live in the frame.
+func Full(a i64, b i64, c i64, d i64, e i64, f i64) i64 {
+  var g i64 = a + f
+  var h i64 = b + e
+  var nested i64 = ((g * h) / ((c - d) | 1)) - ((h << 2) % ((g & 15) + 3))
+  var x i64 = g * h
+  var y i64 = c - d
+  y = y | 1
+  x = x / y
+  var z i64 = g & 15
+  z = z + 3
+  y = h << 2
+  y = y % z
+  return nested - (x - y)
+}
+
+// Calls has calls on either side: a call on the left runs before the
+// temp is set, one on the right makes it use the frame.
+func Calls(a i64, b i64) i64 {
+  var nested i64 = (Id(a) - (a * b)) - ((a * b) - Id(a - b))
+  var x i64 = Id(a)
+  x = x - (a * b)
+  var y i64 = Id(a - b)
+  var z i64 = a * b
+  z = z - y
+  return nested - (x - z)
+}
+
+// Cmp compares two sides that both need code, in values and in jumps.
+func Cmp(a i64, b i64) i64 {
+  var bad i64 = 0
+  var x i64 = a * b
+  var y i64 = (a + b) * 2
+  if ((a * b) < ((a + b) * 2)) != (x < y) {
+    bad = bad + 1
+  }
+  if (a * b) >= ((a + b) * 2) {
+    if x < y {
+      bad = bad + 1
+    }
+  }
+  var s i64 = 0
+  var i i64 = 0
+  while (i * i) < (a - (b * 2)) {
+    s = s + 1
+    i = i + 1
+  }
+  var n i64 = a - (b * 2)
+  var w i64 = 0
+  i = 0
+  while (i * i) < n {
+    w = w + 1
+    i = i + 1
+  }
+  return bad + (s - w)
+}
+
+func Nz(x i64) i64 {
+  if x != 0 {
+    return 1
+  }
+  return 0
+}
+
+func Put(io *ovid/io.Cap, name i64, v i64) i64 {
+  ovid/io.Print(name)
+  ovid/io.PrintInt(io, v)
+  ovid/io.Print(strptr("\n"))
+  return 0
+}
+
+func main(io *ovid/io.Cap) i64 {
+  var deep i64 = 0
+  var full i64 = 0
+  var calls i64 = 0
+  var cmp i64 = 0
+  var a i64 = 0 - 1000
+  while a <= 1000 {
+    var b i64 = (a * 7) - 333
+    deep = deep + Nz(Deep(a, b))
+    full = full + Nz(Full(a, b, a - 5, b + 9, a * 3, b - a))
+    calls = calls + Nz(Calls(a, b))
+    cmp = cmp + Cmp(a * 9, a - 17)
+    a = a + 37
+  }
+  Put(io, strptr("deep "), deep)
+  Put(io, strptr("full "), full)
+  Put(io, strptr("calls "), calls)
+  Put(io, strptr("cmp "), cmp)
+  return 0
+}
