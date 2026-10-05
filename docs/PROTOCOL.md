@@ -197,7 +197,8 @@ describe every use, on the page or not.
 One key changed its meaning when `refs` became paged, the exception to the
 rule under Output: `refs`'s `count` used to be the number of uses and is now
 the number printed. A consumer that wants the number of uses reads `total`.
-The two are equal whenever `has_more` is false.
+The two are equal only on a first page that holds everything (`offset` 0 and
+`has_more` false), so read `total`, whatever the page.
 
 `dump` is a single JSON document and is not paged. `--pkg P` limits it to
 one package. `-o <file>` writes it to that file (written in place, so it
