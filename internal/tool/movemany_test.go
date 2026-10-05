@@ -240,3 +240,34 @@ func TestMoveManyStale(t *testing.T) {
 		t.Fatalf("commit over a new file %d %s", code, b.String())
 	}
 }
+
+// TestCommitNewFileAppearedEmpty: a file the plan creates that another
+// process created meanwhile, even empty, is stale and not overwritten; so
+// is a planned file that cannot be read for a reason other than absence.
+func TestCommitNewFileAppearedEmpty(t *testing.T) {
+	dir := mkmod(t, moveManyFiles())
+	m, err := load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(dir, "app/fresh/fresh.ov")
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var b bytes.Buffer
+	if code := commitFiles(&b, m, map[string][]byte{}, map[string][]byte{p: []byte("x")}); code != ExitStale {
+		t.Fatalf("commit over an empty new file %d %s", code, b.String())
+	}
+	if got, _ := os.ReadFile(p); len(got) != 0 {
+		t.Fatalf("overwritten: %q", got)
+	}
+	// A path whose parent is a file cannot be read (ENOTDIR, not ENOENT).
+	b.Reset()
+	q := filepath.Join(dir, "app/main.ov", "x.ov")
+	if code := commitFiles(&b, m, map[string][]byte{}, map[string][]byte{q: []byte("x")}); code != ExitStale {
+		t.Fatalf("commit under a file %d %s", code, b.String())
+	}
+}

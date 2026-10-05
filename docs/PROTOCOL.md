@@ -128,7 +128,7 @@ below. Codes:
 | `write` | writing failed | edit: `written_files`, the files already renamed into place |
 | `syntax` | the module does not parse; refs, rename, and move need a parsed module | edit: `op`, `file`, `line`, `col` of the op whose text broke it |
 | `check` | an edit would add check errors (or leave any, with `--require-clean`); nothing was written | `errors`, `errors_before`; the new diagnostics precede it |
-| `stale` | exit 2. An `expect` hash no longer matches, or the module `revision` moved, or a file changed on disk while the edit ran | `id`, `hash`, `text` (the current source), `decl`, `decl_hash`; `revision` for a revision guard; `id`, `copies` (as for `ambiguous_id`) when no copy of a duplicated id has the hash |
+| `stale` | exit 2. An `expect` hash no longer matches, or the module `revision` moved, or a file changed on disk while the edit ran (or one it would create appeared) | `id`, `hash`, `text` (the current source), `decl`, `decl_hash`; `revision` for a revision guard; `id`, `copies` (as for `ambiguous_id`) when no copy of a duplicated id has the hash |
 | `expect_required` | an edit op has no guard: no `expect`, no request `revision` (`--rev`), no `--force`. Every op needs one, decl ids included; only `append` into a package path does not | `op` |
 | `not_found` | an id or name resolves to nothing | |
 | `ambiguous` | a name resolves to several decls | the hint lists the full ids |

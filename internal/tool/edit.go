@@ -3,8 +3,10 @@ package tool
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -356,7 +358,14 @@ func commitFiles(w io.Writer, m *module.Module, loaded, files map[string][]byte)
 	for _, abs := range paths {
 		now, err := os.ReadFile(abs)
 		was, known := loaded[abs]
-		if err == nil && string(now) != string(was) || err != nil && known {
+		// A file the plan read must read the same; a file it creates must
+		// still be absent: any read of it, even empty, or any error but
+		// "does not exist" means something else got there first.
+		changed := err != nil || string(now) != string(was)
+		if !known {
+			changed = !errors.Is(err, fs.ErrNotExist)
+		}
+		if changed {
 			emit(w, map[string]any{"ok": false, "error": "stale", "message": rel(m, abs) + " changed on disk while the edit ran; nothing was written",
 				"hint": "run the edit again; ids and hashes are read fresh each time"})
 			return ExitStale
