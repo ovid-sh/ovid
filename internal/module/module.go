@@ -84,8 +84,11 @@ type Module struct {
 	Std map[string]bool
 	// Errors are syntax and layout problems found while loading.
 	Errors []Diag
-	Index  map[string]*Loc
-	Order  []string
+	// index and order are built on first use (Index, Order): check, build,
+	// run, and test never need them, and they are a quarter of a loaded
+	// module's memory.
+	index  map[string]*Loc
+	order  []string
 	hashes map[string]string // full digests, filled on first Hash
 	modSrc []byte            // ovid.mod as read
 }
@@ -141,7 +144,7 @@ func load(dir string, overlay map[string][]byte, noTests bool) (*Module, error) 
 	if err != nil {
 		return nil, err
 	}
-	m := &Module{Root: root, Std: map[string]bool{}, Index: map[string]*Loc{}}
+	m := &Module{Root: root, Std: map[string]bool{}}
 	modSrc, err := os.ReadFile(filepath.Join(root, "ovid.mod"))
 	if err != nil {
 		return nil, err
@@ -251,7 +254,6 @@ func load(dir string, overlay map[string][]byte, noTests bool) (*Module, error) 
 	for _, f := range m.Files {
 		m.Prog.Files = append(m.Prog.Files, f.Path)
 	}
-	m.index()
 	return m, nil
 }
 
@@ -387,7 +389,7 @@ func (m *Module) add(l *Loc) {
 	if l.ID == "" {
 		return
 	}
-	if _, dup := m.Index[l.ID]; dup {
+	if _, dup := m.index[l.ID]; dup {
 		return
 	}
 	l.Full = l.Span
@@ -395,11 +397,28 @@ func (m *Module) add(l *Loc) {
 	case "func", "type", "const":
 		l.Full.Off = DocStart(m.Files[l.Span.File].Src, l.Span.Off)
 	}
-	m.Index[l.ID] = l
-	m.Order = append(m.Order, l.ID)
+	m.index[l.ID] = l
+	m.order = append(m.order, l.ID)
 }
 
-func (m *Module) index() {
+// Index maps every id of the module to its node and place. The first node
+// to claim an id keeps it.
+func (m *Module) Index() map[string]*Loc {
+	if m.index == nil {
+		m.index = map[string]*Loc{}
+		m.buildIndex()
+	}
+	return m.index
+}
+
+// Order lists the ids of Index in program order: packages by path, and
+// each decl before the nodes inside it.
+func (m *Module) Order() []string {
+	m.Index()
+	return m.order
+}
+
+func (m *Module) buildIndex() {
 	for pi := range m.Prog.Packages {
 		pkg := &m.Prog.Packages[pi]
 		m.add(&Loc{ID: pkg.ID, Kind: "package", Pkg: pkg.Path, Span: pkg.Span, Node: pkg})
@@ -496,8 +515,8 @@ func (m *Module) Hash(id string) string {
 	if m.hashes == nil {
 		m.hashes = map[string]string{}
 		seen := map[string]int{}
-		for _, oid := range m.Order {
-			l := m.Index[oid]
+		for _, oid := range m.Order() {
+			l := m.Index()[oid]
 			text := m.Text(l.Full)
 			in := text
 			if l.Kind == "stmt" || l.Kind == "expr" {
@@ -565,7 +584,7 @@ func (m *Module) Where(s ir.Span) (file string, a, b Pos, line string) {
 
 // Locate fills location fields of d from its id.
 func (m *Module) Locate(d *Diag) {
-	l := m.Index[d.ID]
+	l := m.Index()[d.ID]
 	if l == nil {
 		return
 	}
@@ -578,12 +597,12 @@ func (m *Module) IsStd(fi int) bool { return strings.HasPrefix(m.Files[fi].Path,
 
 // Lookup finds an id, also accepting a bare name or pkg.Name for decls.
 func (m *Module) Lookup(q string) ([]*Loc, error) {
-	if l, ok := m.Index[q]; ok {
+	if l, ok := m.Index()[q]; ok {
 		return []*Loc{l}, nil
 	}
 	var out []*Loc
-	for _, id := range m.Order {
-		l := m.Index[id]
+	for _, id := range m.Order() {
+		l := m.Index()[id]
 		switch l.Kind {
 		case "func", "type", "const":
 		default:
@@ -596,8 +615,8 @@ func (m *Module) Lookup(q string) ([]*Loc, error) {
 	}
 	if len(out) == 0 && strings.Contains(q, ".") {
 		// Type.field and Func.param, optionally package-qualified.
-		for _, id := range m.Order {
-			l := m.Index[id]
+		for _, id := range m.Order() {
+			l := m.Index()[id]
 			if l.Kind != "field" && l.Kind != "param" {
 				continue
 			}
@@ -609,15 +628,15 @@ func (m *Module) Lookup(q string) ([]*Loc, error) {
 	}
 	if len(out) == 0 {
 		var cands []string
-		for _, id := range m.Order {
-			if k := m.Index[id].Kind; k == "func" || k == "type" || k == "const" {
+		for _, id := range m.Order() {
+			if k := m.Index()[id].Kind; k == "func" || k == "type" || k == "const" {
 				cands = append(cands, id)
 			}
 		}
 		msg := "no node with id or name " + q
 		var locals []string
-		for _, id := range m.Order {
-			l := m.Index[id]
+		for _, id := range m.Order() {
+			l := m.Index()[id]
 			if (l.Kind == "param" && strings.HasSuffix(id, "."+q)) || (l.Kind == "stmt" && l.Node.(*ir.Node).Op == "var" && l.Node.(*ir.Node).Name == q) {
 				locals = append(locals, id)
 			}

@@ -94,7 +94,7 @@ func TestHashTellsTwinsApart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if l := m.Index["st:m.main:2"]; l == nil || l.Decl != "fn:m.main" {
+	if l := m.Index()["st:m.main:2"]; l == nil || l.Decl != "fn:m.main" {
 		t.Fatalf("loc %+v", l)
 	}
 	a, b := m.Hash("st:m.main:2"), m.Hash("st:m.main:3")

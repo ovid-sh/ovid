@@ -484,8 +484,8 @@ func checkExpect(m *module.Module, l *module.Loc, expect string, force, rev bool
 		extra["decl"], extra["decl_hash"] = l.Decl, m.Hash(l.Decl)
 		// A statement's hash is bound to its decl as it is now, so this is
 		// an id and a hash read together but passed apart, not a move.
-		for _, id := range m.Order {
-			if o := m.Index[id]; o.Decl == l.Decl && o.ID != l.ID && m.Hash(id) == expect {
+		for _, id := range m.Order() {
+			if o := m.Index()[id]; o.Decl == l.Decl && o.ID != l.ID && m.Hash(id) == expect {
 				return &editErr{code: "stale", exit: ExitStale, extra: extra,
 					msg:  "that hash belongs to " + id + ", not " + l.ID,
 					hint: "edit " + id + " if that is the node you read, or re-read with `ovid show " + l.Decl + "`"}
@@ -523,8 +523,8 @@ func newIDs(m *module.Module, sps []*splice, nops int, show bool) []map[string]a
 		// The top-level decl around the splice, so the caller can chain
 		// another edit on it without re-reading.
 		at := s.newOff + len(s.text)/2
-		for _, id := range m.Order {
-			l := m.Index[id]
+		for _, id := range m.Order() {
+			l := m.Index()[id]
 			if l.Kind != "func" && l.Kind != "type" && l.Kind != "const" {
 				continue
 			}
@@ -549,12 +549,12 @@ func newIDs(m *module.Module, sps []*splice, nops int, show bool) []map[string]a
 		lo := s.newOff + strings.Index(s.text, text)
 		hi := lo + len(text)
 		var ids []string
-		for _, id := range m.Order {
-			l := m.Index[id]
+		for _, id := range m.Order() {
+			l := m.Index()[id]
 			if l.Span.File != fi || l.Span.Off < lo || l.Span.End > hi {
 				continue
 			}
-			if p := m.Index[l.Parent]; p != nil && p.Span.File == fi && p.Span.Off >= lo && p.Span.End <= hi {
+			if p := m.Index()[l.Parent]; p != nil && p.Span.File == fi && p.Span.Off >= lo && p.Span.End <= hi {
 				continue
 			}
 			ids = append(ids, id)
@@ -631,7 +631,7 @@ func planOp(m *module.Module, i int, op EditOp, force, rev bool) ([]*splice, *ed
 			return appendDecl(m, i, p, op, force)
 		}
 	}
-	l := m.Index[target]
+	l := m.Index()[target]
 	if l == nil {
 		ls, err := m.Lookup(target)
 		if err != nil || len(ls) != 1 {

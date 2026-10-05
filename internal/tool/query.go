@@ -104,13 +104,13 @@ func pkgFiles(m *module.Module, p *ir.Package) []string {
 func declLocs(m *module.Module, p *ir.Package) []*module.Loc {
 	var out []*module.Loc
 	for _, c := range p.Consts {
-		out = append(out, m.Index[c.ID])
+		out = append(out, m.Index()[c.ID])
 	}
 	for _, t := range p.Types {
-		out = append(out, m.Index[t.ID])
+		out = append(out, m.Index()[t.ID])
 	}
 	for _, f := range p.Funcs {
-		out = append(out, m.Index[f.ID])
+		out = append(out, m.Index()[f.ID])
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		a, b := out[i].Span, out[j].Span
@@ -255,7 +255,7 @@ func Show(dir string, ids []string, withIDs, asJSON, exprs bool, w io.Writer) in
 func exprsIn(m *module.Module, l *module.Loc) []*module.Loc {
 	var out []*module.Loc
 	visit := func(c *ir.Node) {
-		if e := m.Index[c.ID]; e != nil && e.Kind == "expr" {
+		if e := m.Index()[c.ID]; e != nil && e.Kind == "expr" {
 			out = append(out, e)
 		}
 	}
@@ -439,10 +439,10 @@ func findRefs(m *module.Module, res *check.Result, target *module.Loc) ([]ref, e
 		}
 		r := ref{id: u.ID, kind: u.Kind, span: u.Span, tok: u.Span, decl: u.In}
 		if u.Kind == "result" {
-			if l := m.Index[u.ID]; l != nil {
+			if l := m.Index()[u.ID]; l != nil {
 				r.span = headerSpan(m, l.Node.(*ir.Func))
 			}
-		} else if l := m.Index[u.ID]; l != nil {
+		} else if l := m.Index()[u.ID]; l != nil {
 			r.span = l.Span
 		}
 		out = append(out, r)

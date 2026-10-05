@@ -111,7 +111,7 @@ func runCheck(m *module.Module) *checked {
 		c.res = &check.Result{Types: map[string]string{}}
 		return c
 	}
-	c.res = check.Run(m.Prog)
+	c.res = check.Errors(m.Prog)
 	for _, is := range c.res.Issues {
 		d := module.Diag{Fact: "error", Code: is.Code, Message: is.Message, ID: is.ID,
 			Expected: is.Expected, Got: is.Got, Hint: is.Hint}
@@ -148,7 +148,7 @@ func Check(dir string, facts bool, w io.Writer) int {
 	c.writeDiags(w)
 	if facts {
 		for _, f := range c.res.Facts {
-			if l := m.Index[fmt.Sprint(f["id"])]; l != nil {
+			if l := m.Index()[fmt.Sprint(f["id"])]; l != nil {
 				file, a, _, _ := m.Where(l.Span)
 				f["file"], f["line"] = file, a.Line
 			}
