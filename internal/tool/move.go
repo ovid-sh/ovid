@@ -170,8 +170,8 @@ func planMove(dir, q, to, file string, base map[string][]byte, w io.Writer) (*pl
 	}
 	// Inside the moved text, uses of its old and new neighbours change too.
 	for _, pk := range []string{from, to} {
-		for _, id := range m.Order {
-			l := m.Index[id]
+		for _, id := range m.Order() {
+			l := m.Index()[id]
 			if l.Pkg != pk || l.ID == t.ID || (l.Kind != "func" && l.Kind != "type" && l.Kind != "const") {
 				continue
 			}

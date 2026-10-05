@@ -5,10 +5,10 @@ Results of the agent exercise in `tests/agent/` (how to run it:
 command's output or defaults change, and add the run here, newest first.
 Each run's raw records are in `docs/agent-runs/`.
 
-## Current state (verified 2026-10-04)
+## Current state (verified 2026-10-05)
 
 Two models, `claude-opus-5-5` and `claude-sonnet-5-5`, pass all ten tasks
-against b4c231f, 30 of 30 runs each. Sonnet is cheaper ($0.56 for all 30,
+there were at b4c231f, 30 of 30 runs each. Sonnet is cheaper ($0.56 for all 30,
 against opus's $1.34) and as reliable here. The tasks remain a floor: they
 do not separate these models, and harder tasks would.
 
@@ -18,12 +18,59 @@ deterministic test: every `05-rename-type` run got the rename right in one
 edit with no hash is now refused (#22), which sonnet hit and recovered from
 seven times.
 
-The two problems this run found are fixed by #100, not yet re-run with a
+The replay is now exercised by agents, not only by the deterministic test:
+told to retry a lost `ovid edit` first, every agent in `07-replay` got
+`stale`, confirmed the change was already in, and made it no second time
+(d8c0be0, below).
+
+The two problems the b4c231f run found are fixed by #100, not yet re-run with a
 model: an edit op now refuses a field that belongs to another op, so
 `ovid replace --before` is `bad_edit` rather than a replace (#98), and
 `ovid help replace` prints that command's entry instead of exiting 64
 (#99). Agents may still skip ovid's edits and use `sed`; the hash guard
 then still protects the other writer, as in `09-same-func`.
+
+## 2026-10-05, d8c0be0: the replay tasks, opus-5-5 and sonnet-5-5
+
+`07-replay` was redesigned because no agent ever sent its lost request
+again. The lost request is now `ovid edit fix.json`, three ops in a file in
+the directory; in `07-replay` it ran before the reply was lost, and in the
+new `11-lost-edit`, told the same story, it did not. Only these two tasks
+were run, three times each per model, with the setup of the b4c231f run
+below.
+
+opus-5-5:
+
+| task | passed | calls | ovid calls | failed calls | bytes read | bytes written | tokens in | tokens out | cost | seconds |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 07-replay | 3/3 | 3 | 3 | 0 | 5025 | 269 | 12347 | 492 | $0.03 | 13 |
+| 11-lost-edit | 3/3 | 2 | 2 | 0 | 3697 | 227 | 8082 | 439 | $0.02 | 11 |
+
+sonnet-5-5:
+
+| task | passed | calls | ovid calls | failed calls | bytes read | bytes written | tokens in | tokens out | cost | seconds |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 07-replay | 3/3 | 2 | 2 | 1 | 1736 | 147 | 7056 | 304 | $0.01 | 5 |
+| 11-lost-edit | 3/3 | 2 | 2 | 0 | 874 | 75 | 6636 | 252 | $0.01 | 5 |
+
+What the transcripts show:
+
+- **Left to choose, agents read before they retry.** In a run of the first
+  version (e618a52, records not kept), which only said to make sure the
+  change was made once, all six `07-replay` agents read the module, saw
+  the change, and stopped without sending `fix.json`; all six
+  `11-lost-edit` agents read it and then sent it. So the tasks now say to
+  retry first, as a harness retrying a lost reply would, and measure what
+  the agent does with the answer.
+- **The stale refusal does not mislead.** In all six `07-replay` runs the
+  first call was `ovid edit fix.json`, refused with `stale` (exit 2; the
+  one failed call of each sonnet run). Each then read the module (`ovid show`,
+  with `cat`, `ovid outline`, or `ovid grep` in some runs) and concluded
+  the first edit had landed. None
+  followed the hint's "use the ids and hashes it prints now" into a second
+  edit, and none used `--force`.
+- **`11-lost-edit`**: the retry applied the edit in every run, and every
+  agent ran `ovid check` on the result.
 
 ## 2026-10-04, b4c231f: opus-5-5 and sonnet-5-5
 

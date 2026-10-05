@@ -198,6 +198,25 @@ func CmdBuild(io *ovid/io.Cap) i64 {
   ovid/parse.WStr(io, qb, out, ovid/io.CLen(out))
   ovid/mem.WBytes(io, qb, strptr(",\"bytes\":"), strlen(",\"bytes\":"))
   ovid/parse.WInt(io, qb, b.len)
+  // Every system call the program can make, in increasing order.
+  ovid/mem.WBytes(io, qb, strptr(",\"syscalls\":["), strlen(",\"syscalls\":["))
+  var sn i64 = 0
+  var first bool = true
+  while sn < ovid/cg.SYSMAX {
+    if load8(m.sys + sn) != 0 {
+      if !first {
+        ovid/mem.WByte(io, qb, 44)
+      }
+      first = false
+      ovid/parse.WInt(io, qb, sn)
+    }
+    sn = sn + 1
+  }
+  ovid/mem.WByte(io, qb, 93)
+  if m.sysunk != 0 {
+    ovid/mem.WBytes(io, qb, strptr(",\"syscalls_unknown\":"), strlen(",\"syscalls_unknown\":"))
+    ovid/parse.WInt(io, qb, m.sysunk)
+  }
   ovid/mem.WBytes(io, qb, strptr("}\n"), 2)
   ovid/io.Stdout(qb.data, qb.len)
   return 0

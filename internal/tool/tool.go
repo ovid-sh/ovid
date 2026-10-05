@@ -111,7 +111,7 @@ func runCheck(m *module.Module) *checked {
 		c.res = &check.Result{Types: map[string]string{}}
 		return c
 	}
-	c.res = check.Run(m.Prog)
+	c.res = check.Errors(m.Prog)
 	for _, is := range c.res.Issues {
 		d := module.Diag{Fact: "error", Code: is.Code, Message: is.Message, ID: is.ID,
 			Expected: is.Expected, Got: is.Got, Hint: is.Hint}
@@ -148,7 +148,7 @@ func Check(dir string, facts bool, w io.Writer) int {
 	c.writeDiags(w)
 	if facts {
 		for _, f := range c.res.Facts {
-			if l := m.Index[fmt.Sprint(f["id"])]; l != nil {
+			if l := m.Index()[fmt.Sprint(f["id"])]; l != nil {
 				file, a, _, _ := m.Where(l.Span)
 				f["file"], f["line"] = file, a.Line
 			}
@@ -169,13 +169,13 @@ func DefaultOut(m *module.Module) string {
 	return filepath.Join(m.Root, "bin", filepath.Base(m.Name))
 }
 
-func compileTo(m *module.Module, p *ir.Program, out string) (int, error) {
-	bin, err := compile.Compile(p)
+// compileTo compiles p and writes the program to out.
+func compileTo(m *module.Module, p *ir.Program, out string) (*compile.Output, error) {
+	o, err := compile.CompileAll(p)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	err = module.ReplaceFile(out, bin, 0o755)
-	return len(bin), err
+	return o, module.ReplaceFile(out, o.Bin, 0o755)
 }
 
 func Build(dir, out string, w io.Writer) int {
@@ -192,11 +192,17 @@ func Build(dir, out string, w io.Writer) int {
 	if out == "" {
 		out = DefaultOut(m)
 	}
-	n, err := compileTo(m, m.Prog, out)
+	o, err := compileTo(m, m.Prog, out)
 	if err != nil {
 		return fail(w, "compile", err.Error(), "")
 	}
-	emit(w, map[string]any{"ok": true, "output": out, "bytes": n})
+	// syscalls: every system call the program can make, so that a sandbox
+	// can allow those and no others.
+	r := map[string]any{"ok": true, "output": out, "bytes": len(o.Bin), "syscalls": o.Syscalls}
+	if o.SyscallsUnknown > 0 {
+		r["syscalls_unknown"] = o.SyscallsUnknown
+	}
+	emit(w, r)
 	return ExitOK
 }
 

@@ -162,6 +162,9 @@ ovid check [--facts]
   last: {"fact":"summary","ok",errors,packages,funcs,revision,ms}.
 ovid build [-o out]          default out: <module>/bin/<module name>;
                              _test.ov files are left out (so for run)
+  {"ok",output,bytes,syscalls}: syscalls lists the system call numbers the
+  program can make (reachable from main, plus startup's mmap, exit, write),
+  enough to run it under a filter that allows nothing else.
 ovid run [--] [args...]      program stdio and exit code pass through;
                              if the build fails: errors as JSON, exit 125.
   run and test execute the program from TMPDIR (else /tmp), or from memory

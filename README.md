@@ -33,7 +33,9 @@ the toolchain (`std/`, embedded in the binary). A module cannot replace them:
 a package of its own with one of those paths is an error (`reserved_path`),
 and `ovid.mod` has no way to name another standard library. Only the shipped
 `ovid/io` may call `syscall`, so what a checked program can ask of the kernel
-is what `std/ovid/io` asks.
+is what `std/ovid/io` asks. `ovid build` lists the system calls the program
+it wrote can reach (`"syscalls":[1,9,60]` for hello), which is enough to run
+it under a seccomp filter that allows nothing else.
 
 ## Commands
 

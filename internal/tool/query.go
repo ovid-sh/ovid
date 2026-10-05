@@ -187,7 +187,7 @@ func Show(dir string, ids []string, withIDs, asJSON, exprs bool, w io.Writer) in
 	// of a duplicated func the checker types only the first, the one the
 	// id indexes, so another copy's nodes get none rather than its types.
 	typeOf := func(l *module.Loc) string {
-		if m.Index[l.ID] != l {
+		if m.Index()[l.ID] != l {
 			return ""
 		}
 		return types[l.ID]
@@ -457,10 +457,10 @@ func findRefs(m *module.Module, res *check.Result, target *module.Loc) ([]ref, e
 		}
 		r := ref{id: u.ID, kind: u.Kind, span: u.Span, tok: u.Span, decl: u.In}
 		if u.Kind == "result" {
-			if l := m.Index[u.ID]; l != nil {
+			if l := m.Index()[u.ID]; l != nil {
 				r.span = headerSpan(m, l.Node.(*ir.Func))
 			}
-		} else if l := m.Index[u.ID]; l != nil {
+		} else if l := m.Index()[u.ID]; l != nil {
 			r.span = l.Span
 		}
 		out = append(out, r)

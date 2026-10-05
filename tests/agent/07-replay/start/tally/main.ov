@@ -2,16 +2,24 @@ package tally
 
 import ovid/io
 
-// Count counts the events of a session. It counted each one twice; one
-// increment has to go.
-func Count() i64 {
+// Count counts the events of n sessions.
+func Count(n i64) i64 {
   var x i64 = 0
-  x = x + 1
+  var i i64 = 0
+  while i < n {
+    x = x + 1
+    i = i + 1
+  }
   return x
 }
 
 func main(io *ovid/io.Cap) i64 {
-  ovid/io.PrintInt(io, Count())
+  ovid/io.PrintInt(io, Total(2, 3))
   ovid/io.Print(strptr("\n"))
   return 0
+}
+
+// Total counts the events of two days.
+func Total(a i64, b i64) i64 {
+  return Count(a) + Count(b)
 }

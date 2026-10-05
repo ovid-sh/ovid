@@ -20,6 +20,8 @@ type Mod struct {
   entryn i64
   stdp i64
   stdn i64
+  sys i64
+  sysunk i64
   pkgs *Pkg
   files *File
   ftail *File
