@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -346,7 +347,10 @@ func RunWith(dir string, args []string, o RunOpts, w io.Writer) int {
 
 // Dump prints the program tree as JSON. A string literal that is not valid
 // UTF-8 is written as value_hex, so the dump is valid JSON and loses nothing.
-func Dump(dir string, w io.Writer) int {
+// The dump is one document and is not paged: pkg, if set, limits it to one
+// package, and out, if set, sends it to a file (or a device) and prints a
+// one-line receipt in its place.
+func Dump(dir, pkg, out string, w io.Writer) int {
 	m, err := load(dir)
 	if err != nil {
 		return fail(w, "load", err.Error(), "")
@@ -357,11 +361,48 @@ func Dump(dir string, w io.Writer) int {
 		emit(w, map[string]any{"ok": false, "errors": len(m.Errors)})
 		return ExitFail
 	}
-	m.Prog.Revision = m.Revision()
-	raw, err := ir.Marshal(m.Prog)
+	prog := *m.Prog
+	prog.Revision = m.Revision()
+	if pkg != "" {
+		var keep []ir.Package
+		var paths []string
+		for _, p := range prog.Packages {
+			paths = append(paths, p.Path)
+			if p.Path == pkg {
+				keep = append(keep, p)
+			}
+		}
+		if len(keep) == 0 {
+			return fail(w, "not_found", "no package "+pkg, "packages: "+strings.Join(paths, ", "))
+		}
+		prog.Packages = keep
+	}
+	raw, err := ir.Marshal(&prog)
 	if err != nil {
 		return fail(w, "dump", err.Error(), "")
 	}
-	w.Write(raw)
+	if out == "" {
+		w.Write(raw)
+		return ExitOK
+	}
+	// Written in place, not by rename: out may be a device.
+	f, err := os.OpenFile(out, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err == nil {
+		if _, err = f.Write(raw); err == nil {
+			// Only what has storage behind it can be synced: a character
+			// device (/dev/null) or a FIFO answers EINVAL to a sync that
+			// has nothing to do.
+			if st, serr := f.Stat(); serr == nil && (st.Mode().IsRegular() || st.Mode()&(os.ModeDevice|os.ModeCharDevice) == os.ModeDevice) {
+				err = f.Sync()
+			}
+		}
+		if cerr := f.Close(); err == nil {
+			err = cerr
+		}
+	}
+	if err != nil {
+		return fail(w, "write", err.Error(), "")
+	}
+	emit(w, map[string]any{"ok": true, "output": out, "bytes": len(raw), "revision": prog.Revision})
 	return ExitOK
 }

@@ -15,7 +15,7 @@ always has a boolean `"ok"`; earlier lines are records (a diagnostic, a
 match, a test result, a decl). Key order is not significant. A consumer
 should read every line, take the last as the result, and ignore keys it does
 not know: new keys are added without notice, existing ones keep their
-meaning.
+meaning (the one exception so far is `refs`'s `count`; see Paging).
 
 `run` passes the program's stdin, stdout, stderr, and exit code through. It
 writes JSON to stdout only when the build fails (the diagnostics, then
@@ -173,6 +173,37 @@ name: `syscall` is valid in `ovid/io` as the toolchain ships it. A module
 cannot supply that package (`reserved_path`), and `ovid.mod` cannot name
 another standard library, so the system calls a checked program can make are
 those of the shipped `ovid/io`.
+
+## Paging
+
+`outline`, `refs`, and `grep` print one page of their records: at most 200
+unless `--limit N` says otherwise (`--limit 0` is all of them), starting
+after the first `--offset N`. Their last line carries
+
+```json
+{"ok":true,"count":N,"total":N,"offset":N,"has_more":BOOL,"next_offset":N,"revision":REV}
+```
+
+`count` is the number of records printed and `total` the number there are.
+`next_offset` is present when `has_more` is true: pass it as `--offset` for
+the next page. Pages follow one another without overlap, so following
+`next_offset` until `has_more` is false visits every record once, in the
+order of an unpaged run. `revision` is the module's: if it differs between
+two pages, the module changed in between and the offsets no longer line up.
+
+`refs` also gives `files`, `by_pkg`, and `external` in its last line; these
+describe every use, on the page or not.
+
+One key changed its meaning when `refs` became paged, the exception to the
+rule under Output: `refs`'s `count` used to be the number of uses and is now
+the number printed. A consumer that wants the number of uses reads `total`.
+The two are equal only on a first page that holds everything (`offset` 0 and
+`has_more` false), so read `total`, whatever the page.
+
+`dump` is a single JSON document and is not paged. `--pkg P` limits it to
+one package. `-o <file>` writes it to that file (written in place, so it
+may be a device) and prints `{"ok":true,"output":PATH,"bytes":N,
+"revision":REV}` instead of the document.
 
 ## Paths
 

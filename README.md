@@ -51,11 +51,12 @@ Every command prints JSON lines and the last line has `"ok"`. Exit codes:
 | `ovid show <id\|name>... [--plain] [--exprs]` | source of a node (a decl with its doc comment), each statement line tagged with its id; a statement's expressions listed with ids and hashes |
 | `ovid refs <id\|name>` | every use the checker resolves to a func, type, field, const, param, or local |
 | `ovid grep <regexp>` | text matches, each tagged with its enclosing decl and statement id |
+| `--offset N`, `--limit N` | `outline`, `refs`, and `grep` print 200 records a page; the last line has `total`, `has_more`, and `next_offset` |
 | `ovid edit <file\|-> [--show]` | batch of replace/delete/insert/append ops, all or nothing; returns new ids and hashes |
 | `ovid replace <id>`, `insert --after <id>`, `append <id>`, `delete <id>` | one edit op with its code on stdin, so a heredoc needs no JSON escaping |
 | `ovid rename <id\|name> <new>` | rewrites the declaration and the uses the checker resolved to it, never a field or local spelled the same; refuses collisions and new errors |
 | `ovid move <id\|name>... <pkg>` | move decls to another (or a new) package, all or none; requalifies uses, adds imports |
-| `ovid dump` | the program tree as JSON |
+| `ovid dump [--pkg P] [-o file]` | the program tree as one JSON document (large, for tools); `--pkg` keeps one package, `-o` writes it to a file |
 
 All commands take `-C <dir>`; by default they use the module that contains
 the working directory. `ovid help commands`, `ovid help edit`, and
