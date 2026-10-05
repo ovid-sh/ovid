@@ -1,0 +1,61 @@
+package miniredis/store
+
+import ovid/io
+
+// ovid/io.Alloc never gives memory back, and a server that runs for days
+// sets and deletes keys the whole time. Heap puts freed blocks on a list
+// per size and hands them out again.
+//
+// A block is 16 << k bytes for its class k: 8 bytes that hold k, then the
+// payload, whose address is what Alloc returns. A free block keeps the
+// next free payload of its class in its first 8 bytes.
+
+const NCLASS i64 = 44
+
+type Heap struct {
+  io *ovid/io.Cap
+  free i64
+  used i64
+}
+
+func NewHeap(io *ovid/io.Cap) *Heap {
+  var h *Heap = ovid/io.Alloc(io, sizeof(Heap)) as *Heap
+  h.io = io
+  h.free = ovid/io.Alloc(io, NCLASS * 8)
+  return h
+}
+
+// Alloc returns n bytes. They are not zeroed.
+func Alloc(h *Heap, n i64) i64 {
+  var k i64 = 0
+  var size i64 = 16
+  while size < (n + 8) {
+    size = size << 1
+    k = k + 1
+  }
+  h.used = h.used + size
+  var slot i64 = h.free + (k * 8)
+  var p i64 = load64(slot)
+  if p != 0 {
+    store64(slot, load64(p))
+    return p
+  }
+  var b i64 = ovid/io.Alloc(h.io, size)
+  store64(b, k)
+  return b + 8
+}
+
+// Free gives back a block Alloc returned.
+func Free(h *Heap, p i64) i64 {
+  var k i64 = load64(p - 8)
+  var slot i64 = h.free + (k * 8)
+  h.used = h.used - (16 << k)
+  store64(p, load64(slot))
+  store64(slot, p)
+  return 0
+}
+
+// Room is how many bytes the block at p can hold.
+func Room(p i64) i64 {
+  return (16 << load64(p - 8)) - 8
+}

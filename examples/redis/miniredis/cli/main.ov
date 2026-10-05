@@ -1,0 +1,29 @@
+package miniredis/cli
+
+import ovid/io
+import miniredis/server
+
+// miniredis [port]: a single-threaded server for a subset of the Redis
+// protocol, on 127.0.0.1. The default port is 6380.
+func main(io *ovid/io.Cap) i64 {
+  var port i64 = 6380
+  if ovid/io.Argc(io) > 1 {
+    port = 0
+    var a i64 = ovid/io.Arg(io, 1)
+    var i i64 = 0
+    while load8(a + i) >= 48 && load8(a + i) <= 57 {
+      port = (port * 10) + (load8(a + i) - 48)
+      i = i + 1
+    }
+    if load8(a + i) != 0 || port < 1 || port > 65535 {
+      ovid/io.Eprint(strptr("usage: miniredis [port]\n"))
+      return 64
+    }
+  }
+  var s *miniredis/server.Server = miniredis/server.New(io, port)
+  if s.listener < 0 {
+    ovid/io.Eprint(strptr("miniredis: cannot listen on the port\n"))
+    return 1
+  }
+  return miniredis/server.Run(s)
+}
