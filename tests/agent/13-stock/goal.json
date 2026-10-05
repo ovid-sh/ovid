@@ -1,0 +1,21 @@
+{
+  "check": true,
+  "tests": ["TestGoalTable", "TestGoalLoad"],
+  "inject": {
+    "stock/zz_goal_test.ov": "package stock\n\nimport ovid/io\n\n// TestGoalTable adds 100 names and checks every count survived the table\n// growing, and that a name is not mistaken for its prefix.\nfunc TestGoalTable(io *ovid/io.Cap) i64 {\n  var t *Table = NewTable(io)\n  var buf i64 = ovid/io.Alloc(io, 400)\n  var i i64 = 0\n  while i < 100 {\n    store8(buf + i * 4, 110)\n    store8(buf + i * 4 + 1, 48 + i / 10)\n    store8(buf + i * 4 + 2, 48 + i % 10)\n    var k i64 = Index(io, t, buf + i * 4, 3)\n    store64(t.counts + k * 8, load64(t.counts + k * 8) + i + 1)\n    i = i + 1\n  }\n  if t.len != 100 {\n    return 1\n  }\n  i = 0\n  while i < 100 {\n    if load64(t.counts + i * 8) != i + 1 || Index(io, t, buf + i * 4, 3) != i {\n      return 2\n    }\n    i = i + 1\n  }\n  if Index(io, t, buf, 2) != 100 || Index(io, t, buf, 4) != 101 {\n    return 3\n  }\n  if Same(buf, 2, buf, 3) || !Same(buf, 3, buf, 3) || Same(strptr(\"ab\"), 2, strptr(\"ac\"), 2) {\n    return 4\n  }\n  return 0\n}\n\n// TestGoalLoad checks the line rules: the number of the first bad line,\n// a last line without a newline, and empty lines.\nfunc TestGoalLoad(io *ovid/io.Cap) i64 {\n  var t *Table = NewTable(io)\n  if Load(io, t, strptr(\"a 1\\n\\nb 2\\nc\"), strlen(\"a 1\\n\\nb 2\\nc\")) != 4 {\n    return 1\n  }\n  t = NewTable(io)\n  if Load(io, t, strptr(\"a 1\\n\\nb 23\"), strlen(\"a 1\\n\\nb 23\")) != 0 || t.len != 2 || load64(t.counts + 8) != 23 {\n    return 2\n  }\n  t = NewTable(io)\n  if Load(io, t, strptr(\"\\n\"), 1) != 0 || t.len != 0 || Load(io, t, strptr(\"\"), 0) != 0 {\n    return 3\n  }\n  return 0\n}\n"
+  },
+  "runs": [
+    {"args": ["stock.txt"], "files": {"stock.txt": "bolt 10\nnut 30\nbolt 2"}, "stdout": "bolt 12\nnut 30\ntotal 42\n"},
+    {"args": ["nl.txt"], "files": {"nl.txt": "bolt 10\nnut 30\nbolt 2\n"}, "stdout": "bolt 12\nnut 30\ntotal 42\n"},
+    {"args": ["one.txt"], "files": {"one.txt": "a 5"}, "stdout": "a 5\ntotal 5\n"},
+    {"args": ["empty.txt"], "files": {"empty.txt": ""}, "stdout": "total 0\n"},
+    {"args": ["blank.txt"], "files": {"blank.txt": "\n\nx 1\n\n\ny 0\n"}, "stdout": "x 1\ny 0\ntotal 1\n"},
+    {"args": ["prefix.txt"], "files": {"prefix.txt": "ab 1\nabc 2\na 4\nab 8\n"}, "stdout": "ab 9\nabc 2\na 4\ntotal 15\n"},
+    {"args": ["many.txt"], "files": {"many.txt": "n1 1\nn2 2\nn3 3\nn4 4\nn5 5\nn6 6\nn7 7\nn8 8\nn9 9\nn10 10\nn11 11\nn12 12\nn13 13\nn14 14\nn15 15\nn16 16\nn17 17\nn18 18\nn19 19\nn20 20\n"}, "stdout": "n1 1\nn2 2\nn3 3\nn4 4\nn5 5\nn6 6\nn7 7\nn8 8\nn9 9\nn10 10\nn11 11\nn12 12\nn13 13\nn14 14\nn15 15\nn16 16\nn17 17\nn18 18\nn19 19\nn20 20\ntotal 210\n"},
+    {"args": ["bad.txt"], "files": {"bad.txt": "a 1\n\nb x\n"}, "stdout": "", "stderr": "\\S", "exit": 1},
+    {"args": ["bad2.txt"], "files": {"bad2.txt": "a 1\nb"}, "stdout": "", "stderr": "\\S", "exit": 1},
+    {"args": ["bad3.txt"], "files": {"bad3.txt": "a 1\nb "}, "stdout": "", "stderr": "\\S", "exit": 1},
+    {"args": ["bad4.txt"], "files": {"bad4.txt": " 1\n"}, "stdout": "", "stderr": "\\S", "exit": 1},
+    {"args": ["missing.txt"], "stdout": "", "stderr": "\\S", "exit": 1}
+  ]
+}

@@ -1,0 +1,20 @@
+package shop
+
+import ovid/io
+
+// Calc is the price of an item that costs gross before tax: 10% tax is
+// added, rounded down.
+func Calc(gross i64) i64 {
+  return gross + gross / 10
+}
+
+// Order is the price of n items that each cost each before tax.
+func Order(n i64, each i64) i64 {
+  return n * Calc(each)
+}
+
+func main(io *ovid/io.Cap) i64 {
+  ovid/io.PrintInt(io, Order(2, 150))
+  ovid/io.Print(strptr("\n"))
+  return 0
+}
