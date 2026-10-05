@@ -108,7 +108,8 @@ type Decl struct {
   dup i64
 }
 
-// Pkg is one package: the merged result of its files.
+// Pkg is one package: the merged result of its files. mark, ord, low, and
+// scc are the checker's, for its import cycle check.
 type Pkg struct {
   pathp i64
   pathn i64
@@ -127,6 +128,9 @@ type Pkg struct {
   std i64
   ok i64
   mark i64
+  ord i64
+  low i64
+  scc i64
 }
 
 // File is one source file. rel is the module-relative path (std:<pkg>/<f>
