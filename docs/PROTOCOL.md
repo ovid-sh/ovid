@@ -15,7 +15,7 @@ always has a boolean `"ok"`; earlier lines are records (a diagnostic, a
 match, a test result, a decl). Key order is not significant. A consumer
 should read every line, take the last as the result, and ignore keys it does
 not know: new keys are added without notice, existing ones keep their
-meaning.
+meaning (the one exception so far is `refs`'s `count`; see Paging).
 
 `run` passes the program's stdin, stdout, stderr, and exit code through. It
 writes JSON to stdout only when the build fails (the diagnostics, then
@@ -193,6 +193,11 @@ two pages, the module changed in between and the offsets no longer line up.
 
 `refs` also gives `files`, `by_pkg`, and `external` in its last line; these
 describe every use, on the page or not.
+
+One key changed its meaning when `refs` became paged, the exception to the
+rule under Output: `refs`'s `count` used to be the number of uses and is now
+the number printed. A consumer that wants the number of uses reads `total`.
+The two are equal whenever `has_more` is false.
 
 `dump` is a single JSON document and is not paged. `--pkg P` limits it to
 one package. `-o <file>` writes it to that file (written in place, so it

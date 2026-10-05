@@ -389,7 +389,12 @@ func Dump(dir, pkg, out string, w io.Writer) int {
 	f, err := os.OpenFile(out, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
 	if err == nil {
 		if _, err = f.Write(raw); err == nil {
-			err = f.Sync()
+			// Only what has storage behind it can be synced: a character
+			// device (/dev/null) or a FIFO answers EINVAL to a sync that
+			// has nothing to do.
+			if st, serr := f.Stat(); serr == nil && (st.Mode().IsRegular() || st.Mode()&(os.ModeDevice|os.ModeCharDevice) == os.ModeDevice) {
+				err = f.Sync()
+			}
 		}
 		if cerr := f.Close(); err == nil {
 			err = cerr

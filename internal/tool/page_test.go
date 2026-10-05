@@ -130,4 +130,12 @@ func TestDumpOptions(t *testing.T) {
 	if r := last(t, b.String()); !bytes.Equal(raw, whole.Bytes()) || r["bytes"] != float64(len(raw)) || r["output"] != out || strings.Count(b.String(), "\n") != 1 {
 		t.Fatalf("receipt %s for a file of %d bytes", b.String(), len(raw))
 	}
+	// A destination that cannot be synced is still written: a character
+	// device takes the bytes and has nothing to flush.
+	if _, err := os.Stat(os.DevNull); err == nil {
+		b.Reset()
+		if code := Dump(dir, "", os.DevNull, &b); code != 0 || last(t, b.String())["bytes"] != float64(whole.Len()) {
+			t.Fatalf("dump -o %s: exit %d %s", os.DevNull, code, b.String())
+		}
+	}
 }
