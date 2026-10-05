@@ -128,6 +128,20 @@ func TestRunReportsAChangedModule(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "demo", "main.ov"), []byte(main), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// The module has a test file, which run does not load: the revisions it
+	// reports are those of the program, before and after.
+	if err := os.WriteFile(filepath.Join(dir, "demo", "main_test.ov"), []byte("package demo\nimport ovid/io\nfunc TestNothing(io *ovid/io.Cap) i64 {\n  return 0\n}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rev := func() string {
+		t.Helper()
+		m, err := module.LoadBuild(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return m.Revision()
+	}
+	before := rev()
 	var b bytes.Buffer
 	if code := RunWith(dir, nil, RunOpts{JSON: true}, &b); code != 0 || last(t, b.String())["module_changed"] != nil {
 		t.Fatalf("a program that writes nothing: %s", b.String())
@@ -137,5 +151,8 @@ func TestRunReportsAChangedModule(t *testing.T) {
 	r := last(t, b.String())
 	if code != 0 || r["ok"] != true || r["exit"] != float64(0) || r["module_changed"] != true || !reflect.DeepEqual(r["changed_files"], []any{"demo/gen.ov"}) {
 		t.Fatalf("exit %d: %s", code, b.String())
+	}
+	if r["revision_before"] != before || r["revision_after"] != rev() || before == rev() {
+		t.Fatalf("revisions %v -> %v, want the program's own %s -> %s", r["revision_before"], r["revision_after"], before, rev())
 	}
 }

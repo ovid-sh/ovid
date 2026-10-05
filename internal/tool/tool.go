@@ -331,7 +331,7 @@ func RunWith(dir string, args []string, o RunOpts, w io.Writer) int {
 		cut("stderr", stderr, errN)
 		// ok still says the program ran; that it changed its own module is
 		// reported beside it for the caller to weigh.
-		moduleChanged(m, dir, r)
+		moduleChanged(m, r)
 		emit(w, r)
 		return ExitOK
 	}

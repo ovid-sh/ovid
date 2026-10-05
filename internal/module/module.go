@@ -275,10 +275,11 @@ func walkSources(root string, noTests bool, fn func(abs string) error) error {
 	})
 }
 
-// ChangedOnDisk lists the files of the module that are no longer on disk
-// what was loaded: a source file changed, gone, or new, and ovid.mod. The
-// paths are as DisplayPath gives them, sorted; none means the module on
-// disk is still the one in m. Files of shipped packages are not looked at.
+// ChangedOnDisk lists the files of the module whose contents on disk differ
+// from what was loaded: a source file that changed, is gone, or is new, and
+// ovid.mod. The paths are as DisplayPath gives them, sorted. An empty
+// result means the module on disk is still the one in m. Files of shipped
+// packages are not compared.
 func (m *Module) ChangedOnDisk() []string {
 	loaded := map[string]*File{}
 	for _, f := range m.Files {
@@ -305,6 +306,11 @@ func (m *Module) ChangedOnDisk() []string {
 	sort.Strings(out)
 	return out
 }
+
+// Reload reads the module from disk again, the way m was read: without
+// its _test.ov files if m was loaded without them, so that the two have
+// revisions over the same set of files.
+func (m *Module) Reload() (*Module, error) { return load(m.Root, nil, m.noTests) }
 
 func exists(p string) bool {
 	_, err := os.Stat(p)
