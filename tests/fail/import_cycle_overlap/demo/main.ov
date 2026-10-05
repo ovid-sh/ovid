@@ -1,0 +1,11 @@
+// Two cycles run through p/a, the package that sorts first in each:
+// p/a -> p/b -> p/a and p/a -> p/c -> p/d -> p/a. They are reported once,
+// at p/a's first import that leads back to it. q/m and q/n make a third
+// cycle, apart from them, reported in q/m.
+package demo
+import ovid/io
+import p/a
+import q/m
+func main(io *ovid/io.Cap) i64 {
+  return p/a.A() + q/m.M()
+}

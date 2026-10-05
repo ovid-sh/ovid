@@ -178,21 +178,22 @@ func TestCorpusRun(t *testing.T) {
 }
 
 // wantErr is one `// error: code [col] [expected="..."] [got="..."]
-// [hint="..."]` comment: a diagnostic with that code is expected on the
-// comment's own line, with those fields when they are given.
+// [hint="..."] [message="..."]` comment: a diagnostic with that code is
+// expected on the comment's own line, with those fields when they are
+// given.
 type wantErr struct {
 	file  string // module-relative
 	line  int
 	col   int // 0: any
 	code  string
-	attrs map[string]string // expected, got, hint
+	attrs map[string]string // expected, got, hint, message
 	text  string            // the comment after "// error: ", for messages
 }
 
 var (
 	// errDirective matches all of what follows one "// error:".
-	errDirective = regexp.MustCompile(`^ ([a-z_]+)(?: (\d+))?((?: (?:expected|got|hint)="(?:[^"\\]|\\.)*")*)\s*$`)
-	errAttr      = regexp.MustCompile(` (expected|got|hint)=("(?:[^"\\]|\\.)*")`)
+	errDirective = regexp.MustCompile(`^ ([a-z_]+)(?: (\d+))?((?: (?:expected|got|hint|message)="(?:[^"\\]|\\.)*")*)\s*$`)
+	errAttr      = regexp.MustCompile(` (expected|got|hint|message)=("(?:[^"\\]|\\.)*")`)
 )
 
 func (c *corpusCase) wantErrs() ([]wantErr, error) {
@@ -204,7 +205,7 @@ func (c *corpusCase) wantErrs() ([]wantErr, error) {
 			for _, seg := range strings.Split(line, "// error:")[1:] {
 				m := errDirective.FindStringSubmatch(seg)
 				if m == nil {
-					return nil, fmt.Errorf("%s:%d: malformed comment `// error:%s`; want: code [col] [expected=\"...\"] [got=\"...\"] [hint=\"...\"]",
+					return nil, fmt.Errorf("%s:%d: malformed comment `// error:%s`; want: code [col] [expected=\"...\"] [got=\"...\"] [hint=\"...\"] [message=\"...\"]",
 						c.shown[rel], i+1, strings.TrimRight(seg, " "))
 				}
 				col, _ := strconv.Atoi(m[2])
@@ -294,7 +295,7 @@ func TestCorpusFail(t *testing.T) {
 					here := d.Line == 0 || (d.Line == w.line && d.File == w.file)
 					same := true
 					for k, v := range w.attrs {
-						same = same && v == map[string]string{"expected": d.Expected, "got": d.Got, "hint": d.Hint}[k]
+						same = same && v == map[string]string{"expected": d.Expected, "got": d.Got, "hint": d.Hint, "message": d.Message}[k]
 					}
 					if !met[i] && d.Code == w.code && here && same && (w.col == 0 || d.Line == 0 || d.Col == w.col) {
 						met[i], found = true, true

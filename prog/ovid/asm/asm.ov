@@ -830,11 +830,11 @@ func Intern(c *Code, p i64, n i64) i64 {
   return off
 }
 
-// The image layout shared with ovid/elf: the ELF header and two program
-// headers, then code (read+execute), then rodata (read-only) mapped on the
+// The image layout shared with ovid/elf: the ELF header and three program
+// headers (two PT_LOAD and PT_GNU_STACK), then code (read+execute), then rodata (read-only) mapped on the
 // next page at the same offset within its page as in the file.
 const LOADADDR i64 = 4194304
-const HEADERSIZE i64 = 176
+const HEADERSIZE i64 = 232
 const PAGESIZE i64 = 4096
 
 func RodataVAddr(codeLen i64) i64 {

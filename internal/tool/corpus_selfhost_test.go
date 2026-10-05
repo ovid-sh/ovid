@@ -63,6 +63,23 @@ func TestCorpusSelfHost(t *testing.T) {
 				t.Fatalf("tests/%s: the compilers disagree\n  go:\n    %s\n  self-hosted:\n    %s", c.name,
 					strings.Join(g, "\n    "), strings.Join(s, "\n    "))
 			}
+			// Messages differ between the compilers in general; where a case
+			// names one, the self-hosted checker must give it too.
+			ws, err := c.wantErrs()
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, w := range ws {
+				msg, ok := w.attrs["message"]
+				if !ok {
+					continue
+				}
+				if !slices.ContainsFunc(c.diags(t, out), func(d diag) bool {
+					return d.File == w.file && d.Line == w.line && d.Code == w.code && d.Message == msg
+				}) {
+					t.Errorf("tests/%s:%d: self-hosted has no %s with message %q:\n%s", c.name, w.line, w.code, msg, out)
+				}
+			}
 		})
 	}
 }

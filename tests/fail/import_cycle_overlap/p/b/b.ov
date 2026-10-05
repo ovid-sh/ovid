@@ -1,0 +1,8 @@
+package p/b
+import p/a
+func B() i64 {
+  return 1
+}
+func UsesA() i64 {
+  return p/a.A()
+}
