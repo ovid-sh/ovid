@@ -260,7 +260,9 @@ A module that declares a name twice in one package (`func F` in both
 `a.ov` and `b.ov`) has two nodes with one id, and so do their params,
 statements, and expressions; `check` reports the duplicate. Every copy is
 indexed: `outline` lists each at its own `file` and `line` with its own
-hash and `"id_copies":N`, and `show` and `grep` find each where it is. An
+hash and `"id_copies":N`, and `show` and `grep` find each where it is.
+A name reaches every copy as the id does, `Func.param` and `Type.field`
+included. An
 edit addresses one copy by giving its hash as `expect` (for a `st:`/`ex:`
 id, the node's hash or its decl copy's). Without an `expect`, the op fails
 with `ambiguous_id`, which lists the copies; `--rev` and `--force` do not

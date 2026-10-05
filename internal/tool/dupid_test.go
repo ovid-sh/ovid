@@ -231,3 +231,30 @@ func TestDuplicateIDRefsRenameMove(t *testing.T) {
 		t.Fatal("a refused command wrote")
 	}
 }
+
+// TestDuplicateIDQualifiedName: Func.param and Type.field reach every copy
+// of a duplicated param or field, as the full id does.
+func TestDuplicateIDQualifiedName(t *testing.T) {
+	t.Setenv(module.PathsEnv, "module")
+	a := "package app\n\nimport ovid/io\n\ntype P struct {\n  v i64\n}\n\nfunc F(x i64) i64 {\n  return x\n}\n\nfunc main(io *ovid/io.Cap) i64 {\n  return F(1)\n}\n"
+	b := "package app\n\ntype P struct {\n  v i64\n}\n\nfunc F(x i64) i64 {\n  return x + 1\n}\n"
+	dir := mkmod(t, map[string]string{"ovid.mod": "module app\nentry app\n", "app/a.ov": a, "app/b.ov": b})
+	m, err := load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for q, id := range map[string]string{"F.x": "pa:app.F.x", "app.F.x": "pa:app.F.x", "P.v": "fld:app.P.v"} {
+		ls, err := m.Lookup(q)
+		if err != nil || len(ls) != 2 || ls[0].Span.File == ls[1].Span.File {
+			t.Fatalf("lookup %s: %v %v", q, ls, err)
+		}
+		full, _ := m.Lookup(id)
+		if len(full) != 2 || full[0] != ls[0] || full[1] != ls[1] {
+			t.Fatalf("lookup %s: %v, the full id %v", q, ls, full)
+		}
+	}
+	var out bytes.Buffer
+	if code := Show(dir, []string{"F.x"}, false, true, false, &out); code != ExitOK || last(t, out.String())["count"] != 2.0 {
+		t.Fatalf("show F.x %d %s", code, out.String())
+	}
+}

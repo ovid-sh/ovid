@@ -660,7 +660,7 @@ func (m *Module) Lookup(q string) ([]*Loc, error) {
 			}
 			rest := id[strings.Index(id, ":")+1+len(l.Pkg)+1:]
 			if q == rest || q == l.Pkg+"."+rest || pkgSuffix(l.Pkg, q, rest) {
-				out = append(out, l)
+				out = append(out, m.Copies(id)...)
 			}
 		}
 	}
