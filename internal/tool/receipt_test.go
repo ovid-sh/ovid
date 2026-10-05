@@ -3,6 +3,7 @@ package tool
 import (
 	"bytes"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -113,4 +114,41 @@ func toAny(ss []string) []any {
 		out = append(out, s)
 	}
 	return out
+}
+
+// TestReceiptDelete: deleting a decl lists no decl, not the neighbour now
+// at its place; deleting a statement or a field lists its enclosing decl.
+func TestReceiptDelete(t *testing.T) {
+	src := "package app\n\nimport ovid/io\n\ntype P struct {\n  a i64\n  b i64\n}\n\nfunc A() i64 {\n  return 1\n}\n\nfunc B() i64 {\n  var y i64 = 1\n  return 2\n}\n\n// C is three.\nfunc C() i64 {\n  return 3\n}\n\nfunc main(io *ovid/io.Cap) i64 {\n  return B()\n}\n"
+	for _, tc := range []struct {
+		id, guard string
+		decls     []string
+	}{
+		{"fn:app.A", "fn:app.A", nil},
+		{"fn:app.B", "fn:app.B", nil}, // C, with its doc comment, follows
+		{"fn:app.C", "fn:app.C", nil}, // main follows
+		{"st:app.B:1", "fn:app.B", []string{"fn:app.B"}},
+		{"fld:app.P.b", "fld:app.P.b", []string{"ty:app.P"}},
+	} {
+		t.Run(tc.id, func(t *testing.T) {
+			s := src
+			if tc.id == "fn:app.B" {
+				s = strings.Replace(s, "return B()", "return 0", 1)
+			}
+			dir := mkmod(t, map[string]string{"ovid.mod": "module app\nentry app\n", "app/main.ov": s})
+			o, hs := opReceipt(t, dir, EditOp{Op: "delete", ID: tc.id, Expect: hashOf(t, dir, tc.guard)})
+			ds, _ := o["decls"].([]any)
+			var got []string
+			for _, d := range ds {
+				d := d.(map[string]any)
+				if d["hash"] != hs[d["id"].(string)] {
+					t.Fatalf("decl %v: hash now %s", d, hs[d["id"].(string)])
+				}
+				got = append(got, d["id"].(string))
+			}
+			if !reflect.DeepEqual(got, tc.decls) {
+				t.Fatalf("decls %v, want %v", got, tc.decls)
+			}
+		})
+	}
 }

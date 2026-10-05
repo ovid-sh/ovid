@@ -309,7 +309,7 @@ it wrote and the new hashes of the decls it touched, so a follow-up edit can
 `expect` them without reading again. `decls` lists, in source order, the
 func, type, or const the op wrote into, or every one its text holds (an
 `append` or `insert` of several decls, or a decl replaced by several),
-each with its `text` under `--show`; a `delete` lists the decl it was in. Rename adds `from`, `id`, `to`, `refs`,
+each with its `text` under `--show`; a `delete` lists the decl it was in (none for a decl deleted whole, not the neighbour now at its place). Rename adds `from`, `id`, `to`, `refs`,
 `edits`; move adds `from`, `to` (the new id), `file`, `refs`, `edits`. A
 move of several decls prints one such receipt per decl, in order, then
 `{"ok":true,"moved":[NAME...],"to":PKG,"written":BOOL}`. Each move is

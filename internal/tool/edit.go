@@ -598,9 +598,12 @@ func newIDs(m *module.Module, sps []*splice, nops int, show bool) []map[string]a
 		hi := lo + len(text)
 		touched := func(l *module.Loc) bool { return l.Full.Off < hi && l.Full.End > lo }
 		if text == "" {
-			// A delete: the decl it was in, or the one now at its place.
+			// A delete: the decl it was in, which still holds the place
+			// strictly inside it. A decl deleted whole leaves its place at
+			// the start of the next decl (or the end of the one before),
+			// which is not one the delete wrote.
 			at := s.newOff + len(s.text)/2
-			touched = func(l *module.Loc) bool { return at >= l.Full.Off && at <= l.Full.End }
+			touched = func(l *module.Loc) bool { return at > l.Full.Off && at < l.Full.End }
 		}
 		var decls []*module.Loc
 		for _, l := range m.Locs() {
