@@ -264,9 +264,7 @@ func run(p *ir.Program, lean bool) *Result {
 		}
 	}
 
-	for i := range p.Packages {
-		c.checkCycle(&p.Packages[i])
-	}
+	c.checkCycles(p)
 	c.checkEntry(p)
 
 	for i := range p.Packages {
@@ -303,14 +301,132 @@ func stdPackages() []string {
 	return pkgs
 }
 
-// checkCycle reports import_cycle once for each cycle whose lexically
+// checkCycles reports import_cycle once for each cycle whose lexically
 // least package is root: at the first import of root, in source order,
 // that leads back to root through packages whose paths sort after it.
-// The search walks imports in source order, so it finds the same cycle
-// path whatever order the packages were loaded in. Packages must form a
-// DAG, so that each can be checked and compiled once its imports are.
-func (c *checker) checkCycle(root *ir.Package) {
+// Packages must form a DAG, so that each can be checked and compiled once
+// its imports are.
+//
+// The root walk below costs up to the whole graph per root, so it runs
+// only where it can report: a cycle lies entirely within one strongly
+// connected component of the import graph, so a root alone in its
+// component (a self-import is import_self's, not a cycle) reports
+// nothing, and the walk from a root never needs a package outside the
+// root's component. A package the walk could enter from the root that
+// is outside the component cannot reach the root, nor, since everything
+// that reaches the root's component reaches the root, any package in
+// it: walking into it only marks packages the walk never needs, so
+// skipping it changes neither whether the walk returns true nor the path
+// it finds. The components are found once, in time linear in the
+// packages and imports, so a valid module costs that and nothing more.
+// It returns the steps taken (component edges plus walk imports), which
+// a test bounds.
+func (c *checker) checkCycles(p *ir.Program) int {
+	// The graph's nodes are the packages c.pkgs resolves paths to; a
+	// repeated package's other copies are roots only, walked unpruned.
+	idx := map[string]int{}
+	var nodes []*ir.Package
+	for i := range p.Packages {
+		if pkg := &p.Packages[i]; c.pkgs[pkg.Path] == pkg {
+			idx[pkg.Path] = len(nodes)
+			nodes = append(nodes, pkg)
+		}
+	}
+	comp, size, steps := sccs(nodes, idx)
+	for i := range p.Packages {
+		root := &p.Packages[i]
+		in := -1
+		if c.pkgs[root.Path] == root {
+			in = comp[idx[root.Path]]
+			if size[in] == 1 {
+				continue
+			}
+		}
+		steps += c.checkCycle(root, func(path string) bool { return in < 0 || comp[idx[path]] == in })
+	}
+	return steps
+}
+
+// sccs numbers the strongly connected components of the import graph on
+// nodes (imports of unknown packages dropped) with Tarjan's algorithm,
+// iteratively so a long import chain cannot exhaust the stack. It returns
+// each node's component, each component's size, and the edges followed.
+func sccs(nodes []*ir.Package, idx map[string]int) (comp, size []int, steps int) {
+	n := len(nodes)
+	adj := make([][]int, n)
+	for v, pkg := range nodes {
+		for _, im := range pkg.Imports {
+			if w, ok := idx[im.Path]; ok {
+				adj[v] = append(adj[v], w)
+			}
+		}
+	}
+	order := make([]int, n) // 1 + the visit number; 0 is unvisited
+	low := make([]int, n)
+	on := make([]bool, n)
+	comp = make([]int, n)
+	var stack []int
+	type frame struct{ v, e int }
+	var call []frame
+	visited := 0
+	visit := func(v int) {
+		visited++
+		order[v], low[v] = visited, visited
+		stack = append(stack, v)
+		on[v] = true
+		call = append(call, frame{v, 0})
+	}
+	for s := range nodes {
+		if order[s] != 0 {
+			continue
+		}
+		visit(s)
+		for len(call) > 0 {
+			f := &call[len(call)-1]
+			v := f.v
+			if f.e < len(adj[v]) {
+				w := adj[v][f.e]
+				f.e++
+				steps++
+				if order[w] == 0 {
+					visit(w)
+				} else if on[w] && order[w] < low[v] {
+					low[v] = order[w]
+				}
+				continue
+			}
+			call = call[:len(call)-1]
+			if len(call) > 0 {
+				if u := call[len(call)-1].v; low[v] < low[u] {
+					low[u] = low[v]
+				}
+			}
+			if low[v] == order[v] {
+				k, cnt := len(size), 0
+				for {
+					w := stack[len(stack)-1]
+					stack = stack[:len(stack)-1]
+					on[w] = false
+					comp[w] = k
+					cnt++
+					if w == v {
+						break
+					}
+				}
+				size = append(size, cnt)
+			}
+		}
+	}
+	return comp, size, steps
+}
+
+// checkCycle reports root's cycle, if it has one, walking imports in
+// source order, so it finds the same cycle path whatever order the
+// packages were loaded in; keep says which packages the walk may enter.
+// It returns the imports it looked at.
+func (c *checker) checkCycle(root *ir.Package, keep func(path string) bool) int {
 	seen := map[string]bool{}
+	steps := 0
 	var path []string
 	var walk func(pkg *ir.Package) bool
 	walk = func(pkg *ir.Package) bool {
@@ -320,11 +436,12 @@ func (c *checker) checkCycle(root *ir.Package) {
 		seen[pkg.Path] = true
 		path = append(path, pkg.Path)
 		for _, im := range pkg.Imports {
+			steps++
 			if im.Path == root.Path {
 				path = append(path, root.Path)
 				return true
 			}
-			if next, ok := c.pkgs[im.Path]; ok && im.Path > root.Path && walk(next) {
+			if next, ok := c.pkgs[im.Path]; ok && im.Path > root.Path && keep(im.Path) && walk(next) {
 				return true
 			}
 		}
@@ -332,17 +449,19 @@ func (c *checker) checkCycle(root *ir.Package) {
 		return false
 	}
 	for _, im := range root.Imports {
+		steps++
 		next, ok := c.pkgs[im.Path]
-		if !ok || im.Path <= root.Path {
+		if !ok || im.Path <= root.Path || !keep(im.Path) {
 			continue
 		}
 		path = []string{root.Path}
 		if walk(next) {
 			c.issue(Issue{Code: "import_cycle", ID: im.ID, Message: "import cycle: " + strings.Join(path, " -> "),
 				Hint: "packages may not import each other, directly or through others; move what they share into a package both import"})
-			return
+			return steps
 		}
 	}
+	return steps
 }
 
 func (c *checker) checkEntry(p *ir.Program) {
