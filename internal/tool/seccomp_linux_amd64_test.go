@@ -126,10 +126,12 @@ func TestBuildReportsSyscalls(t *testing.T) {
 	if want := []int{1, 9, 60}; !reflect.DeepEqual(calls, want) { // write, mmap, exit
 		t.Fatalf("a program that prints lists %v, want %v", calls, want)
 	}
-	if out, ws := jailed(t, bin, calls); !ws.Exited() || ws.ExitStatus() == 112 || ws.ExitStatus() == 113 {
-		t.Skipf("no seccomp filter here: %v", ws)
-	} else if out != "hi\n" || ws.ExitStatus() != 3 {
-		t.Fatalf("under its own list: %q, %v", out, ws)
+	// Only the helper's own failure to install a filter is a reason to skip.
+	// Any other end, a death by SIGSYS above all, is the list being wrong.
+	if out, ws := jailed(t, bin, calls); ws.Exited() && (ws.ExitStatus() == 112 || ws.ExitStatus() == 113) {
+		t.Skipf("no seccomp filter here: the helper exited %d", ws.ExitStatus())
+	} else if out != "hi\n" || !ws.Exited() || ws.ExitStatus() != 3 {
+		t.Fatalf("under its own list: %q, exited %v code %d, signal %v", out, ws.Exited(), ws.ExitStatus(), ws.Signal())
 	}
 	if _, ws := jailed(t, bin, []int{9, 60}); !ws.Signaled() || ws.Signal() != syscall.SIGSYS {
 		t.Fatalf("without write on the list: %v, want death by SIGSYS", ws)
