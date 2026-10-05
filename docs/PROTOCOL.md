@@ -174,6 +174,28 @@ cannot supply that package (`reserved_path`), and `ovid.mod` cannot name
 another standard library, so the system calls a checked program can make are
 those of the shipped `ovid/io`.
 
+## What a program can ask of the kernel
+
+`build` ends with
+
+```json
+{"ok":true,"output":PATH,"bytes":N,"syscalls":[1,9,60]}
+```
+
+`syscalls` are the numbers (Linux x86-64) of the system calls the program
+can make, in increasing order: every `syscall` in a func reachable from
+`main`, and the three the startup code makes (`mmap` for the heap, `exit`,
+and the `write` that says `out of memory`). It is what the program can
+reach, not what a given run makes, so a filter that allows exactly these
+(and the `execve` that starts the program) never stops it, and a program
+that never calls `ovid/io.WriteFile` does not list `rename`.
+
+The list is exact because only the `ovid/io` the toolchain ships may call
+`syscall` (see `syscall_forbidden`), and its numbers are constants. Were one
+not a constant, the receipt would add `"syscalls_unknown":N`, the count of
+such calls, and the list would be incomplete. Both compilers report the
+same list for the same source.
+
 ## Paging
 
 `outline`, `refs`, and `grep` print one page of their records: at most 200
