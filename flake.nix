@@ -220,6 +220,8 @@
           inherit (self.packages.${pkgs.stdenv.hostPlatform.system}) ovid hello;
           catfile = self.lib.buildOvidProgram pkgs { pname = "catfile"; src = ./nix/catfile; };
           greet = self.lib.buildOvidProgram pkgs { pname = "greet"; src = ./nix/greet; };
+          # bash redirections opening n connections to greet that send nothing.
+          idle = n: lib.concatMapStringsSep " " (fd: "${toString fd}<>/dev/tcp/127.0.0.1/8080") (lib.range 3 (n + 2));
         in
         {
           go-test = pkgs.buildGoModule {
@@ -291,6 +293,14 @@
               # runs out of time (3 s here, not the 60 s default), and the
               # failed instance does not stay behind.
               machine.succeed("timeout 15 bash -c 'exec 3<>/dev/tcp/127.0.0.1/8080; cat <&3'")
+              machine.wait_until_succeeds("test -z \"$(systemctl list-units --all --plain --no-legend 'ovid-greet@*')\"", timeout=30)
+              # One address gets 8 connections: with 7 idle ones open an 8th
+              # is served, with 8 open a 9th is dropped. (Each idle one
+              # lasts 3 s, ample for the requests.)
+              machine.succeed("bash -c 'exec ${idle 7}; curl -fsS --max-time 2 \"http://127.0.0.1:8080/hello?8th\"' | grep -x 'hello, 8th'")
+              # Those 8 count against the address until their instances stop.
+              machine.wait_until_succeeds("test -z \"$(systemctl list-units --all --plain --no-legend 'ovid-greet@*')\"", timeout=30)
+              machine.succeed("bash -c 'exec ${idle 8}; ! curl -sS --max-time 2 \"http://127.0.0.1:8080/hello?9th\"'")
               machine.wait_until_succeeds("test -z \"$(systemctl list-units --all --plain --no-legend 'ovid-greet@*')\"", timeout=30)
 
               machine.succeed("cp -r ${./nix/example} /tmp/ex && chmod -R u+w /tmp/ex")
