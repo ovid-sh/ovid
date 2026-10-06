@@ -23,6 +23,8 @@
 // stdout: "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n"
 // stdout: "HTTP/1.1 418 \r\nX-A: 1\r\nContent-Length: 2\r\n\r\nhi"
 // stdout: "HTTP/1.1 204 No Content\r\nX-A: 1\r\n\r\n"
+// stdout: "HTTP/1.1 205 Reset Content\r\nX-A: 1\r\nContent-Length: 0\r\n\r\n"
+// stdout: "HTTP/1.1 200 OK\r\nX-A: 1\r\nContent-Length: 2\r\n\r\n"
 // stdout: "test: 201 /x 3 b=2 7\n"
 package demo
 
@@ -120,6 +122,12 @@ func main(io *ovid/io.Cap) i64 {
   show(io, ok, res, 0)
   ovid/http.SetStatus(res, 204)
   show(io, ok, res, 0)
+  // A 205 says it has no body; a HEAD response says how long the body
+  // would have been, and leaves it out.
+  ovid/http.SetStatus(res, 205)
+  show(io, ok, res, 0)
+  ovid/http.SetStatus(res, 200)
+  show(io, ovid/http.NewRequest(io, strptr("HEAD"), 4, strptr("/"), 1), res, 0)
 
   // A test: a request made by hand, the handler called directly.
   var req *ovid/http.Request = ovid/http.NewRequest(io, strptr("PUT"), 3, strptr("/x?b=2"), strlen("/x?b=2"))

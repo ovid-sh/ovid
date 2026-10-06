@@ -414,8 +414,10 @@ func WriteStdio(io *ovid/io.Cap, req *Request, res *Response, result i64) i64 {
   return 0
 }
 
-// Format is the bytes WriteStdio writes. A 1xx, 204, or 304 response is
-// written without what the handler wrote to its body.
+// Format is the bytes WriteStdio writes. A 1xx, 204, 205, or 304
+// response, and the response to a HEAD request, is written without what
+// the handler wrote to its body: a 205 says Content-Length 0, and a HEAD
+// response the length the body would have had.
 func Format(io *ovid/io.Cap, req *Request, res *Response, result i64) *ovid/mem.Buf {
   var status i64 = res.status
   var hdr *ovid/mem.Buf = res.hdr
@@ -430,6 +432,9 @@ func Format(io *ovid/io.Cap, req *Request, res *Response, result i64) *ovid/mem.
       status = 501
     }
     hdr = ovid/mem.New(io, 8)
+    body = ovid/mem.New(io, 8)
+  }
+  if status == 205 {
     body = ovid/mem.New(io, 8)
   }
   var b *ovid/mem.Buf = ovid/mem.New(io, (hdr.len + body.len) + 128)
@@ -448,6 +453,9 @@ func Format(io *ovid/io.Cap, req *Request, res *Response, result i64) *ovid/mem.
   ovid/mem.WBytes(io, b, strptr("Content-Length: "), strlen("Content-Length: "))
   ovid/mem.WBytes(io, b, d, ovid/mem.FormatI64(d, body.len))
   ovid/mem.WBytes(io, b, strptr("\r\n\r\n"), strlen("\r\n\r\n"))
+  if req.err == 0 && MethodIs(req, strptr("HEAD"), strlen("HEAD")) {
+    return b
+  }
   ovid/mem.WBytes(io, b, body.data, body.len)
   return b
 }
@@ -461,6 +469,8 @@ func reason(io *ovid/io.Cap, b *ovid/mem.Buf, s i64) i64 {
     return ovid/mem.WBytes(io, b, strptr("Created"), strlen("Created"))
   } else if s == 204 {
     return ovid/mem.WBytes(io, b, strptr("No Content"), strlen("No Content"))
+  } else if s == 205 {
+    return ovid/mem.WBytes(io, b, strptr("Reset Content"), strlen("Reset Content"))
   } else if s == 301 {
     return ovid/mem.WBytes(io, b, strptr("Moved Permanently"), strlen("Moved Permanently"))
   } else if s == 302 {
