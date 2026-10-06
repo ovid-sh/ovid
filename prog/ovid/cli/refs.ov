@@ -259,9 +259,10 @@ func WTarget(io *ovid/io.Cap, b *ovid/mem.Buf, t *Target) i64 {
   return 0
 }
 
-// WDeclID writes the id of the func or type d (the "in" of a use).
+// WDeclID writes the id of the func or type d (the "in" of a use). Every
+// func has a result type and no type decl does; a func's body may be empty.
 func WDeclID(io *ovid/io.Cap, b *ovid/mem.Buf, d *ovid/parse.Decl) i64 {
-  if d.body != 0 as *ovid/parse.Node {
+  if d.typn != 0 {
     ovid/mem.WBytes(io, b, strptr("fn:"), 3)
   } else {
     ovid/mem.WBytes(io, b, strptr("ty:"), 3)
@@ -397,7 +398,17 @@ func CmdRefs(io *ovid/io.Cap) i64 {
     if u.in.pkg != t.pkg {
       external = external + 1
     }
-    var line i64 = LineOf(f, u.tokp - f.src, lp, ln)
+    // The line is the one the node that spells the use starts on, as
+    // the Go refs prints it: a func's own result use starts at the func.
+    var off i64 = u.tokp - f.src
+    if u.node != 0 as *ovid/parse.Node {
+      off = u.node.off
+    } else if u.kind == ovid/parse.USE_RESULT {
+      off = u.in.off
+    } else if u.udecl != 0 as *ovid/parse.Decl {
+      off = u.udecl.off
+    }
+    var line i64 = LineOf(f, off, lp, ln)
     var tmp i64 = ovid/io.Alloc(io, 32)
     var dn i64 = ovid/mem.FormatI64(tmp, line)
     var pad i64 = 4 - dn
