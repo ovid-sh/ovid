@@ -220,8 +220,8 @@ func runTask(t agent.Task, i int, repo, bin, ovid, pre, model string, budget flo
 var ovidCmd = regexp.MustCompile(`(^|[\s;&|(])ovid\s`)
 
 // ovidSub finds each ovid invocation's subcommand in a shell command,
-// past any leading -C DIR (ovid -C mod check).
-var ovidSub = regexp.MustCompile(`(?:^|[\s;&|(])ovid\s+(?:-C\s+\S+\s+)*([a-z]+)`)
+// past any leading -C DIR (ovid -C mod check), DIR quoted or not.
+var ovidSub = regexp.MustCompile(`(?:^|[\s;&|(])ovid\s+(?:-C\s+(?:"[^"]*"|'[^']*'|\S+)\s+)*([a-z]+)`)
 
 // ovidSubs counts the ovid subcommands in a shell command.
 func ovidSubs(command string, into map[string]int) {
@@ -360,15 +360,13 @@ func resultText(raw json.RawMessage) string {
 	return b.String()
 }
 
-// namesDir reports whether s names dir itself or something under it: dir
-// must appear as a whole path, not as the tail of a longer one
-// (/var/tmp/ovid for /tmp/ovid) and not as the start of a sibling's name
-// (/tmp/ovid-out). Whatever cannot be part of a file name ends it, so
-// `cd /tmp/ovid&&ls` counts.
+// namesDir reports whether s names dir itself or something under it. dir
+// must stand as a whole word of the shell command or JSON string: what
+// comes before it and what follows it (unless that is a / into it) must be
+// something that ends a token, not a byte that could be part of a longer
+// path (/var/tmp/ovid, /tmp/ovid-out, /tmp/ovid+copy).
 func namesDir(s, dir string) bool {
-	nameByte := func(c byte) bool {
-		return c == '.' || c == '_' || c == '-' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= 0x80
-	}
+	delim := func(c byte) bool { return strings.IndexByte(" \t\r\n\"'`;&|()<>=:", c) >= 0 }
 	for from := 0; ; {
 		i := strings.Index(s[from:], dir)
 		if i < 0 {
@@ -376,9 +374,7 @@ func namesDir(s, dir string) bool {
 		}
 		i += from
 		end := i + len(dir)
-		before := i == 0 || !(nameByte(s[i-1]) || s[i-1] == '/')
-		after := end == len(s) || !nameByte(s[end])
-		if before && after {
+		if (i == 0 || delim(s[i-1])) && (end == len(s) || s[end] == '/' || delim(s[end])) {
 			return true
 		}
 		from = i + 1
