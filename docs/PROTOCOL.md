@@ -8,13 +8,14 @@ toolchain (`cmd/ovid`); the self-hosted compiler in `prog/` implements only
 ## Output
 
 Every command writes JSON lines to stdout, one object per line, and
-nothing else, except `help`, `run` without `--json`, and the four read
-commands without `--json`. `outline`, `show`, `refs`, and `grep` print
+nothing else, except `help`, `run` without `--json`, `dump` without `-o`
+(one JSON document, described below), and the four read commands without
+`--json`. `outline`, `show`, `refs`, and `grep` print
 source and listings as text, since an agent reads them in place of `cat`
 and `grep`, sized like what those print (within a fifth, measured on
 `prog/`); their failures are JSON like any other, and `outline`, `refs`,
 and `grep` still end with the JSON line below, while a successful `show`
-prints the source and nothing after it.
+prints a header line and the source and nothing after it.
 
 For JSON output the **last line** always has a boolean `"ok"`; earlier
 lines are records (a diagnostic, a match, a test result, a decl). Key
