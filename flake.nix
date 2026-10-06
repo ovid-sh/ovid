@@ -81,6 +81,8 @@
           cfg = config.services.ovid.programs;
           # One service per connection when it listens: a template.
           service = name: p: if p.listen == null then "ovid-${name}" else "ovid-${name}@";
+          # A ListenStream= path ("/run/x.sock") or abstract name ("@x").
+          unixSocket = l: lib.isString l && (lib.hasPrefix "/" l || lib.hasPrefix "@" l);
         in
         {
           options.services.ovid.programs = lib.mkOption {
@@ -157,7 +159,10 @@
                 listenStreams = [ (toString p.listen) ];
                 socketConfig = {
                   Accept = true;
-                  # Of the 64 connections systemd allows, one peer gets 8.
+                } // lib.optionalAttrs (!unixSocket p.listen) {
+                  # Of the 64 connections systemd allows, one IP address gets
+                  # 8. On a unix socket a source is a UID, and a proxy in
+                  # front would be one source, so there it is left unset.
                   MaxConnectionsPerSource = lib.mkDefault 8;
                 };
               })

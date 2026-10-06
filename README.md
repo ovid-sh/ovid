@@ -191,7 +191,9 @@ which the host `ovid build` writes for a handler already reads and writes.
 That process serves the connection's requests in turn and never gets a
 system call to open a socket of its own. The host waits for a request
 with no timeout, so each connection lives at most `RuntimeMaxSec` (60 s by
-default), and one peer holds at most 8 of the socket's 64 connections.
+default), and on a port one IP address holds at most 8 of the socket's 64
+connections. Behind a proxy every client is the proxy's address: raise
+`MaxConnectionsPerSource` there (a unix socket path has no such limit).
 
 ## Not yet
 
