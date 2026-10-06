@@ -5,7 +5,7 @@ Results of the agent exercise in `tests/agent/` (how to run it:
 command's output or defaults change, and add the run here, newest first.
 Each run's raw records are in `docs/agent-runs/`.
 
-## Current state (verified 2026-10-05)
+## Current state (verified 2026-10-06)
 
 The four harder tasks (12–15) separate the models where the first eleven
 did not. `claude-haiku-4-5` passes 9 of 20: it accepts integers that do
@@ -33,6 +33,17 @@ they stand in for: on prog/, `show` of one func is 1.7 times its text,
 `grep -n '^func\|^type\|^const'`. Even when told to, the agents did not edit through
 ovid: one run of five used `ovid insert`, the rest python and `sed`
 (611c7e2, below; #125).
+
+On `16-two-writers-prog` (0c33973, below), where one agent renames a func
+used from three packages while another adds a func to the file that
+defines it, every agent, told or not, used `ovid rename` for the rename
+(10 of 10), and the guided ones added their func with `ovid append`
+(5 of 5) where the plain ones used Edit. All ten runs met the goal at
+$0.03 to $0.04: Claude Code's Edit replaces one string in a file it
+reads at that moment, so the stale-copy overwrite the task was built to
+provoke never happened, and the guard was not needed. What every agent
+did need and did not get: `rename` leaves the decl's own doc comment
+starting with the old name, and all ten fixed it by hand (#160).
 
 In the small modules ovid's guard still does its job: in `14-rename-vs-call`
 an edit that named the function the other agent had just renamed was
