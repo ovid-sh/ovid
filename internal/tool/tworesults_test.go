@@ -22,6 +22,16 @@ func TestRenameSeesTwoNameVar(t *testing.T) {
 	if code := Rename(dir, "st:demo.main:1", "y", true, &b); code != 0 {
 		t.Fatalf("rename x to y: %s", b.String())
 	}
+	// The two-name var itself cannot be renamed or referenced by id yet
+	// (#156), and both commands say why.
+	b.Reset()
+	if code := Rename(dir, "st:demo.main:2", "z", true, &b); code == 0 || last(t, b.String())["error"] != "unsupported" || !strings.Contains(b.String(), "declares two locals, v and e") {
+		t.Fatalf("rename of the two-name var: %d %s", code, b.String())
+	}
+	b.Reset()
+	if code := Refs(dir, "st:demo.main:2", Page{}, &b); code == 0 || !strings.Contains(b.String(), "declares two locals, v and e") {
+		t.Fatalf("refs of the two-name var: %d %s", code, b.String())
+	}
 }
 
 // TestMoveTwoNameVarType: a func whose only use of a package is the type of

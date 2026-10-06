@@ -74,7 +74,9 @@ func Rename(dir, q, to string, dryRun bool, w io.Writer) int {
 		return fail(w, "std", t.ID+" is in a shipped package", "")
 	}
 	if t.Kind == "stmt" {
-		if n := t.Node.(*ir.Node); n.Op != "var" {
+		if n := t.Node.(*ir.Node); n.Op == "var2" {
+			return fail(w, "unsupported", t.ID+" declares two locals, "+n.Name+" and "+n.Two.Name+", and an id names only one; rename cannot reach either yet", "edit the statement and the uses instead: ovid grep finds them")
+		} else if n.Op != "var" {
 			return fail(w, "unsupported", "rename works on funcs, types, fields, consts, params, and var statements; "+t.ID+" is a "+n.Op+" statement", "")
 		}
 	}

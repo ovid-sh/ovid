@@ -447,7 +447,9 @@ func findRefs(m *module.Module, res *check.Result, target *module.Loc) ([]ref, e
 	switch target.Kind {
 	case "func", "type", "field", "const", "param":
 	case "stmt":
-		if n := target.Node.(*ir.Node); n.Op != "var" {
+		if n := target.Node.(*ir.Node); n.Op == "var2" {
+			return nil, fmt.Errorf("%s declares two locals, %s and %s, and an id names only one; refs cannot reach either yet (ovid grep finds their uses)", target.ID, n.Name, n.Two.Name)
+		} else if n.Op != "var" {
 			return nil, fmt.Errorf("refs works on funcs, types, fields, consts, params, and var statements; %s is a %s statement", target.ID, n.Op)
 		}
 	default:
