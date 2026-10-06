@@ -153,14 +153,15 @@ allowed inside ovid/io; everyone else calls ovid/io funcs. ovid/io's types
 are handles: outside ovid/io a pointer to one cannot be made by a cast, cast
 to anything, or have its fields read or written (opaque_type).
 
-Serving HTTP: write a handler, and a main that is the host around it. The
-stdio host (ovid help std, ovid/http) reads one request from stdin and
-writes the response to stdout, so a platform that spawns the binary per
-request can run it:
+Serving HTTP: write a handler in the entry package and no main; build
+makes the program the stdio host around it, which reads one request from
+stdin and writes the response to stdout (ovid help std, ovid/http), so a
+platform that spawns the binary per request can run it:
   func handle(io *ovid/io.Cap, req *ovid/http.Request, res *ovid/http.Response) i64 {
     ovid/http.Write(io, res, strptr("hi"), strlen("hi"))
     return 0                        // anything else answers 500
   }
+A main, if there is one, is the entry instead; the host it replaces is
   func main(io *ovid/io.Cap) i64 {
     var req *ovid/http.Request = ovid/http.ReadStdio(io)
     var res *ovid/http.Response = ovid/http.NewResponse(io)

@@ -78,3 +78,64 @@ func main(io *ovid/io.Cap) i64 {
 		f.Close()
 	}
 }
+
+// TestHandleEntry: an entry package with handle and no main is served by
+// the stdio host the toolchain writes; handle cannot be renamed or moved
+// away, as main cannot, and a fault in it is reported at its line.
+func TestHandleEntry(t *testing.T) {
+	dir := mkmod(t, map[string]string{
+		"demo/main.ov": `package demo
+
+import ovid/io
+import ovid/http
+
+func handle(io *ovid/io.Cap, req *ovid/http.Request, res *ovid/http.Response) i64 {
+  if ovid/http.PathIs(req, strptr("/crash"), 6) {
+    return load64(8)
+  }
+  ovid/http.Write(io, res, strptr("hi"), 2)
+  return 0
+}
+`,
+		"other/x.ov": "package other\n",
+	})
+	var b bytes.Buffer
+	if code := Rename(dir, "fn:demo.handle", "serve", false, &b); code != ExitFail || !strings.Contains(b.String(), `"bad_name"`) {
+		t.Errorf("rename: exit %d, %s", code, b.String())
+	}
+	b.Reset()
+	if code := Move(dir, "fn:demo.handle", "other", "", false, &b); code != ExitFail || !strings.Contains(b.String(), `"bad_move"`) {
+		t.Errorf("move: exit %d, %s", code, b.String())
+	}
+	bin := filepath.Join(t.TempDir(), "srv")
+	b.Reset()
+	if code := Build(dir, bin, &b); code != 0 {
+		t.Fatalf("build: %s", b.String())
+	}
+	if !canExec {
+		t.Skip("built only: ovid programs are linux/amd64 binaries")
+	}
+	var out bytes.Buffer
+	cmd := exec.Command(bin)
+	cmd.Stdin, cmd.Stdout = strings.NewReader("GET / HTTP/1.1\r\n\r\n"), &out
+	if err := cmd.Run(); err != nil || out.String() != "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi" {
+		t.Errorf("served: %v, %q", err, out.String())
+	}
+	// run has no source for the host's own frame; the fault is still
+	// placed in handle.
+	f, err := os.Create(filepath.Join(t.TempDir(), "in"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	f.WriteString("GET /crash HTTP/1.1\r\n\r\n")
+	f.Seek(0, io.SeekStart)
+	stdin := os.Stdin
+	os.Stdin = f
+	defer func() { os.Stdin = stdin }()
+	b.Reset()
+	RunWith(dir, nil, RunOpts{JSON: true}, &b)
+	if !strings.Contains(b.String(), `"id":"st:demo.handle:2"`) {
+		t.Errorf("run: %s", b.String())
+	}
+}

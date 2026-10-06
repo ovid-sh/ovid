@@ -921,9 +921,26 @@ func CheckMain(c *Ch) i64 {
     }
   }
   if fn == 0 as *ovid/parse.Decl {
-    HereDecl(c, H_PKG, k, 0 as *ovid/parse.Decl, 0 as *ovid/parse.Decl)
-    Err(c, strptr("bad_main"), strlen("bad_main"), strptr("entry package has no main"), strlen("entry package has no main"))
-    return 0
+    // With no main, a handle is the entry: build writes the stdio host
+    // around it (ovid/parse.ServeHost).
+    var h *ovid/parse.Decl = ovid/parse.FindDecl(k.fs, strptr("handle"), strlen("handle"))
+    if h != 0 as *ovid/parse.Decl {
+      if h.dup != 0 {
+        h = 0 as *ovid/parse.Decl
+      }
+    }
+    if h == 0 as *ovid/parse.Decl {
+      HereDecl(c, H_PKG, k, 0 as *ovid/parse.Decl, 0 as *ovid/parse.Decl)
+      Err(c, strptr("bad_main"), strlen("bad_main"), strptr("entry package has no main"), strlen("entry package has no main"))
+      return 0
+    }
+    if !HandleSig(h) {
+      c.fnp = strptr("handle")
+      c.fnn = strlen("handle")
+      HereDecl(c, H_FUNC, k, h, h)
+      Err(c, strptr("bad_handler"), strlen("bad_handler"), strptr("handle must be (io *ovid/io.Cap, req *ovid/http.Request, res *ovid/http.Response) i64"), strlen("handle must be (io *ovid/io.Cap, req *ovid/http.Request, res *ovid/http.Response) i64"))
+    }
+    return CheckAbi(c)
   }
   var ok bool = false
   var p *ovid/parse.Decl = fn.sub
@@ -941,6 +958,24 @@ func CheckMain(c *Ch) i64 {
     Err(c, strptr("bad_main"), strlen("bad_main"), strptr("main must be (io *ovid/io.Cap) i64"), strlen("main must be (io *ovid/io.Cap) i64"))
   }
   return CheckAbi(c)
+}
+
+// HandleSig reports whether fn is
+// func handle(io *ovid/io.Cap, req *ovid/http.Request, res *ovid/http.Response) i64.
+func HandleSig(fn *ovid/parse.Decl) bool {
+  var p *ovid/parse.Decl = fn.sub
+  if ovid/parse.CountDecls(p) != 3 || !ovid/mem.Eq(fn.typp, fn.typn, strptr("i64"), 3) {
+    return false
+  }
+  if !ovid/mem.Eq(p.typp, p.typn, strptr("*ovid/io.Cap"), strlen("*ovid/io.Cap")) {
+    return false
+  }
+  p = p.next
+  if !ovid/mem.Eq(p.typp, p.typn, strptr("*ovid/http.Request"), strlen("*ovid/http.Request")) {
+    return false
+  }
+  p = p.next
+  return ovid/mem.Eq(p.typp, p.typn, strptr("*ovid/http.Response"), strlen("*ovid/http.Response"))
 }
 
 // Opaque reports whether the type is a pointer to one of ovid/io's types

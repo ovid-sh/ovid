@@ -192,7 +192,8 @@ ships, such as `ovid/io`). From the checker: `type_mismatch`,
 `missing_return`, `missing_expr`, `arity`, `bad_type`, `bad_op`,
 `struct_value`, `duplicate_name`, `duplicate_id`, `duplicate_package`,
 `import_self`, `import_cycle`, `syscall_forbidden`, `opaque_type`, `bad_main`,
-`bad_abi`, `no_entry`, `bad_module`.
+`bad_handler` (an entry package with no main has a handle of the wrong
+signature), `bad_abi`, `no_entry`, `bad_module`.
 
 `import_cycle` is reported in the package whose path sorts first among a
 cycle's, at its first import (in source order) that leads back to it, and

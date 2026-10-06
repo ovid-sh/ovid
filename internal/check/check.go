@@ -479,17 +479,40 @@ func (c *checker) checkEntry(p *ir.Program) {
 	}
 	want := "func main(io *ovid/io.Cap) i64"
 	if main == nil {
-		c.issue(Issue{Code: "bad_main", ID: ep.ID, Message: "entry package has no main", Expected: want})
-		return
-	}
-	c.pkg = ep
-	pt := ""
-	if len(main.Params) == 1 {
-		pt, _ = c.resolve(main.Params[0].Type)
-	}
-	res, _ := c.resolve(main.Result)
-	if len(main.Params) != 1 || pt != "*ovid/io.Cap" || res != "i64" {
-		c.issue(Issue{Code: "bad_main", ID: main.ID, Message: "main has the wrong signature", Expected: want, Got: Signature(ep.Path, main)})
+		// With no main, a handle is the entry: build writes the stdio host
+		// around it (tool.serveProgram).
+		var handle *ir.Func
+		for i := range ep.Funcs {
+			if ep.Funcs[i].Name == "handle" && !c.dup[&ep.Funcs[i]] {
+				handle = &ep.Funcs[i]
+			}
+		}
+		if handle == nil {
+			c.issue(Issue{Code: "bad_main", ID: ep.ID, Message: "entry package has no main", Expected: want})
+			return
+		}
+		c.pkg = ep
+		hw := "func handle(io *ovid/io.Cap, req *ovid/http.Request, res *ovid/http.Response) i64"
+		ok := len(handle.Params) == 3
+		for i, t := range []string{"*ovid/io.Cap", "*ovid/http.Request", "*ovid/http.Response"} {
+			if ok {
+				pt, _ := c.resolve(handle.Params[i].Type)
+				ok = pt == t
+			}
+		}
+		if res, _ := c.resolve(handle.Result); !ok || res != "i64" {
+			c.issue(Issue{Code: "bad_handler", ID: handle.ID, Message: "handle has the wrong signature", Expected: hw, Got: Signature(ep.Path, handle)})
+		}
+	} else {
+		c.pkg = ep
+		pt := ""
+		if len(main.Params) == 1 {
+			pt, _ = c.resolve(main.Params[0].Type)
+		}
+		res, _ := c.resolve(main.Result)
+		if len(main.Params) != 1 || pt != "*ovid/io.Cap" || res != "i64" {
+			c.issue(Issue{Code: "bad_main", ID: main.ID, Message: "main has the wrong signature", Expected: want, Got: Signature(ep.Path, main)})
+		}
 	}
 	if io, ok := c.pkgs["ovid/io"]; ok {
 		var capTy *ir.TypeDecl

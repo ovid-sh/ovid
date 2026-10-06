@@ -192,7 +192,7 @@ func Build(dir, out string, w io.Writer) int {
 	if out == "" {
 		out = DefaultOut(m)
 	}
-	o, err := compileTo(m, m.Prog, out)
+	o, err := compileTo(m, serveProgram(m.Prog), out)
 	if err != nil {
 		return fail(w, "compile", err.Error(), "")
 	}
@@ -255,7 +255,7 @@ func RunWith(dir string, args []string, o RunOpts, w io.Writer) int {
 		emit(w, map[string]any{"ok": false, "errors": len(c.diags)})
 		return ExitBuild
 	}
-	exe, marks, err := compile.CompileMap(m.Prog)
+	exe, marks, err := compile.CompileMap(serveProgram(m.Prog))
 	if err != nil {
 		fail(w, "compile", err.Error(), "")
 		return ExitBuild
