@@ -35,19 +35,40 @@ type procIO struct {
 	stdout, stderr io.Writer
 	extra          []*os.File // fd 3 and up
 	argv0          string     // the program's name for itself, when it is not bin
+	confine        *confineSpec
 }
 
 func (pio procIO) command(bin string, args []string) *exec.Cmd {
-	cmd := exec.Command(bin, args...)
-	// An empty environment, not ovid's own: the kernel puts the environment
-	// on the stack after argv, where any program can read it, and the
-	// caller's often holds secrets.
-	cmd.Env = []string{}
+	var cmd *exec.Cmd
+	if pio.confine != nil {
+		// ovid itself, as the launcher: it confines the process and then
+		// becomes the program. It gets the spec and nothing else of ours;
+		// GODEBUG keeps the Go runtime from sending itself a signal between
+		// installing the filter and execve.
+		self, err := os.Executable()
+		if err != nil {
+			self = os.Args[0]
+		}
+		c := *pio.confine
+		c.argv0 = pio.argv0
+		if c.argv0 == "" {
+			c.argv0 = bin
+		}
+		cmd = exec.Command(self, append([]string{"--", bin}, args...)...)
+		cmd.Env = []string{confineEnv + "=" + c.encode(), "GODEBUG=asyncpreemptoff=1"}
+		cmd.Dir = c.writable
+	} else {
+		cmd = exec.Command(bin, args...)
+		// An empty environment, not ovid's own: the kernel puts the
+		// environment on the stack after argv, where any program can read
+		// it, and the caller's often holds secrets.
+		cmd.Env = []string{}
+		if pio.argv0 != "" {
+			cmd.Args[0] = pio.argv0
+		}
+	}
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = pio.stdin, pio.stdout, pio.stderr
 	cmd.ExtraFiles = pio.extra
-	if pio.argv0 != "" {
-		cmd.Args[0] = pio.argv0
-	}
 	return cmd
 }
 
@@ -135,6 +156,9 @@ func describeCrash(m *module.Module, exe []byte, marks []compile.Mark, pr procRe
 	}
 	if pr.signal == syscall.SIGFPE {
 		r["hint"] = "an integer / or % by zero (or the most negative i64 / -1)"
+	}
+	if pr.signal == syscall.SIGSYS {
+		r["hint"] = confineHint
 	}
 	if pr.hasAddr {
 		r["fault_addr"] = fmt.Sprintf("%#x", pr.addr)

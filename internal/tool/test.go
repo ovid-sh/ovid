@@ -34,6 +34,22 @@ type testFn struct {
 // (io *ovid/io.Cap) i64. Zero passes; anything else fails. Each test runs in
 // its own process so a crash only fails that test.
 func Test(dir, filter string, list bool, w io.Writer) int {
+	return TestWith(dir, TestOpts{Filter: filter, List: list}, w)
+}
+
+// TestOpts changes how test runs the tests.
+type TestOpts struct {
+	Filter string // only tests whose name or id contains it
+	List   bool   // name the tests and run none
+	// Confine runs every test under a seccomp filter of the program's own
+	// system calls and, where the kernel has Landlock, a file system it can
+	// write only in a fresh directory, its working directory.
+	Confine bool
+}
+
+// TestWith is Test with options.
+func TestWith(dir string, o TestOpts, w io.Writer) int {
+	filter, list := o.Filter, o.List
 	m, err := load(dir)
 	if err != nil {
 		return fail(w, "load", err.Error(), "")
@@ -88,9 +104,18 @@ func Test(dir, filter string, list bool, w io.Writer) int {
 		return ExitOK
 	}
 	prog := testProgram(m.Prog, tests)
-	exe, marks, err := compile.CompileMap(prog)
+	out, err := compile.CompileAll(prog)
 	if err != nil {
 		return fail(w, "compile", err.Error(), "")
+	}
+	exe, marks := out.Bin, out.Marks
+	var confine *confineSpec
+	if o.Confine {
+		writable, err := os.MkdirTemp("", "ovid-writable-")
+		if err != nil {
+			return fail(w, "run", err.Error(), tmpHint)
+		}
+		confine = newConfine(out.Syscalls, writable, "test")
 	}
 	// A missing temporary directory is not fatal yet: stage may still hold
 	// the program in memory.
@@ -125,7 +150,7 @@ func Test(dir, filter string, list bool, w io.Writer) int {
 			return fail(w, "run", err.Error(), "")
 		}
 		t0 := time.Now()
-		pio := procIO{stdout: oc.w, stderr: oc.w, extra: []*os.File{rc.w}, argv0: "test"}
+		pio := procIO{stdout: oc.w, stderr: oc.w, extra: []*os.File{rc.w}, argv0: "test", confine: confine}
 		if st.extra != nil {
 			pio.extra = append(pio.extra, st.extra)
 		}
@@ -183,6 +208,9 @@ func Test(dir, filter string, list bool, w io.Writer) int {
 		emit(w, r)
 	}
 	sum := map[string]any{"fact": "summary", "ok": failed == 0, "passed": passed, "failed": failed}
+	if confine != nil {
+		sum["confined"], sum["writable"] = confine.applied(), confine.writable
+	}
 	// A test is a program that can write files, its own module's among
 	// them. What was tested is then no longer what is on disk.
 	changed := moduleChanged(m, sum)

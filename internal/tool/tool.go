@@ -226,6 +226,10 @@ type RunOpts struct {
 	// MaxOutput is how many bytes of stdout, and of stderr, the JSON record
 	// keeps; 0 is DefaultRunOutput.
 	MaxOutput int
+	// Confine runs the program under a seccomp filter of its own system
+	// calls and, where the kernel has Landlock, a file system it can write
+	// only in a fresh directory, its working directory. Linux x86-64 only.
+	Confine bool
 }
 
 // DefaultRunOutput is how much of each output stream run --json keeps.
@@ -255,11 +259,12 @@ func RunWith(dir string, args []string, o RunOpts, w io.Writer) int {
 		emit(w, map[string]any{"ok": false, "errors": len(c.diags)})
 		return ExitBuild
 	}
-	exe, marks, err := compile.CompileMap(m.Prog)
+	out, err := compile.CompileAll(m.Prog)
 	if err != nil {
 		fail(w, "compile", err.Error(), "")
 		return ExitBuild
 	}
+	exe, marks := out.Bin, out.Marks
 	// A missing temporary directory is not fatal yet: stage may still hold
 	// the program in memory.
 	tmpd, terr := os.MkdirTemp("", "ovid-run-")
@@ -279,6 +284,16 @@ func RunWith(dir string, args []string, o RunOpts, w io.Writer) int {
 	pio := procIO{stdin: os.Stdin, stdout: os.Stdout, stderr: os.Stderr, argv0: name}
 	if st.extra != nil {
 		pio.extra = []*os.File{st.extra}
+	}
+	if o.Confine {
+		// The one directory the program may write in. It is kept: what the
+		// program wrote is the point of running it.
+		writable, err := os.MkdirTemp("", "ovid-writable-")
+		if err != nil {
+			fail(w, "run", err.Error(), tmpHint)
+			return ExitBuild
+		}
+		pio.confine = newConfine(out.Syscalls, writable, name)
 	}
 	var outc, errc *pipeCapture
 	if o.JSON {
@@ -329,6 +344,9 @@ func RunWith(dir string, args []string, o RunOpts, w io.Writer) int {
 		}
 		cut("stdout", stdout, outN)
 		cut("stderr", stderr, errN)
+		if pio.confine != nil {
+			r["confined"], r["writable"] = pio.confine.applied(), pio.confine.writable
+		}
 		// ok still says the program ran; that it changed its own module is
 		// reported beside it for the caller to weigh.
 		moduleChanged(m, r)

@@ -12,6 +12,8 @@ import (
 const (
 	ptraceGetSiginfo = 0x4202
 	ptraceExitKill   = 0x100000
+	ptraceTraceExec  = 0x10
+	ptraceEventExec  = 4
 )
 
 // runTraced runs bin under ptrace. On a fatal signal it records the
@@ -57,9 +59,13 @@ func runTraced(bin string, args []string, pio procIO, timeout time.Duration) (r 
 		case ws.Stopped():
 			sig := ws.StopSignal()
 			if !started && sig == syscall.SIGTRAP {
-				// The stop after exec.
+				// The stop after exec. A confined program execs twice, the
+				// launcher and then itself; the second stop is marked as an
+				// exec event and is not a signal to deliver.
 				started = true
-				syscall.PtraceSetOptions(pid, ptraceExitKill)
+				syscall.PtraceSetOptions(pid, ptraceExitKill|ptraceTraceExec)
+				sig = 0
+			} else if sig == syscall.SIGTRAP && ws.TrapCause() == ptraceEventExec {
 				sig = 0
 			} else if fatalSignal(sig) && r.pc == 0 {
 				capture(pid, sig, &r)
