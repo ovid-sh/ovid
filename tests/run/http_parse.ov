@@ -14,7 +14,7 @@
 // stdout: "body short 1\n"
 // stdout: "chunked 3\n"
 // stdout: "status 0 -1 -1\n"
-// stdout: "headers -1 -1 -1 -1 0\n"
+// stdout: "headers -1 -1 -1 -1 -1 0\n"
 // stdout: "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n"
 // stdout: "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n"
 // stdout: "HTTP/1.1 418 \r\nX-A: 1\r\nContent-Length: 2\r\n\r\nhi"
@@ -76,8 +76,8 @@ func main(io *ovid/io.Cap) i64 {
   ovid/io.Print(strptr(" "))
   ovid/io.PrintInt(io, ovid/http.SetStatus(res, 600))
   ovid/io.Print(strptr("\n"))
-  // Refused: an empty name, a name with a space, a value with CRLF, and
-  // Content-Length; accepted: X-A.
+  // Refused: an empty name, a name with a space, a value with CRLF,
+  // Content-Length, and Transfer-Encoding; accepted: X-A.
   ovid/io.Print(strptr("headers "))
   ovid/io.PrintInt(io, ovid/http.SetHeader(io, res, strptr(""), 0, strptr("1"), 1))
   ovid/io.Print(strptr(" "))
@@ -86,6 +86,8 @@ func main(io *ovid/io.Cap) i64 {
   ovid/io.PrintInt(io, ovid/http.SetHeader(io, res, strptr("X-A"), strlen("X-A"), strptr("1\r\nSet-Cookie: x"), strlen("1\r\nSet-Cookie: x")))
   ovid/io.Print(strptr(" "))
   ovid/io.PrintInt(io, ovid/http.SetHeader(io, res, strptr("Content-length"), strlen("Content-length"), strptr("1"), 1))
+  ovid/io.Print(strptr(" "))
+  ovid/io.PrintInt(io, ovid/http.SetHeader(io, res, strptr("transfer-Encoding"), strlen("transfer-Encoding"), strptr("chunked"), strlen("chunked")))
   ovid/io.Print(strptr(" "))
   ovid/io.PrintInt(io, ovid/http.SetHeader(io, res, strptr("X-A"), strlen("X-A"), strptr("1"), 1))
   ovid/io.Print(strptr("\n"))
