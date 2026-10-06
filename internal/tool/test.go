@@ -178,7 +178,7 @@ func TestWith(dir string, o TestOpts, w io.Writer) int {
 			r["hint"] = fmt.Sprintf("killed after %s", testTimeout)
 		case !pr.exited:
 			code = -1
-			describeCrash(m, exe, marks, pr, r)
+			describeCrash(m, exe, marks, pr, confine != nil, r)
 		}
 		// The runtime ends a program it could not get memory for with this
 		// code. The test did not return it: the wrapper marks every return.

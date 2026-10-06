@@ -162,7 +162,7 @@ func crashStack(m *module.Module, marks []compile.Mark, r procResult) []map[stri
 // signal: the signal, the statement it died in and the calls that led
 // there, the faulting address, and a hint for the common causes. exe is the
 // program's image.
-func describeCrash(m *module.Module, exe []byte, marks []compile.Mark, pr procResult, r map[string]any) {
+func describeCrash(m *module.Module, exe []byte, marks []compile.Mark, pr procResult, confined bool, r map[string]any) {
 	r["signal"] = pr.signal.String()
 	if st := crashStack(m, marks, pr); len(st) > 0 {
 		r["at"] = st[0]
@@ -171,7 +171,7 @@ func describeCrash(m *module.Module, exe []byte, marks []compile.Mark, pr procRe
 	if pr.signal == syscall.SIGFPE {
 		r["hint"] = "an integer / or % by zero (or the most negative i64 / -1)"
 	}
-	if h := signalHint(pr.signal); h != "" {
+	if h := signalHint(pr.signal); h != "" && confined {
 		r["hint"] = h
 	}
 	if pr.hasAddr {

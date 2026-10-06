@@ -132,10 +132,27 @@ func (c *confineSpec) setupError() error {
 	msg, _ := io.ReadAll(c.status)
 	c.status.Close()
 	c.status, c.statusW = nil, nil
-	if len(msg) == 0 {
+	return statusError(msg)
+}
+
+// statusError reads what the launcher wrote: "+" alone means the rules
+// were in place and the program was started (the pipe closed on exec);
+// "+!" that execve itself then failed; nothing that the launcher died
+// before it got that far (a timeout can kill it at its first stop); and
+// anything else is why the confinement could not be set up.
+func statusError(msg []byte) error {
+	switch s := string(msg); {
+	case s == "+":
 		return nil
+	case s == "":
+		return fmt.Errorf("the launcher ended before it could start the program")
+	case s == "+!":
+		return fmt.Errorf("could not execute the program: execve failed in the launcher")
+	case strings.HasPrefix(s, "+!"):
+		return fmt.Errorf("could not confine the program: %s", strings.TrimSpace(s[2:]))
+	default:
+		return fmt.Errorf("could not confine the program: %s", strings.TrimSpace(s))
 	}
-	return fmt.Errorf("could not confine the program: %s", strings.TrimSpace(string(msg)))
 }
 
 // confineHint is what to do when the kernel killed the program for a system

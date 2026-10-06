@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"ovid/internal/compile"
+	"ovid/internal/module"
 )
 
 // writerProg writes "hello" to out.txt in its working directory and to the
@@ -100,7 +101,7 @@ func TestRunConfine(t *testing.T) {
 		t.Fatalf("without write on the list: exited %v code %d signal %v", pr.exited, pr.code, pr.signal)
 	}
 	r = map[string]any{}
-	describeCrash(m, out.Bin, out.Marks, pr, r)
+	describeCrash(m, out.Bin, out.Marks, pr, true, r)
 	if r["signal"] != "bad system call" || !strings.Contains(r["hint"].(string), "receipt") {
 		t.Fatalf("a death by SIGSYS is described as %v", r)
 	}
@@ -303,5 +304,41 @@ func TestConfineStatusPipeIsNotLeaked(t *testing.T) {
 	}
 	if _, err := w2.Write([]byte("x")); err != nil {
 		t.Fatalf("the second pipe is not usable: %v", err)
+	}
+}
+
+// TestConfineStatus: what the parent makes of the launcher's report.
+func TestConfineStatus(t *testing.T) {
+	if err := statusError([]byte("+")); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct{ msg, want string }{
+		{"", "ended before"},
+		{"+!", "execve failed"},
+		{"+!the kernel refused the seccomp filter: x", "could not confine the program: the kernel refused the seccomp"},
+		{"the kernel refused the Landlock rules", "could not confine the program: the kernel refused"},
+	} {
+		if err := statusError([]byte(c.msg)); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Fatalf("%q: %v, want %q", c.msg, err, c.want)
+		}
+	}
+}
+
+// TestSIGSYSHintOnlyWhenConfined: a program killed by SIGSYS outside ovid's
+// confinement is not told that ovid's confinement did it.
+func TestSIGSYSHintOnlyWhenConfined(t *testing.T) {
+	m, err := module.Load(mkmod(t, demo("package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  return 0\n}\n")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pr := procResult{signal: syscall.SIGSYS}
+	r := map[string]any{}
+	describeCrash(m, nil, nil, pr, false, r)
+	if r["hint"] != nil {
+		t.Fatalf("unconfined: %v", r)
+	}
+	describeCrash(m, nil, nil, pr, true, r)
+	if r["hint"] == nil {
+		t.Fatalf("confined: %v", r)
 	}
 }

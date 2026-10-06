@@ -334,7 +334,7 @@ func RunWith(dir string, args []string, o RunOpts, w io.Writer) int {
 			r["signal"] = "timeout"
 			r["hint"] = fmt.Sprintf("killed after %s", o.Timeout)
 		default:
-			describeCrash(m, exe, marks, pr, r)
+			describeCrash(m, exe, marks, pr, pio.confine != nil, r)
 		}
 		cut := func(key string, b []byte, n int64) {
 			if n > int64(len(b)) { // more was written than was kept
@@ -364,7 +364,7 @@ func RunWith(dir string, args []string, o RunOpts, w io.Writer) int {
 		return pr.code
 	}
 	r := map[string]any{"ok": false, "error": "killed", "exit": 128 + int(pr.signal)}
-	describeCrash(m, exe, marks, pr, r)
+	describeCrash(m, exe, marks, pr, pio.confine != nil, r)
 	if pr.timedOut {
 		r["signal"], r["exit"] = "timeout", ExitTimeout
 		r["hint"] = fmt.Sprintf("killed after %s", o.Timeout)
