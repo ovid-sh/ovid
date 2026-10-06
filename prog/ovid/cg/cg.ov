@@ -2088,8 +2088,8 @@ func EmitStmt(c *C, s *ovid/parse.Node) i64 {
     return 0
   }
   if op == ovid/parse.OP_VAR2 || op == ovid/parse.OP_ASSIGN2 {
-    // The call leaves its results in rax and rdx. rdx goes first: a local
-    // may live in rdx, and none lives in rax.
+    // The call leaves its results in rax and rdx, which no local lives in,
+    // so storing one cannot disturb the other.
     if EmitExpr(c, s.val, 0) != 0 {
       return c.err
     }

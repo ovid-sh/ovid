@@ -864,8 +864,8 @@ func (c *cg) emitStmt(s *ir.Node) error {
 		}
 		return nil
 	case "var2", "assign2":
-		// The call leaves its results in rax and rdx. rdx goes first:
-		// a local may live in rdx, and none lives in rax.
+		// The call leaves its results in rax and rdx, which no local lives
+		// in, so storing one cannot disturb the other.
 		if err := c.emitExpr(s.Val, 0); err != nil {
 			return err
 		}
@@ -1642,7 +1642,6 @@ func (c *cg) emitStore(addr, val *ir.Node, width int, off int32) error {
 	return nil
 }
 
-// emitAssign sets local i to val.
 // setLocal writes register src to local i, and forgets its cached quotient.
 func (c *cg) setLocal(i, src int) {
 	if r, ok := c.regs[i]; ok {
@@ -1657,6 +1656,7 @@ func (c *cg) setLocal(i, src int) {
 	}
 }
 
+// emitAssign sets local i to val.
 func (c *cg) emitAssign(i int, val *ir.Node) error {
 	reg, inReg := c.regs[i]
 	disp := c.locals[i].disp
