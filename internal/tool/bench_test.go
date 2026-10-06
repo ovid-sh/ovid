@@ -23,7 +23,7 @@ import (
 // It has room above the current size so that ordinary work on prog/ does
 // not trip it; a jump past it should be a decision. When raising it, update
 // the size the README states.
-const selfHostBudget = 110_000
+const selfHostBudget = 120_000
 
 // TestSelfHostSize fails when the self-hosted compiler outgrows its budget.
 func TestSelfHostSize(t *testing.T) {

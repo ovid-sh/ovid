@@ -1,0 +1,194 @@
+// stdout: "pair 0\nassign 0\nbranch 0\nloop 0\ncalls 0\nfull 0\n"
+package demo
+import ovid/io
+
+// A func that divides locals by constants more than once keeps the last
+// quotient in a register, so x % d and x / d of the same x divide once.
+// Each func here compares what it computes with idiv, which a division
+// by a param uses, in the cases that must divide again: the local was
+// assigned, a label came between, or the divisor or the local differs.
+
+func rdiv(n i64, d i64) i64 {
+  return n / d
+}
+
+func rmod(n i64, d i64) i64 {
+  return n % d
+}
+
+func Nz(x i64) i64 {
+  if x != 0 {
+    return 1
+  }
+  return 0
+}
+
+// Pair reuses one quotient, both ways round, and in one expression.
+func Pair(x i64, y i64) i64 {
+  var r i64 = x % 10
+  var q i64 = x / 10
+  var bad i64 = Nz(r - rmod(x, 10)) + Nz(q - rdiv(x, 10))
+  var q2 i64 = y / (0 - 7)
+  var r2 i64 = y % (0 - 7)
+  bad = bad + (Nz(q2 - rdiv(y, 0 - 7)) + Nz(r2 - rmod(y, 0 - 7)))
+  var s i64 = (x % 1000000000) + ((x / 1000000000) * 3)
+  bad = bad + Nz(s - (rmod(x, 1000000000) + (rdiv(x, 1000000000) * 3)))
+  // Another divisor, then another local, with the same divisor.
+  var a i64 = x % 10
+  var b i64 = x / 3
+  var c i64 = y / 3
+  var e i64 = x % 3
+  bad = bad + (Nz(a - rmod(x, 10)) + Nz(b - rdiv(x, 3)))
+  return bad + (Nz(c - rdiv(y, 3)) + Nz(e - rmod(x, 3)))
+}
+
+// Assign changes the local between the two divisions.
+func Assign(x i64) i64 {
+  var x0 i64 = x
+  var r i64 = x % 10
+  x = x + 1
+  var q i64 = x / 10
+  var bad i64 = Nz(r - rmod(x0, 10)) + Nz(q - rdiv(x0 + 1, 10))
+  x = x / 10
+  r = x % 10
+  return bad + Nz(r - rmod(rdiv(x0 + 1, 10), 10))
+}
+
+// Branch divides on one path only; where the paths meet, the quotient
+// is unknown.
+func Branch(x i64, f bool) i64 {
+  var bad i64 = 0
+  var r i64 = 0
+  if f {
+    r = x % 9
+  }
+  var q i64 = x / 9
+  bad = bad + Nz(q - rdiv(x, 9))
+  x = x + 5
+  if f && ((x % 11) == 3) {
+    bad = bad + Nz((x / 11) - rdiv(x, 11))
+  }
+  bad = bad + Nz((x / 11) - rdiv(x, 11))
+  if (x > 0) || ((x % 13) == 1) {
+    bad = bad + Nz((x / 13) - rdiv(x, 13))
+  }
+  if f {
+    bad = bad + Nz(r - rmod(x - 5, 9))
+  }
+  return bad
+}
+
+// Loop is the bigint pattern: a fresh t each turn of the loop.
+func Loop(io *ovid/io.Cap, x i64) i64 {
+  var n i64 = 50
+  var limbs i64 = ovid/io.Alloc(io, n * 8)
+  var ref i64 = ovid/io.Alloc(io, n * 8)
+  var i i64 = 0
+  while i < n {
+    store64(limbs + (i * 8), (x + (i * 7919)) % 1000000000)
+    store64(ref + (i * 8), rmod(x + (i * 7919), 1000000000))
+    i = i + 1
+  }
+  var bad i64 = 0
+  var carry i64 = 0
+  var rc i64 = 0
+  i = 0
+  while i < n {
+    var t i64 = (load64(limbs + (i * 8)) * 536870909) + carry
+    store64(limbs + (i * 8), t % 1000000000)
+    carry = t / 1000000000
+    var u i64 = (load64(ref + (i * 8)) * 536870909) + rc
+    store64(ref + (i * 8), rmod(u, 1000000000))
+    rc = rdiv(u, 1000000000)
+    bad = bad + Nz(load64(limbs + (i * 8)) - load64(ref + (i * 8)))
+    i = i + 1
+  }
+  return bad + Nz(carry - rc)
+}
+
+// Inner divides locals by constants as well, so it keeps its own quotient
+// in the register its callers keep theirs in.
+func Inner(x i64) i64 {
+  return (x % 7) + ((x / 7) * 100)
+}
+
+// Frame's x is used only twice, so it lives in the frame.
+func Frame(x i64) i64 {
+  var r i64 = Inner(x % 10)
+  return r + ((x / 10) * 1000)
+}
+
+// Calls calls between the two divisions.
+func Calls(x i64) i64 {
+  var r i64 = x % 7
+  var z i64 = Inner(x + 3)
+  var q i64 = x / 7
+  var bad i64 = Nz(z - (rmod(x + 3, 7) + (rdiv(x + 3, 7) * 100)))
+  bad = bad + Nz(Frame(x) - (Inner(rmod(x, 10)) + (rdiv(x, 10) * 1000)))
+  return bad + (Nz(r - rmod(x, 7)) + Nz(q - rdiv(x, 7)))
+}
+
+// Full has more heavy locals than callee-saved registers, so it has none
+// left for a quotient, and some locals live in the frame.
+func Full(x i64) i64 {
+  var a i64 = x
+  var b i64 = x + 1
+  var c i64 = x + 2
+  var d i64 = x + 3
+  var e i64 = x + 4
+  var f i64 = x + 5
+  var bad i64 = 0
+  var i i64 = 0
+  while i < 3 {
+    bad = bad + Nz((a % 10) - rmod(a, 10))
+    bad = bad + Nz((a / 10) - rdiv(a, 10))
+    bad = bad + Nz((f % 10) - rmod(f, 10))
+    bad = bad + Nz((f / 10) - rdiv(f, 10))
+    a = a + b
+    b = b + c
+    c = c + d
+    d = d + e
+    e = e + f
+    f = f + a
+    i = i + 1
+  }
+  return bad
+}
+
+func Put(io *ovid/io.Cap, name i64, v i64) i64 {
+  ovid/io.Print(name)
+  ovid/io.PrintInt(io, v)
+  ovid/io.Print(strptr("\n"))
+  return 0
+}
+
+func main(io *ovid/io.Cap) i64 {
+  var pair i64 = 0
+  var assign i64 = 0
+  var branch i64 = 0
+  var loop i64 = 0
+  var calls i64 = 0
+  var full i64 = 0
+  var x i64 = 0 - 9223372036854775807
+  x = x - 1
+  var i i64 = 0
+  while i < 400 {
+    pair = pair + Pair(x, x ^ 0x5555)
+    pair = pair + Pair(x >> (i % 64), 0 - (x >> (i % 64)))
+    assign = assign + Assign(x >> (i % 64))
+    branch = branch + Branch(x >> (i % 64), (i % 3) == 0)
+    branch = branch + Branch(0 - (x >> (i % 64)), (i % 2) == 0)
+    loop = loop + Loop(io, (x >> (i % 64)) & 0xFFFFFFFF)
+    calls = calls + Calls(x >> (i % 64))
+    full = full + Full((x >> (i % 64)) >> 4)
+    x = (x * 6364136223846793005) + 1442695040888963407
+    i = i + 1
+  }
+  Put(io, strptr("pair "), pair)
+  Put(io, strptr("assign "), assign)
+  Put(io, strptr("branch "), branch)
+  Put(io, strptr("loop "), loop)
+  Put(io, strptr("calls "), calls)
+  Put(io, strptr("full "), full)
+  return 0
+}
