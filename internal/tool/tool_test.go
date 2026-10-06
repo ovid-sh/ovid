@@ -1188,6 +1188,22 @@ func TestEdges(io *ovid/io.Cap) i64 {
 	}
 }
 
+// TestTwoResultFuncIsNoTest: a TestX that returns a value and an error code
+// is not a test, since the runner would take its first result and drop the
+// code unseen.
+func TestTwoResultFuncIsNoTest(t *testing.T) {
+	dir := mkmod(t, map[string]string{
+		"demo/main.ov":      "package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  return 0\n}\n",
+		"demo/main_test.ov": "package demo\nimport ovid/io\nfunc TestOne(io *ovid/io.Cap) i64 {\n  return 0\n}\nfunc TestTwo(io *ovid/io.Cap) (i64, i64) {\n  return 0, 1\n}\n",
+	})
+	var b bytes.Buffer
+	code := Test(dir, "", true, &b)
+	rs := lines(t, b.String())
+	if code != 0 || len(rs) != 3 || rs[0]["code"] != "bad_test" || rs[0]["id"] != "fn:demo.TestTwo" || rs[1]["id"] != "fn:demo.TestOne" || rs[2]["count"] != float64(1) {
+		t.Fatalf("list %d %s", code, b.String())
+	}
+}
+
 func TestTestCommand(t *testing.T) {
 	dir := mkmod(t, map[string]string{
 		"demo/main.ov": "package demo\nimport ovid/io\nfunc Two() i64 {\n  return 2\n}\nfunc main(io *ovid/io.Cap) i64 {\n  return 0\n}\n",
@@ -1732,7 +1748,7 @@ func TestSelfHost(t *testing.T) {
 	// Both dumps are valid JSON and say the same thing. A literal's bytes
 	// that are not UTF-8 (prog's asm tests have some) come out as
 	// value_hex, which loses nothing.
-	lit := mkmod(t, demo("package demo\nimport ovid/io\nconst T [3]i64 = {-1, 0, 7}\nconst E [0]i64 = {}\nfunc main(io *ovid/io.Cap) i64 {\n  return load8(strptr(\"\\xb8\\n\") + 1) + strlen(\"é\") + T[1] + len(T)\n}\n"))
+	lit := mkmod(t, demo("package demo\nimport ovid/io\nconst T [3]i64 = {-1, 0, 7}\nconst E [0]i64 = {}\nfunc Two(x i64) (i64, i64) {\n  return x, 0\n}\nfunc main(io *ovid/io.Cap) i64 {\n  var v i64, e i64 = Two(1)\n  v, e = Two(2)\n  var w i64, _ = Two(3)\n  return load8(strptr(\"\\xb8\\n\") + 1) + strlen(\"é\") + T[1] + len(T) + v + e + w\n}\n"))
 	for _, dir := range []string{prog, lit} {
 		b.Reset()
 		Dump(dir, "", "", &b)

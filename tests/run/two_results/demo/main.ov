@@ -1,0 +1,62 @@
+// A func with two results: a value and an error code, received by a var
+// or an assignment of two names, _ discarding one, and propagated.
+// exit: 4
+package demo
+import ovid/io
+import util
+type P struct {
+  x i64
+}
+func NewP(io *ovid/io.Cap, x i64) (*P, i64) {
+  if x < 0 {
+    return 0 as *P, 1
+  }
+  var p *P = ovid/io.Alloc(io, sizeof(P)) as *P
+  p.x = x
+  return p, 0
+}
+func Half(io *ovid/io.Cap, x i64) (i64, i64) {
+  var p *P, e i64 = NewP(io, x)
+  if e != 0 {
+    return 0, e
+  }
+  return util.Div(p.x, 2)
+}
+// OnlyHere is called from nowhere but the error slot of a return: it must
+// still be emitted, and Slot is not a leaf, so its params survive the call.
+func OnlyHere(b i64) i64 {
+  return b + 40
+}
+func Slot(a i64, b i64) (i64, i64) {
+  return a, OnlyHere(b)
+}
+func main(io *ovid/io.Cap) i64 {
+  var sv i64, se i64 = Slot(1, 2)
+  if sv != 1 || se != 42 {
+    return 6
+  }
+  var q i64, e i64 = util.Div(10, 2)
+  if q != 5 || e != 0 {
+    return 1
+  }
+  q, e = util.Div(1, 0)
+  if q != 0 || e != util.E_ZERO {
+    return 2
+  }
+  var _, e2 i64 = Half(io, 0 - 1)
+  var h i64, _ = Half(io, 9)
+  if e2 != 1 || h != 4 {
+    return 3
+  }
+  var i i64 = 0
+  var sum i64 = 0
+  while i < 3 {
+    var d i64, de i64 = util.Div(i, i)
+    sum = sum + d + de
+    i = i + 1
+  }
+  if sum != 9 {
+    return 5
+  }
+  return h
+}

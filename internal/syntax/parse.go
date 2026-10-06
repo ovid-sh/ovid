@@ -532,7 +532,19 @@ func (p *parser) parseFunc(s int) {
 		}
 	}
 	p.expect(')')
-	p.fn.Result, p.fn.ResultSpan = p.parseType()
+	if p.peekByte('(') {
+		// Two results: (T, i64), the second an error code.
+		p.expect('(')
+		p.fn.Result, p.fn.ResultSpan = p.parseType()
+		p.expect(',')
+		p.fn.Result2, _ = p.parseType()
+		if p.fn.Result2 != "i64" {
+			p.errorf("the second result is an error code; write (%s, i64)", p.fn.Result)
+		}
+		p.expect(')')
+	} else {
+		p.fn.Result, p.fn.ResultSpan = p.parseType()
+	}
 	p.fn.Body = p.parseBlock()
 	p.fn.Span = p.span(s)
 	p.pkg.Funcs = append(p.pkg.Funcs, *p.fn)
@@ -602,6 +614,21 @@ func (p *parser) stmt(s int, id string) *ir.Node {
 		return &ir.Node{Op: op, Addr: addr, Val: val}
 	default:
 		e := p.parseExpr()
+		if p.peekByte(',') {
+			// a, b = call: the call's two results into existing locals.
+			if e.Op != "name" || e.Pkg != "" {
+				p.errorf("cannot assign to this expression")
+			}
+			p.expect(',')
+			name2 := p.ident()
+			ns2 := p.tok(name2)
+			if e.Name == "_" && name2 == "_" {
+				p.errorf("_, _ discards both results; receive the error")
+			}
+			p.expect('=')
+			v := p.parseExpr()
+			return &ir.Node{Op: "assign2", Name: e.Name, Two: &ir.Second{Name: name2, NameSpan: ns2}, Val: v, NameSpan: e.NameSpan}
+		}
 		if p.peekAssign() {
 			p.expect('=')
 			v := p.parseExpr()
@@ -629,15 +656,40 @@ func (p *parser) peekAssign() bool {
 }
 
 func (p *parser) parseVar() *ir.Node {
-	name := p.ident()
-	ns := p.tok(name)
-	typ, ts := p.parseType()
+	name, ns, typ, ts := p.varName()
 	n := &ir.Node{Op: "var", Name: name, Type: typ, NameSpan: ns, TypeSpan: ts}
+	if p.peekByte(',') {
+		// var a T, b T = call: the call's two results. _ discards one.
+		p.expect(',')
+		n.Op = "var2"
+		n.Two = &ir.Second{}
+		n.Two.Name, n.Two.NameSpan, n.Two.Type, n.Two.TypeSpan = p.varName()
+		p.expect('=')
+		n.Val = p.parseExpr()
+		if n.Name == "_" && n.Two.Name == "_" {
+			p.errorf("var _, _ discards both results; receive the error")
+		}
+		return n
+	}
+	if name == "_" {
+		p.errorf("_ only discards one of a call's two results: var x T, _ = f(...)")
+	}
 	if p.peekAssign() {
 		p.expect('=')
 		n.Val = p.parseExpr()
 	}
 	return n
+}
+
+// varName reads a var's name and type; _ has no type.
+func (p *parser) varName() (string, ir.Span, string, ir.Span) {
+	name := p.ident()
+	ns := p.tok(name)
+	if name == "_" {
+		return name, ns, "", ir.Span{}
+	}
+	typ, ts := p.parseType()
+	return name, ns, typ, ts
 }
 
 func (p *parser) parseReturn() *ir.Node {
@@ -650,6 +702,11 @@ func (p *parser) parseReturn() *ir.Node {
 		return n
 	}
 	n.Val = p.parseExpr()
+	if p.peekByte(',') {
+		// return v, e: a func with two results.
+		p.expect(',')
+		n.Val2 = p.parseExpr()
+	}
 	return n
 }
 

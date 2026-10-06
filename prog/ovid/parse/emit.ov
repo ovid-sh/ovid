@@ -103,6 +103,12 @@ func WOp(e *E, op i64) i64 {
   if op == OP_VAR {
     return WL(e, strptr("var"), 3)
   }
+  if op == OP_VAR2 {
+    return WL(e, strptr("var2"), 4)
+  }
+  if op == OP_ASSIGN2 {
+    return WL(e, strptr("assign2"), 7)
+  }
   if op == OP_ASSIGN {
     return WL(e, strptr("assign"), 6)
   }
@@ -316,6 +322,14 @@ func ENode(e *E, n *Node) i64 {
     WL(e, strptr(",\"type\":"), 8)
     WS(e, n.typp, n.typn)
   }
+  if n.name2n != 0 {
+    WL(e, strptr(",\"name2\":"), strlen(",\"name2\":"))
+    WS(e, n.name2p, n.name2n)
+  }
+  if n.typ2n != 0 {
+    WL(e, strptr(",\"type2\":"), strlen(",\"type2\":"))
+    WS(e, n.typ2p, n.typ2n)
+  }
   if n.pkgn != 0 {
     WL(e, strptr(",\"pkg\":"), 7)
     WS(e, n.pkgp, n.pkgn)
@@ -354,6 +368,7 @@ func ENode(e *E, n *Node) i64 {
   ESub(e, strptr(",\"base\":"), 8, n.base)
   ESub(e, strptr(",\"addr\":"), 8, n.addr)
   ESub(e, strptr(",\"val\":"), 7, n.val)
+  ESub(e, strptr(",\"val2\":"), strlen(",\"val2\":"), n.val2)
   ESub(e, strptr(",\"cond\":"), 8, n.cond)
   EList(e, strptr(",\"args\":["), 9, n.args)
   EList(e, strptr(",\"then\":["), 9, n.then)
@@ -512,6 +527,10 @@ func EPkg(e *E, k *Pkg) i64 {
       }
       WL(e, strptr(",\"result\":"), 10)
       WS(e, d.typp, d.typn)
+      if d.typ2n != 0 {
+        WL(e, strptr(",\"result2\":"), strlen(",\"result2\":"))
+        WS(e, d.typ2p, d.typ2n)
+      }
       e.fnp = d.namep
       e.fnn = d.namen
       EList(e, strptr(",\"body\":["), 9, d.body)

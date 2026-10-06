@@ -98,7 +98,7 @@ re-read).
 `i64`, `bool`, and pointers to structs (`*T`). Struct fields are 8 bytes and `sizeof(T)` gives a struct's size.
 Read-only constant tables (`const T [N]i64 = {...}`, read as `T[i]` with a bounds check, `len(T)`).
 No struct values, globals, function pointers, methods, generics, or implicit
-allocation. At most six parameters, one result. Operators follow Go
+allocation. At most six parameters; one result, or a value and an error code (`func F() (i64, i64)`, received as `var v i64, e i64 = F()`; a call that is not received is a check error). Operators follow Go
 precedence and are signed; `>>` is arithmetic, and `ushr`, `umulhi`, `udiv`, `urem`, and `ult` are the unsigned forms. String literals exist only as `strptr("…")`
 and `strlen("…")`, and are read-only. Memory is `load8/16/32/64`, `store8/16/32/64`, `bswap16/32/64`, and
 `ovid/io.Alloc`. `main` is `func main(io *ovid/io.Cap) i64`; `io` is the

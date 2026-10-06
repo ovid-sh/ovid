@@ -1,0 +1,9 @@
+package demo
+import ovid/io
+func Two(x i64) (i64, i64) {
+  return x, 0
+}
+func main(io *ovid/io.Cap) i64 {
+  var _, _ = Two(1) // error: syntax 20
+  return 0
+}
