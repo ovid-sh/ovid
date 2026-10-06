@@ -1323,6 +1323,23 @@ func TestProgTests(t *testing.T) {
 	}
 }
 
+// TestOutlineTable: outline shows a table in its declared shape, not as a
+// const with a value.
+func TestOutlineTable(t *testing.T) {
+	dir := mkmod(t, demo("package demo\nimport ovid/io\nconst Pow [3]i64 = {1, 10, 100}\nconst K i64 = 7\nfunc main(io *ovid/io.Cap) i64 {\n  return Pow[0] + K\n}\n"))
+	var b bytes.Buffer
+	Outline(dir, "demo", false, false, Page{}, &b)
+	sigs := map[string]any{}
+	for _, r := range lines(t, b.String()) {
+		if r["id"] != nil {
+			sigs[r["id"].(string)] = r["sig"]
+		}
+	}
+	if sigs["cn:demo.Pow"] != "const Pow [3]i64" || sigs["cn:demo.K"] != "const K i64 = 7" {
+		t.Fatalf("sigs %v", sigs)
+	}
+}
+
 // TestMoveTableUse: a func whose only use of a package is a table read or
 // its length brings that import along when it moves.
 func TestMoveTableUse(t *testing.T) {
