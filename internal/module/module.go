@@ -96,7 +96,8 @@ type Module struct {
 	locs    []*Loc
 	copies  map[string][]*Loc
 	byNode  map[any]*Loc
-	hashes  map[*Loc]string // full digests, filled on first Hash
+	hashes  map[*Loc]string // full digests, filled a decl at a time as asked for
+	byDecl  map[*Loc][]*Loc // the statements and expressions of each decl, in order
 	modSrc  []byte          // ovid.mod as read
 	noTests bool            // loaded without its _test.ov files
 }
@@ -310,6 +311,17 @@ func (m *Module) ChangedOnDisk() ([]string, error) {
 	}
 	sort.Strings(out)
 	return out, walkErr
+}
+
+// Release drops the program tree, the index, and the digests: everything
+// but what names the module and its files (Root, Name, Entry, Files, and
+// the revision's inputs). An edit calls it once the plan is made and
+// before it loads the changed module, so that two trees are never held at
+// once; the module is good for DisplayPath and Revision afterwards, and
+// for nothing that looks at a node.
+func (m *Module) Release() {
+	m.Prog = nil
+	m.index, m.order, m.locs, m.copies, m.byNode, m.hashes, m.byDecl = nil, nil, nil, nil, nil, nil, nil
 }
 
 // Reload reads the module from disk again, the way m was read: without
@@ -648,28 +660,48 @@ func (m *Module) LocDigest(l *Loc) string {
 	if l == nil {
 		return ""
 	}
+	if h, ok := m.hashes[l]; ok {
+		return h
+	}
 	if m.hashes == nil {
 		m.hashes = map[*Loc]string{}
-		type key struct {
-			decl *Loc
-			k    string
-		}
-		seen := map[key]int{}
-		for _, o := range m.Locs() {
-			text := m.Text(o.Full)
-			in := text
-			if o.Kind == "stmt" || o.Kind == "expr" {
-				k := key{o.decl, o.Kind + "\x00" + o.Decl + "\x00" + text}
-				// The decl's digest, which covers its text; it precedes its
-				// statements, so it is already known.
-				in = fmt.Sprintf("%s\x00%d\x00%s", k.k, seen[k], m.hashes[o.decl])
-				seen[k]++
-			}
-			sum := sha256.Sum256([]byte(in))
-			m.hashes[o] = hex.EncodeToString(sum[:])
-		}
+	}
+	if l.Kind != "stmt" && l.Kind != "expr" {
+		// A decl, param, field, import, or package: its text alone.
+		sum := sha256.Sum256([]byte(m.Text(l.Full)))
+		m.hashes[l] = hex.EncodeToString(sum[:])
+		return m.hashes[l]
+	}
+	// A statement or expression: its digest covers its decl's and which of
+	// the identical-text nodes of that decl it is, so the decl's nodes are
+	// done together, and only that decl's. show of one func, or an edit's
+	// receipt, used to hash every node of the module for this.
+	d := l.decl
+	declDigest := m.LocDigest(d)
+	seen := map[string]int{}
+	for _, o := range m.declNodes(d) {
+		text := m.Text(o.Full)
+		k := o.Kind + "\x00" + o.Decl + "\x00" + text
+		in := fmt.Sprintf("%s\x00%d\x00%s", k, seen[k], declDigest)
+		seen[k]++
+		sum := sha256.Sum256([]byte(in))
+		m.hashes[o] = hex.EncodeToString(sum[:])
 	}
 	return m.hashes[l]
+}
+
+// declNodes are the statements and expressions inside the decl d, in the
+// order of Locs; the lists are built once, for every decl.
+func (m *Module) declNodes(d *Loc) []*Loc {
+	if m.byDecl == nil {
+		m.byDecl = map[*Loc][]*Loc{}
+		for _, o := range m.Locs() {
+			if o.Kind == "stmt" || o.Kind == "expr" {
+				m.byDecl[o.decl] = append(m.byDecl[o.decl], o)
+			}
+		}
+	}
+	return m.byDecl[d]
 }
 
 // Revision is the first 16 digits of RevisionDigest: enough to tell an
