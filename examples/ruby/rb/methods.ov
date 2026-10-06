@@ -1,0 +1,462 @@
+package rb
+
+import ovid/io
+import ovid/mem
+
+// method calls the method n names on rv.
+func method(r *R, env *Env, n *Node, rv *Val, args *Val) *Val {
+  if nm(n, strptr("inspect")) {
+    var b *ovid/mem.Buf = ovid/mem.New(r.io, 16)
+    inspect(r, rv, b)
+    return bufStr(r, b)
+  } else if nm(n, strptr("to_s")) {
+    var b2 *ovid/mem.Buf = ovid/mem.New(r.io, 16)
+    tos(r, rv, b2)
+    return bufStr(r, b2)
+  } else if nm(n, strptr("nil?")) {
+    return mkBool(r, rv.kind == V_NIL)
+  } else if nm(n, strptr("class")) {
+    var t i64 = typeName(rv)
+    return mkStr(r, t, ovid/io.CLen(t))
+  }
+  if rv.kind == V_INT {
+    return intMethod(r, env, n, rv, args)
+  } else if rv.kind == V_STR {
+    return strMethod(r, env, n, rv, args)
+  } else if rv.kind == V_ARR {
+    return arrMethod(r, env, n, rv, args)
+  } else if rv.kind == V_RANGE {
+    if nm(n, strptr("first")) && args.n == 0 {
+      return mkInt(r, rv.i)
+    } else if nm(n, strptr("last")) && args.n == 0 {
+      return mkInt(r, rv.n)
+    } else if nm(n, strptr("include?")) && args.n == 1 && at8(args, 0).kind == V_INT {
+      var x i64 = at8(args, 0).i
+      return mkBool(r, x >= rv.i && x <= rv.n)
+    } else if nm(n, strptr("each")) && n.c != nilNode() {
+      // without building the array
+      var i i64 = rv.i
+      var going bool = i <= rv.n
+      while going {
+        yield1(r, env, n.c, mkInt(r, i))
+        i = i + 1
+        going = !cut(r) && i <= rv.n
+      }
+      return rv
+    }
+    return arrMethod(r, env, n, toArr(r, rv), args)
+  }
+  return noMethod(r, n, rv)
+}
+
+func intMethod(r *R, env *Env, n *Node, rv *Val, args *Val) *Val {
+  var x i64 = rv.i
+  if nm(n, strptr("times")) || nm(n, strptr("upto")) || nm(n, strptr("downto")) {
+    if !needBlock(r, n) {
+      return r.nilv
+    }
+    var i i64 = 0
+    var end i64 = x - 1
+    var step i64 = 1
+    if !nm(n, strptr("times")) {
+      if !arity(r, n.line, args.n, 1) || at8(args, 0).kind != V_INT {
+        return r.nilv
+      }
+      i = x
+      end = at8(args, 0).i
+      if nm(n, strptr("downto")) {
+        step = -1
+      }
+    }
+    var going bool = (step > 0 && i <= end) || (step < 0 && i >= end)
+    while going {
+      yield1(r, env, n.c, mkInt(r, i))
+      i = i + step
+      going = !cut(r) && ((step > 0 && i <= end) || (step < 0 && i >= end))
+    }
+    return rv
+  } else if nm(n, strptr("even?")) {
+    return mkBool(r, (x & 1) == 0)
+  } else if nm(n, strptr("odd?")) {
+    return mkBool(r, (x & 1) == 1)
+  } else if nm(n, strptr("zero?")) {
+    return mkBool(r, x == 0)
+  } else if nm(n, strptr("positive?")) {
+    return mkBool(r, x > 0)
+  } else if nm(n, strptr("negative?")) {
+    return mkBool(r, x < 0)
+  } else if nm(n, strptr("abs")) {
+    if x < 0 {
+      return mkInt(r, 0 - x)
+    }
+    return rv
+  } else if nm(n, strptr("succ")) {
+    return mkInt(r, x + 1)
+  } else if nm(n, strptr("pred")) {
+    return mkInt(r, x - 1)
+  } else if nm(n, strptr("to_i")) {
+    return rv
+  } else if nm(n, strptr("chr")) {
+    var c i64 = ovid/io.Alloc(r.io, 1)
+    store8(c, x)
+    return mkStr(r, c, 1)
+  } else if nm(n, strptr("digits")) {
+    var d *Val = mkArr(r, 20)
+    push(r, d, mkInt(r, x % 10))
+    x = x / 10
+    while x > 0 {
+      push(r, d, mkInt(r, x % 10))
+      x = x / 10
+    }
+    return d
+  }
+  return noMethod(r, n, rv)
+}
+
+func isSpace(c i64) bool {
+  return c == 32 || c == 9 || c == 10 || c == 13
+}
+
+func strMethod(r *R, env *Env, n *Node, rv *Val, args *Val) *Val {
+  if nm(n, strptr("length")) || nm(n, strptr("size")) {
+    return mkInt(r, rv.n)
+  } else if nm(n, strptr("empty?")) {
+    return mkBool(r, rv.n == 0)
+  } else if nm(n, strptr("upcase")) || nm(n, strptr("downcase")) || nm(n, strptr("capitalize")) || nm(n, strptr("reverse")) {
+    var d i64 = ovid/io.Alloc(r.io, rv.n + 1)
+    var i i64 = 0
+    while i < rv.n {
+      var c i64 = load8(rv.p + i)
+      var up bool = nm(n, strptr("upcase")) || (nm(n, strptr("capitalize")) && i == 0)
+      if up && c >= 97 && c <= 122 {
+        c = c - 32
+      } else if !up && !nm(n, strptr("reverse")) && c >= 65 && c <= 90 {
+        c = c + 32
+      }
+      if nm(n, strptr("reverse")) {
+        store8(d + ((rv.n - 1) - i), c)
+      } else {
+        store8(d + i, c)
+      }
+      i = i + 1
+    }
+    return mkStr(r, d, rv.n)
+  } else if nm(n, strptr("to_i")) {
+    var j i64 = 0
+    var neg bool = false
+    while j < rv.n && isSpace(load8(rv.p + j)) {
+      j = j + 1
+    }
+    if j < rv.n && load8(rv.p + j) == 45 {
+      neg = true
+      j = j + 1
+    }
+    var v i64 = 0
+    while j < rv.n && isDigit(load8(rv.p + j)) {
+      v = (v * 10) + (load8(rv.p + j) - 48)
+      j = j + 1
+    }
+    if neg {
+      v = 0 - v
+    }
+    return mkInt(r, v)
+  } else if nm(n, strptr("include?")) || nm(n, strptr("start_with?")) || nm(n, strptr("end_with?")) {
+    if !arity(r, n.line, args.n, 1) {
+      return r.nilv
+    }
+    var s *Val = at8(args, 0)
+    if s.kind != V_STR {
+      return binErr(r, 0, rv, s, n.line)
+    }
+    if s.n > rv.n {
+      return r.falsev
+    }
+    if nm(n, strptr("start_with?")) {
+      return mkBool(r, ovid/mem.Eq(rv.p, s.n, s.p, s.n))
+    } else if nm(n, strptr("end_with?")) {
+      return mkBool(r, ovid/mem.Eq((rv.p + rv.n) - s.n, s.n, s.p, s.n))
+    }
+    var k i64 = 0
+    while (k + s.n) <= rv.n {
+      if ovid/mem.Eq(rv.p + k, s.n, s.p, s.n) {
+        return r.truev
+      }
+      k = k + 1
+    }
+    return r.falsev
+  } else if nm(n, strptr("chars")) || nm(n, strptr("each_char")) {
+    var a *Val = mkArr(r, rv.n)
+    var m i64 = 0
+    while m < rv.n {
+      push(r, a, mkStr(r, rv.p + m, 1))
+      m = m + 1
+    }
+    if nm(n, strptr("each_char")) {
+      return arrMethod(r, env, n, a, args)
+    }
+    return a
+  } else if nm(n, strptr("strip")) {
+    var lo i64 = 0
+    var hi i64 = rv.n
+    while lo < hi && isSpace(load8(rv.p + lo)) {
+      lo = lo + 1
+    }
+    while hi > lo && isSpace(load8((rv.p + hi) - 1)) {
+      hi = hi - 1
+    }
+    return mkStr(r, rv.p + lo, hi - lo)
+  } else if nm(n, strptr("split")) {
+    return split(r, rv, args)
+  }
+  return noMethod(r, n, rv)
+}
+
+// split is String#split: on whitespace runs, or on the given separator.
+func split(r *R, rv *Val, args *Val) *Val {
+  var out *Val = mkArr(r, 8)
+  var i i64 = 0
+  if args.n == 0 || (at8(args, 0).kind == V_STR && at8(args, 0).n == 1 && load8(at8(args, 0).p) == 32) {
+    while i < rv.n {
+      while i < rv.n && isSpace(load8(rv.p + i)) {
+        i = i + 1
+      }
+      var s i64 = i
+      while i < rv.n && !isSpace(load8(rv.p + i)) {
+        i = i + 1
+      }
+      if i > s {
+        push(r, out, mkStr(r, rv.p + s, i - s))
+      }
+    }
+    return out
+  }
+  var sep *Val = at8(args, 0)
+  var start i64 = 0
+  while (i + sep.n) <= rv.n && sep.n > 0 {
+    if ovid/mem.Eq(rv.p + i, sep.n, sep.p, sep.n) {
+      push(r, out, mkStr(r, rv.p + start, i - start))
+      i = i + sep.n
+      start = i
+    } else {
+      i = i + 1
+    }
+  }
+  push(r, out, mkStr(r, rv.p + start, rv.n - start))
+  // Ruby drops trailing empty fields
+  while out.n > 0 && at8(out, out.n - 1).n == 0 {
+    out.n = out.n - 1
+  }
+  return out
+}
+
+func arrMethod(r *R, env *Env, n *Node, a *Val, args *Val) *Val {
+  if nm(n, strptr("length")) || nm(n, strptr("size")) || (nm(n, strptr("count")) && args.n == 0 && n.c == nilNode()) {
+    return mkInt(r, a.n)
+  } else if nm(n, strptr("empty?")) {
+    return mkBool(r, a.n == 0)
+  } else if nm(n, strptr("to_a")) {
+    return a
+  } else if nm(n, strptr("first")) {
+    if a.n == 0 {
+      return r.nilv
+    }
+    return at8(a, 0)
+  } else if nm(n, strptr("last")) {
+    if a.n == 0 {
+      return r.nilv
+    }
+    return at8(a, a.n - 1)
+  } else if nm(n, strptr("push")) {
+    var i i64 = 0
+    while i < args.n {
+      push(r, a, at8(args, i))
+      i = i + 1
+    }
+    return a
+  } else if nm(n, strptr("pop")) {
+    if a.n == 0 {
+      return r.nilv
+    }
+    a.n = a.n - 1
+    return at8(a, a.n)
+  } else if nm(n, strptr("include?")) {
+    if !arity(r, n.line, args.n, 1) {
+      return r.nilv
+    }
+    var j i64 = 0
+    while j < a.n {
+      if valEq(at8(a, j), at8(args, 0)) {
+        return r.truev
+      }
+      j = j + 1
+    }
+    return r.falsev
+  } else if nm(n, strptr("reverse")) {
+    var rev *Val = mkArr(r, a.n)
+    var k i64 = a.n - 1
+    while k >= 0 {
+      push(r, rev, at8(a, k))
+      k = k - 1
+    }
+    return rev
+  } else if nm(n, strptr("join")) {
+    var b *ovid/mem.Buf = ovid/mem.New(r.io, 32)
+    var m i64 = 0
+    while m < a.n {
+      if m > 0 && args.n > 0 {
+        tos(r, at8(args, 0), b)
+      }
+      tos(r, at8(a, m), b)
+      m = m + 1
+    }
+    return bufStr(r, b)
+  } else if nm(n, strptr("sum")) && n.c == nilNode() {
+    var acc *Val = mkInt(r, 0)
+    if args.n > 0 {
+      acc = at8(args, 0)
+    }
+    var s i64 = 0
+    while s < a.n && !r.err {
+      acc = evalBin(r, OP_ADD, acc, at8(a, s), n.line)
+      s = s + 1
+    }
+    return acc
+  } else if nm(n, strptr("min")) || nm(n, strptr("max")) {
+    if a.n == 0 {
+      return r.nilv
+    }
+    var best *Val = at8(a, 0)
+    var q i64 = 1
+    while q < a.n && !r.err {
+      var c i64 = cmpv(r, at8(a, q), best, n.line)
+      if (nm(n, strptr("min")) && c < 0) || (nm(n, strptr("max")) && c > 0) {
+        best = at8(a, q)
+      }
+      q = q + 1
+    }
+    return best
+  } else if nm(n, strptr("sort")) {
+    return sortArr(r, a, n.line)
+  } else if nm(n, strptr("uniq")) {
+    var u *Val = mkArr(r, a.n)
+    var x i64 = 0
+    while x < a.n {
+      var seen bool = false
+      var y i64 = 0
+      while y < u.n && !seen {
+        seen = valEq(at8(u, y), at8(a, x))
+        y = y + 1
+      }
+      if !seen {
+        push(r, u, at8(a, x))
+      }
+      x = x + 1
+    }
+    return u
+  }
+  return iterMethod(r, env, n, a, args)
+}
+
+// iterMethod is the Array methods that take a block.
+func iterMethod(r *R, env *Env, n *Node, a *Val, args *Val) *Val {
+  var each bool = nm(n, strptr("each")) || nm(n, strptr("each_char"))
+  var withIdx bool = nm(n, strptr("each_with_index"))
+  var mapv bool = nm(n, strptr("map")) || nm(n, strptr("collect"))
+  var sel bool = nm(n, strptr("select")) || nm(n, strptr("filter"))
+  var rej bool = nm(n, strptr("reject"))
+  var cnt bool = nm(n, strptr("count"))
+  var any bool = nm(n, strptr("any?"))
+  var all bool = nm(n, strptr("all?"))
+  var find bool = nm(n, strptr("find")) || nm(n, strptr("detect"))
+  var sum bool = nm(n, strptr("sum"))
+  var red bool = nm(n, strptr("reduce")) || nm(n, strptr("inject"))
+  if !(each || withIdx || mapv || sel || rej || cnt || any || all || find || sum || red) {
+    return noMethod(r, n, a)
+  }
+  if !needBlock(r, n) {
+    return r.nilv
+  }
+  var out *Val = mkArr(r, a.n)
+  var acc *Val = mkInt(r, 0)
+  var i i64 = 0
+  if red {
+    if args.n > 0 {
+      acc = at8(args, 0)
+    } else if a.n > 0 {
+      acc = at8(a, 0)
+      i = 1
+    } else {
+      return r.nilv
+    }
+  }
+  var c i64 = 0
+  var going bool = i < a.n
+  while going {
+    var x *Val = at8(a, i)
+    var y *Val = r.nilv
+    if withIdx {
+      y = yield2(r, env, n.c, x, mkInt(r, i))
+    } else if red {
+      y = yield2(r, env, n.c, acc, x)
+      acc = y
+    } else {
+      y = yield1(r, env, n.c, x)
+    }
+    i = i + 1
+    going = i < a.n
+    if cut(r) {
+      return r.nilv
+    }
+    if mapv {
+      push(r, out, y)
+    } else if (sel && truthy(y)) || (rej && !truthy(y)) {
+      push(r, out, x)
+    } else if cnt && truthy(y) {
+      c = c + 1
+    } else if any && truthy(y) {
+      return r.truev
+    } else if all && !truthy(y) {
+      return r.falsev
+    } else if find && truthy(y) {
+      return x
+    } else if sum {
+      acc = evalBin(r, OP_ADD, acc, y, n.line)
+    }
+  }
+  if mapv || sel || rej {
+    return out
+  } else if cnt {
+    return mkInt(r, c)
+  } else if any {
+    return r.falsev
+  } else if all {
+    return r.truev
+  } else if find {
+    return r.nilv
+  } else if sum || red {
+    return acc
+  }
+  return a
+}
+
+// sortArr returns a sorted copy (insertion sort).
+func sortArr(r *R, a *Val, line i64) *Val {
+  var s *Val = mkArr(r, a.n)
+  var i i64 = 0
+  while i < a.n {
+    push(r, s, at8(a, i))
+    i = i + 1
+  }
+  i = 1
+  while i < s.n && !r.err {
+    var v *Val = at8(s, i)
+    var j i64 = i - 1
+    while j >= 0 && cmpv(r, at8(s, j), v, line) > 0 {
+      store64(s.p + ((j + 1) * 8), load64(s.p + (j * 8)))
+      j = j - 1
+    }
+    store64(s.p + ((j + 1) * 8), v as i64)
+    i = i + 1
+  }
+  return s
+}
