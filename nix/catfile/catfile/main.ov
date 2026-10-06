@@ -1,0 +1,18 @@
+package catfile
+import ovid/io
+// main prints the file named by its argument: more system calls than
+// hello (open, fstat, read, close), for the NixOS test's syscall filter.
+func main(io *ovid/io.Cap) i64 {
+  if ovid/io.Argc(io) != 2 {
+    ovid/io.Eprint(strptr("usage: catfile FILE\n"))
+    return 64
+  }
+  var path i64 = ovid/io.Arg(io, 1)
+  var cell i64 = ovid/io.Alloc(io, 16)
+  if ovid/io.ReadFile(io, path, ovid/io.CLen(path), cell, cell + 8) < 0 {
+    ovid/io.Eprint(strptr("catfile: cannot read\n"))
+    return 1
+  }
+  ovid/io.Stdout(load64(cell), load64(cell + 8))
+  return 0
+}
