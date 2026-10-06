@@ -803,16 +803,17 @@ func RecvTy(c *Ch, s *ovid/parse.Node, np i64, nn i64, tp i64, tn i64) i64 {
     var kind i64 = TyKind(c, tp, tn)
     if kind < 0 {
       Err(c, strptr("bad_type"), strlen("bad_type"), tp, tn)
-      SetBad(c)
-      return c.typ
-    }
-    if kind == 1 {
+    } else if kind == 1 {
       Err(c, strptr("struct_value"), strlen("struct_value"), np, nn)
     }
     if Lookup(c, np, nn) != 0 {
       Err(c, strptr("duplicate_name"), strlen("duplicate_name"), np, nn)
     }
-    SetTy(c, tp, tn)
+    if kind < 0 {
+      SetBad(c)
+    } else {
+      SetTy(c, tp, tn)
+    }
     return c.typ
   }
   var loc i64 = Lookup(c, np, nn)
@@ -926,7 +927,9 @@ func CheckStmt(c *Ch, s *ovid/parse.Node) i64 {
         Err(c, strptr("arity"), strlen("arity"), strptr("two names receive one value"), strlen("two names receive one value"))
       }
     } else {
-      if t1n >= 0 && !TyEq(t1p, t1n, strptr("invalid"), strlen("invalid")) && !TyEq(t1p, t1n, callee.typp, callee.typn) {
+      // A callee whose result type is unknown was reported at its decl.
+      var known bool = !TyEq(callee.typp, callee.typn, strptr("invalid"), strlen("invalid"))
+      if known && t1n >= 0 && !TyEq(t1p, t1n, strptr("invalid"), strlen("invalid")) && !TyEq(t1p, t1n, callee.typp, callee.typn) {
         Err(c, strptr("type_mismatch"), strlen("type_mismatch"), strptr("first result"), strlen("first result"))
       }
       if t2n >= 0 && !TyEq(t2p, t2n, strptr("invalid"), strlen("invalid")) && !TyEq(t2p, t2n, strptr("i64"), strlen("i64")) {
