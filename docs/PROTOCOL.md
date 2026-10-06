@@ -412,7 +412,8 @@ it wrote and the new hashes of the decls it touched, so a follow-up edit can
 func, type, or const the op wrote into, or every one its text holds (an
 `append` or `insert` of several decls, or a decl replaced by several),
 each with its `text` under `--show`; a `delete` lists the decl it was in (none for a decl deleted whole, not the neighbour now at its place). Rename adds `from`, `id`, `to`, `refs`,
-`edits`; move adds `from`, `to` (the new id), `file`, `refs`, `edits`. A
+`edits`, and `doc` (whether the first word of the decl's doc comment was
+its name and was renamed with it); move adds `from`, `to` (the new id), `file`, `refs`, `edits`. A
 move of several decls prints one such receipt per decl, in order, then
 `{"ok":true,"moved":[NAME...],"to":PKG,"written":BOOL}`. Each move is
 planned in memory over the ones before it, and only when every one has

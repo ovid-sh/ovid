@@ -117,13 +117,43 @@ func Rename(dir, q, to string, dryRun bool, w io.Writer) int {
 	for _, r := range rs {
 		add(r.tok)
 	}
+	// The first word of the decl's doc comment, when that is the name:
+	// "// Name does ..." is the convention, and a renamed decl whose
+	// comment still opens with the old name reads as a mistake.
+	doc := false
+	if sp, ok := docName(m, t, old); ok {
+		add(sp)
+		doc = true
+	}
 	for _, s := range sps {
 		if s.abs == "" {
 			return fail(w, "std", "a use sits in a shipped package", "")
 		}
 	}
 	return applySplices(w, dir, m, sps, nil, dryRun, guardNoWorse, false,
-		map[string]any{"from": t.ID, "to": to, "edits": len(sps), "refs": len(rs), "id": renamedID(t, old, to)})
+		map[string]any{"from": t.ID, "to": to, "edits": len(sps), "refs": len(rs), "id": renamedID(t, old, to), "doc": doc})
+}
+
+// docName is the span of the first word of l's doc comment, if l has one
+// and that word is name: the "// Name ..." convention.
+func docName(m *module.Module, l *module.Loc, name string) (ir.Span, bool) {
+	if l.Full.Off >= l.Span.Off {
+		return ir.Span{}, false
+	}
+	src := m.Files[l.Span.File].Src
+	i := l.Full.Off
+	if i+2 > len(src) || src[i] != '/' || src[i+1] != '/' {
+		return ir.Span{}, false
+	}
+	i += 2
+	for i < len(src) && src[i] == ' ' {
+		i++
+	}
+	end := i + len(name)
+	if end > len(src) || string(src[i:end]) != name || (end < len(src) && identByte(src[end])) {
+		return ir.Span{}, false
+	}
+	return ir.Span{File: l.Span.File, Off: i, End: end}, true
 }
 
 func nameOf(l *module.Loc) string {
