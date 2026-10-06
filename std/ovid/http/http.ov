@@ -261,25 +261,40 @@ func SentHeaderLen(res *Response, name i64, n i64) i64 {
 // body is the rest of the input. A request that cannot be read comes back
 // with Err set, and its handler should not run.
 func ReadStdio(io *ovid/io.Cap) *Request {
-  var b *ovid/mem.Buf = ovid/mem.New(io, 4096)
   var r *Request = ovid/io.Alloc(io, sizeof(Request)) as *Request
+  // The buffer doubles up to one byte past MAX_REQUEST and no further:
+  // that byte tells input of exactly the limit from input over it, and
+  // no read goes past it.
+  var max i64 = MAX_REQUEST + 1
+  var cap i64 = 4096
+  var p i64 = ovid/io.Alloc(io, cap)
+  var len i64 = 0
   var n i64 = 1
-  while n > 0 && b.len <= MAX_REQUEST {
-    ovid/mem.Grow(io, b, 4096)
-    n = ovid/io.Read(0, b.data + b.len, b.cap - b.len)
+  while n > 0 && len < max {
+    if len == cap {
+      var nc i64 = cap * 2
+      if nc > max {
+        nc = max
+      }
+      var np i64 = ovid/io.Alloc(io, nc)
+      ovid/mem.Copy(np, p, len)
+      p = np
+      cap = nc
+    }
+    n = ovid/io.Read(0, p + len, cap - len)
     if n > 0 {
-      b.len = b.len + n
+      len = len + n
     }
   }
   if n < 0 {
     r.err = ERR_SYNTAX
     return r
   }
-  if b.len > MAX_REQUEST {
+  if len > MAX_REQUEST {
     r.err = ERR_TOO_LARGE
     return r
   }
-  Parse(r, b.data, b.len)
+  Parse(r, p, len)
   return r
 }
 
