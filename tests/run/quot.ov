@@ -128,8 +128,9 @@ func Calls(x i64) i64 {
   return bad + (Nz(r - rmod(x, 7)) + Nz(q - rdiv(x, 7)))
 }
 
-// Full has more heavy locals than callee-saved registers, so it has none
-// left for a quotient, and some locals live in the frame.
+// Full has more heavy locals than callee-saved registers, so it keeps its
+// quotient in a temp register, which a call clobbers, and some locals live
+// in the frame.
 func Full(x i64) i64 {
   var a i64 = x
   var b i64 = x + 1
@@ -144,6 +145,18 @@ func Full(x i64) i64 {
     bad = bad + Nz((a / 10) - rdiv(a, 10))
     bad = bad + Nz((f % 10) - rmod(f, 10))
     bad = bad + Nz((f / 10) - rdiv(f, 10))
+    // A call between: the quotient of a must not outlive it.
+    var r i64 = a % 10
+    var z i64 = Inner(b)
+    var q i64 = a / 10
+    bad = bad + (Nz(r - rmod(a, 10)) + Nz(q - rdiv(a, 10)))
+    bad = bad + Nz(z - Inner(b))
+    // Temps six deep, while a quotient is kept.
+    r = a % 10
+    var s i64 = (a * 3) + ((b * 3) + ((c * 3) + ((d * 3) + ((e * 3) + ((f * 3) + (a * 5))))))
+    q = a / 10
+    bad = bad + (Nz(r - rmod(a, 10)) + Nz(q - rdiv(a, 10)))
+    bad = bad + Nz(s - (((((a + b) + (c + d)) + (e + f)) * 3) + (a * 5)))
     a = a + b
     b = b + c
     c = c + d

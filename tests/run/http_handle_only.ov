@@ -1,0 +1,35 @@
+// stdin: "POST /hello?name=x HTTP/1.1\r\n"
+// stdin: "Host: example.com\r\n"
+// stdin: "content-length:  5 \r\n"
+// stdin: "\r\n"
+// stdin: "worldNOT-BODY"
+// stdout: "HTTP/1.1 200 OK\r\n"
+// stdout: "Content-Type: text/plain\r\n"
+// stdout: "X-Query: name=x\r\n"
+// stdout: "Content-Length: 37\r\n"
+// stdout: "\r\n"
+// stdout: "hello, world (POST, host example.com)"
+package demo
+
+import ovid/io
+import ovid/http
+
+// handle is the program; with no main, the toolchain writes the stdio host.
+func handle(io *ovid/io.Cap, req *ovid/http.Request, res *ovid/http.Response) i64 {
+  if !ovid/http.PathIs(req, strptr("/hello"), strlen("/hello")) {
+    ovid/http.SetStatus(res, 404)
+    return 0
+  }
+  ovid/http.SetHeader(io, res, strptr("Content-Type"), strlen("Content-Type"), strptr("text/plain"), strlen("text/plain"))
+  ovid/http.SetHeader(io, res, strptr("X-Query"), strlen("X-Query"), ovid/http.Query(req), ovid/http.QueryLen(req))
+  ovid/http.Write(io, res, strptr("hello, "), strlen("hello, "))
+  ovid/http.Write(io, res, ovid/http.Body(req), ovid/http.BodyLen(req))
+  ovid/http.Write(io, res, strptr(" ("), strlen(" ("))
+  ovid/http.Write(io, res, ovid/http.Method(req), ovid/http.MethodLen(req))
+  ovid/http.Write(io, res, strptr(", host "), strlen(", host "))
+  var host i64 = ovid/http.Header(req, strptr("HOST"), strlen("HOST"))
+  ovid/http.Write(io, res, host, ovid/http.HeaderLen(req, strptr("HOST"), strlen("HOST")))
+  ovid/http.Write(io, res, strptr(")"), strlen(")"))
+  return 0
+}
+

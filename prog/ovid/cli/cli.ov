@@ -177,6 +177,9 @@ func CmdBuild(io *ovid/io.Cap) i64 {
   if ovid/check.Run(io, m, true) != 0 {
     return 1
   }
+  if ovid/parse.ServeHost(m) != 0 {
+    return Fail(io, strptr("compile"), strlen("compile"), strptr("serve host: syntax"), strlen("serve host: syntax"))
+  }
   var out i64 = a.out
   if out == 0 {
     var bin i64 = Join(io, m.dirp, m.dirn, strptr("bin"), 3)
