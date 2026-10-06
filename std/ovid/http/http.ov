@@ -5,16 +5,27 @@ import ovid/mem
 
 // A program that serves is a handler: it is given a request and fills in
 // a response, and never sees a listener or a connection (#127). The host
-// around it is a few lines of main. The stdio host reads one request from
-// standard input and writes the response to standard output:
+// around it is a few lines of main. The stdio host reads requests one
+// after another from standard input and writes each response to standard
+// output, and between two of them gives back the heap the last one used:
 //
 //   func main(io *ovid/io.Cap) i64 {
-//     var req *ovid/http.Request = ovid/http.ReadStdio(io)
-//     var res *ovid/http.Response = ovid/http.NewResponse(io)
-//     if ovid/http.Err(req) != 0 {
-//       return ovid/http.WriteStdio(io, req, res, 0)
+//     var s *ovid/http.Stdio = ovid/http.NewStdio(io)
+//     var m *ovid/io.HeapMark = ovid/io.MarkHeap(io)
+//     var req *ovid/http.Request = ovid/http.NextStdio(io, s)
+//     while req != 0 as *ovid/http.Request {
+//       var res *ovid/http.Response = ovid/http.NewResponse(io)
+//       var result i64 = 0
+//       if ovid/http.Err(req) == 0 {
+//         result = handle(io, req, res)
+//       }
+//       if ovid/http.WriteStdio(io, req, res, result) != 0 {
+//         return 1
+//       }
+//       ovid/io.ResetHeap(io, m)
+//       req = ovid/http.NextStdio(io, s)
 //     }
-//     return ovid/http.WriteStdio(io, req, res, handle(io, req, res))
+//     return 0
 //   }
 //
 // Bodies are buffered: the whole request is read before the handler runs,
@@ -49,8 +60,23 @@ const ERR_SYNTAX i64 = 1
 const ERR_TOO_LARGE i64 = 2
 const ERR_UNSUPPORTED i64 = 3
 
-// MAX_REQUEST is the most bytes ReadStdio reads, head and body together.
+// MAX_REQUEST is the most bytes a request read from standard input takes,
+// head and body together.
 const MAX_REQUEST i64 = 8 << 20
+
+// Stdio reads requests from standard input. Its buffer holds, from start
+// to len, the request being served and what was read past it; outside
+// that range it is all zeros. The request being served takes used bytes;
+// scan is how far the search for the end of a head has looked.
+type Stdio struct {
+  buf i64
+  start i64
+  len i64
+  used i64
+  scan i64
+  eof i64
+  done bool
+}
 
 // Method is the address of the request method ("GET"); MethodLen its length.
 func Method(r *Request) i64 {
@@ -256,47 +282,162 @@ func SentHeaderLen(res *Response, name i64, n i64) i64 {
   return valueEnd(res.hdr.data, res.hdr.len, s) - s
 }
 
-// ReadStdio reads one HTTP/1.1 request from standard input: the request
-// line and header lines, each ending in CRLF, an empty line, then the
-// body. With Content-Length the body is that many bytes; without it the
-// body is the rest of the input. A request that cannot be read comes back
-// with Err set, and its handler should not run.
-func ReadStdio(io *ovid/io.Cap) *Request {
-  var r *Request = ovid/io.Alloc(io, sizeof(Request)) as *Request
-  // The buffer doubles up to one byte past MAX_REQUEST and no further:
-  // that byte distinguishes input of exactly the limit from input over
-  // it, and no read goes past it.
-  var max i64 = MAX_REQUEST + 1
-  var cap i64 = 4096
-  var p i64 = ovid/io.Alloc(io, cap)
-  var len i64 = 0
-  var n i64 = 1
-  while n > 0 && len < max {
-    if len == cap {
-      var nc i64 = cap * 2
-      if nc > max {
-        nc = max
-      }
-      var np i64 = ovid/io.Alloc(io, nc)
-      ovid/mem.Copy(np, p, len)
-      p = np
-      cap = nc
-    }
-    n = ovid/io.Read(0, p + len, cap - len)
-    if n > 0 {
-      len = len + n
-    }
+// NewStdio is a reader of the requests on standard input. Make it before
+// any heap mark: its buffer must outlive every reset.
+func NewStdio(io *ovid/io.Cap) *Stdio {
+  var s *Stdio = ovid/io.Alloc(io, sizeof(Stdio)) as *Stdio
+  // One byte past MAX_REQUEST tells a head of exactly the limit from one
+  // over it, and no read goes past it. The pages are not touched until a
+  // request reaches them.
+  s.buf = ovid/io.Alloc(io, MAX_REQUEST + 1)
+  return s
+}
+
+// NextStdio reads the next HTTP/1.1 request from standard input: the
+// request line and header lines, each ending in CRLF, an empty line, then
+// a body of Content-Length bytes, or none without it. What follows is the
+// next request. At the end of the input it returns 0. A request that
+// cannot be read comes back with Err set, its handler should not run, and
+// it is the last: the requests after it cannot be told apart. The request
+// points into the reader's buffer until the next call, which drops it and
+// zeroes the bytes it took.
+func NextStdio(io *ovid/io.Cap, s *Stdio) *Request {
+  if s.done {
+    return 0 as *Request
   }
-  if n < 0 {
+  if s.used > 0 {
+    zero(s.buf + s.start, s.used)
+    s.start = s.start + s.used
+    s.used = 0
+    s.scan = 0
+  }
+  var max i64 = MAX_REQUEST + 1
+  var h i64 = headEnd(s)
+  while h < 0 && (s.len - s.start) < max && s.eof == 0 {
+    fill(s, max)
+    h = headEnd(s)
+  }
+  if h < 0 && s.len == s.start && s.eof == 1 {
+    s.done = true
+    return 0 as *Request
+  }
+  var r *Request = ovid/io.Alloc(io, sizeof(Request)) as *Request
+  s.done = true
+  if h < 0 {
+    // The input ended, or could not be read, inside a head; or the head
+    // is longer than a request may be.
     r.err = ERR_SYNTAX
+    if (s.len - s.start) >= max {
+      r.err = ERR_TOO_LARGE
+    }
     return r
   }
-  if len > MAX_REQUEST {
+  var p i64 = s.buf + s.start
+  var bl i64 = bodyLen(p, h)
+  if bl == -2 || (bl >= 0 && (h + bl) > MAX_REQUEST) {
     r.err = ERR_TOO_LARGE
     return r
   }
-  Parse(r, p, len)
+  if bl < 0 {
+    if Parse(r, p, h) == 0 {
+      r.err = ERR_SYNTAX
+    }
+    return r
+  }
+  while (s.len - s.start) < (h + bl) && s.eof == 0 {
+    fill(s, h + bl)
+  }
+  // fill may have moved the request to the start of the buffer.
+  p = s.buf + s.start
+  if (s.len - s.start) < (h + bl) {
+    r.err = ERR_SYNTAX
+    return r
+  }
+  s.used = h + bl
+  s.done = Parse(r, p, h + bl) != 0
   return r
+}
+
+// ReadStdio is the first request NextStdio reads; what follows it is
+// ignored. Empty input is a request with Err set, not 0.
+func ReadStdio(io *ovid/io.Cap) *Request {
+  var r *Request = NextStdio(io, NewStdio(io))
+  if r == 0 as *Request {
+    r = ovid/io.Alloc(io, sizeof(Request)) as *Request
+    r.err = ERR_SYNTAX
+  }
+  return r
+}
+
+// fill reads more of standard input into s, up to want bytes from start.
+// When the buffer has no room for them, what is left of it moves to the
+// front first, and the bytes it leaves are zeroed. At the end of the input
+// s.eof is 1, and 2 when it could not be read.
+func fill(s *Stdio, want i64) i64 {
+  if (s.start + want) > (MAX_REQUEST + 1) {
+    var rest i64 = s.len - s.start
+    ovid/mem.Copy(s.buf, s.buf + s.start, rest)
+    zero(s.buf + rest, s.start)
+    s.len = rest
+    s.start = 0
+  }
+  var n i64 = ovid/io.Read(0, s.buf + s.len, (s.start + want) - s.len)
+  if n > 0 {
+    s.len = s.len + n
+  } else if n == 0 {
+    s.eof = 1
+  } else {
+    s.eof = 2
+  }
+  return n
+}
+
+// headEnd is the offset from start just past the empty line that ends the
+// head there, or -1 when it has not been read yet. A search resumes where
+// the last one stopped.
+func headEnd(s *Stdio) i64 {
+  var p i64 = s.buf + s.start
+  var n i64 = s.len - s.start
+  var i i64 = s.scan
+  while (i + 3) < n {
+    if load8(p + i) == 13 && load8((p + i) + 1) == 10 && load8((p + i) + 2) == 13 && load8((p + i) + 3) == 10 {
+      return i + 4
+    }
+    i = i + 1
+  }
+  s.scan = i
+  return -1
+}
+
+// bodyLen is the Content-Length of the head of h bytes at p, 0 without
+// one, -2 when it is more than MAX_REQUEST, and -1 when it is not a
+// number or the head is not one Parse would take.
+func bodyLen(p i64, h i64) i64 {
+  var eol i64 = lineEnd(p, h, 0)
+  if eol < 0 {
+    return -1
+  }
+  var hs i64 = eol + 2
+  var hn i64 = (h - 2) - hs
+  if hn <= 0 {
+    return 0
+  }
+  var cl i64 = findHeader(p + hs, hn, strptr("content-length"), strlen("content-length"))
+  if cl < 0 {
+    return 0
+  }
+  var vs i64 = valueStart(p + hs, hn, cl)
+  return parseLen((p + hs) + vs, valueEnd(p + hs, hn, vs) - vs)
+}
+
+// zero clears the n bytes at p.
+func zero(p i64, n i64) i64 {
+  var i i64 = 0
+  while i < n {
+    store8(p + i, 0)
+    i = i + 1
+  }
+  return 0
 }
 
 // Parse fills r from the n bytes of a whole request at p and returns 0;
@@ -631,8 +772,8 @@ func validValue(p i64, n i64) bool {
   return true
 }
 
-// parseLen is the decimal number in the n bytes at p, or -1 when they are
-// not all digits or the number is past MAX_REQUEST.
+// parseLen is the decimal number in the n bytes at p, -1 when they are not
+// all digits, or -2 when the number is past MAX_REQUEST.
 func parseLen(p i64, n i64) i64 {
   if n <= 0 {
     return -1
@@ -644,11 +785,14 @@ func parseLen(p i64, n i64) i64 {
     if c < 48 || c > 57 {
       return -1
     }
-    v = (v * 10) + (c - 48)
-    if v > MAX_REQUEST {
-      return -1
+    // Past the limit v stops growing, so it cannot overflow.
+    if v <= MAX_REQUEST {
+      v = (v * 10) + (c - 48)
     }
     i = i + 1
+  }
+  if v > MAX_REQUEST {
+    return -2
   }
   return v
 }

@@ -2,7 +2,7 @@
 // stdin: "Host: example.com\r\n"
 // stdin: "content-length:  5 \r\n"
 // stdin: "\r\n"
-// stdin: "worldNOT-BODY"
+// stdin: "world"
 // stdout: "HTTP/1.1 200 OK\r\n"
 // stdout: "Content-Type: text/plain\r\n"
 // stdout: "X-Query: name=x\r\n"

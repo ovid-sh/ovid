@@ -165,21 +165,35 @@ are handles: outside ovid/io a pointer to one cannot be made by a cast, cast
 to anything, or have its fields read or written (opaque_type).
 
 Serving HTTP: write a handler in the entry package and no main; build
-makes the program the stdio host around it, which reads one request from
-stdin and writes the response to stdout (ovid help std, ovid/http), so a
-platform that spawns the binary per request can run it:
+makes the program the stdio host around it, which reads the requests on
+stdin one after another, HTTP/1.1 framed (a body is Content-Length bytes,
+none without it), and writes each response to stdout (ovid help std,
+ovid/http), so a platform can spawn the binary per request or keep it
+running. A request that cannot be read is answered (400, 413, 501) and is
+the last. Between two requests the heap is reset: nothing a request
+allocated is there for the next.
   func handle(io *ovid/io.Cap, req *ovid/http.Request, res *ovid/http.Response) i64 {
     ovid/http.Write(io, res, strptr("hi"), strlen("hi"))
     return 0                        // anything else answers 500
   }
 A main, if there is one, is the entry instead; the host it replaces is
   func main(io *ovid/io.Cap) i64 {
-    var req *ovid/http.Request = ovid/http.ReadStdio(io)
-    var res *ovid/http.Response = ovid/http.NewResponse(io)
-    if ovid/http.Err(req) != 0 {
-      return ovid/http.WriteStdio(io, req, res, 0)
+    var s *ovid/http.Stdio = ovid/http.NewStdio(io)
+    var m *ovid/io.HeapMark = ovid/io.MarkHeap(io)
+    var req *ovid/http.Request = ovid/http.NextStdio(io, s)
+    while req != 0 as *ovid/http.Request {
+      var res *ovid/http.Response = ovid/http.NewResponse(io)
+      var result i64 = 0
+      if ovid/http.Err(req) == 0 {
+        result = handle(io, req, res)
+      }
+      if ovid/http.WriteStdio(io, req, res, result) != 0 {
+        return 1
+      }
+      ovid/io.ResetHeap(io, m)
+      req = ovid/http.NextStdio(io, s)
     }
-    return ovid/http.WriteStdio(io, req, res, handle(io, req, res))
+    return 0
   }
 A test calls handle with ovid/http.NewRequest and reads ovid/http.Sent.
 
