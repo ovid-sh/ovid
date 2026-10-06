@@ -1,0 +1,7 @@
+package demo
+import ovid/io
+import util
+const N i64 = len(util.Primes) // error: syntax 31
+func main(io *ovid/io.Cap) i64 {
+  return N
+}
