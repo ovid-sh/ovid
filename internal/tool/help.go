@@ -92,14 +92,16 @@ No struct values, slices, arrays, strings, generics, methods, globals, or
 closures. At most 6 params; exactly one result type.
 
 Statements: var x T = e | var x T (zero: 0, false, or a null pointer) | x = e | p.f = e | if c { } else if c { } else { }
-| while c { } | return e | store8(addr, v) | store64(addr, v) | call(...).
+| while c { } | return e | store8/16/32/64(addr, v) (the low bits of v) | call(...).
 Every path through a func must return.
 
 Expressions: integers (decimal, 0x hex), true/false, names, calls f(a),
 other packages' funcs and consts by import path: ovid/mem.Copy(d, s, n),
 ovid/io.O_RDONLY (a one-segment import may also be written util.F()),
 field reads p.f, casts e as *T (i64 address to pointer and back),
-load8/load32/load64(addr), strptr("lit") / strlen("lit"), sizeof(T).
+load8/16/32/64(addr) (zero-extended), bswap16/32/64(x) (reverses the low
+bytes, zero-extended: a big-endian field is store32(p, bswap32(v)) and
+bswap32(load32(p))), strptr("lit") / strlen("lit"), sizeof(T).
 Binary operators, Go precedence: || && == != < <= > >= + - | ^ * / % << >> &
 (>> is arithmetic). Unary: ! (bool), - and ^ (i64). Comparisons give bool;
 if/while conditions must be bool. && and || short-circuit and are ordinary

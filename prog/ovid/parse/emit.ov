@@ -112,6 +112,12 @@ func WOp(e *E, op i64) i64 {
   if op == OP_STORE8 {
     return WL(e, strptr("store8"), 6)
   }
+  if op == OP_STORE16 {
+    return WL(e, strptr("store16"), 7)
+  }
+  if op == OP_STORE32 {
+    return WL(e, strptr("store32"), 7)
+  }
   if op == OP_STORE64 {
     return WL(e, strptr("store64"), 7)
   }
@@ -160,8 +166,20 @@ func WOp(e *E, op i64) i64 {
   if op == OP_LOAD8 {
     return WL(e, strptr("load8"), 5)
   }
+  if op == OP_LOAD16 {
+    return WL(e, strptr("load16"), 6)
+  }
   if op == OP_LOAD32 {
     return WL(e, strptr("load32"), 6)
+  }
+  if op == OP_BSWAP16 {
+    return WL(e, strptr("bswap16"), 7)
+  }
+  if op == OP_BSWAP32 {
+    return WL(e, strptr("bswap32"), 7)
+  }
+  if op == OP_BSWAP64 {
+    return WL(e, strptr("bswap64"), 7)
   }
   if op == OP_LOAD64 {
     return WL(e, strptr("load64"), 6)

@@ -686,7 +686,7 @@ func stmtMax(s *ir.Node) int {
 		return exprMax(s.Val, 0)
 	case "setfield":
 		return max2(exprMax(s.Base, 0), exprMax(s.Val, 1), 1)
-	case "store8", "store64":
+	case "store8", "store16", "store32", "store64":
 		return max2(exprMax(s.Addr, 0), exprMax(s.Val, 1), 1)
 	case "if":
 		m := exprMax(s.Cond, 0)
@@ -711,7 +711,7 @@ func exprMax(n *ir.Node, lv int) int {
 		return max2(exprMax(n.Left, lv), exprMax(n.Right, lv+1), lv)
 	case "land", "lor":
 		return max1(exprMax(n.Left, lv), exprMax(n.Right, lv))
-	case "not", "neg", "bnot", "cast", "load8", "load32", "load64":
+	case "not", "neg", "bnot", "cast", "load8", "load16", "load32", "load64", "bswap16", "bswap32", "bswap64":
 		return exprMax(n.Arg, lv)
 	case "field":
 		return exprMax(n.Base, lv)
@@ -799,10 +799,8 @@ func (c *cg) emitStmt(s *ir.Node) error {
 			return err
 		}
 		return c.emitStore(s.Base, s.Val, 64, off)
-	case "store8":
-		return c.emitStore(s.Addr, s.Val, 8, 0)
-	case "store64":
-		return c.emitStore(s.Addr, s.Val, 64, 0)
+	case "store8", "store16", "store32", "store64":
+		return c.emitStore(s.Addr, s.Val, storeWidth[s.Op], 0)
 	case "expr":
 		return c.emitExpr(s.Val, 0)
 	case "return":
@@ -1467,6 +1465,12 @@ func (c *cg) splitAddr(n *ir.Node) (*ir.Node, int32) {
 }
 
 // emitStore stores val, width bits of it, at addr + off.
+// The widths of the memory builtins, in bits.
+var (
+	loadWidth  = map[string]int{"load8": 8, "load16": 16, "load32": 32, "load64": 64}
+	storeWidth = map[string]int{"store8": 8, "store16": 16, "store32": 32, "store64": 64}
+)
+
 func (c *cg) emitStore(addr, val *ir.Node, width int, off int32) error {
 	if k, v := c.operand(val); k != kNone {
 		base, index, d, err := c.emitAddr(addr, 0)
@@ -1739,12 +1743,18 @@ func (c *cg) emitExpr(n *ir.Node, lv int) error {
 		}
 		c.b.LoadMem(64, base, index, off+d)
 		return nil
-	case "load8", "load32", "load64":
+	case "load8", "load16", "load32", "load64":
 		base, index, d, err := c.emitAddr(n.Arg, lv)
 		if err != nil {
 			return err
 		}
-		c.b.LoadMem(map[string]int{"load8": 8, "load32": 32, "load64": 64}[n.Op], base, index, d)
+		c.b.LoadMem(loadWidth[n.Op], base, index, d)
+		return nil
+	case "bswap16", "bswap32", "bswap64":
+		if err := c.emitExpr(n.Arg, lv); err != nil {
+			return err
+		}
+		c.b.BswapRax(map[string]int{"bswap16": 16, "bswap32": 32, "bswap64": 64}[n.Op])
 		return nil
 	case "call":
 		path := n.Pkg
@@ -1836,7 +1846,7 @@ func (c *cg) typeOf(n *ir.Node) string {
 		return "invalid"
 	}
 	switch n.Op {
-	case "int", "strptr", "strlen", "sizeof", "add", "sub", "mul", "div", "mod", "and", "or", "xor", "shl", "shr", "neg", "bnot", "load8", "load32", "load64", "syscall":
+	case "int", "strptr", "strlen", "sizeof", "add", "sub", "mul", "div", "mod", "and", "or", "xor", "shl", "shr", "neg", "bnot", "load8", "load16", "load32", "load64", "bswap16", "bswap32", "bswap64", "syscall":
 		return "i64"
 	case "bool", "eq", "ne", "lt", "le", "gt", "ge", "land", "lor", "not":
 		return "bool"

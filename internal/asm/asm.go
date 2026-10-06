@@ -205,13 +205,16 @@ func (b *Buf) rexMem(w bool, reg, base, index int, force bool) {
 	}
 }
 
-// LoadMem loads rax from width bits at [base+index+disp], zero-extended.
-// index is -1 for none.
+// LoadMem loads rax from width bits (8, 16, 32, or 64) at
+// [base+index+disp], zero-extended. index is -1 for none.
 func (b *Buf) LoadMem(width, base, index int, disp int32) {
 	switch width {
 	case 8:
 		b.rexMem(true, RAX, base, index, false)
 		b.emit(0x0F, 0xB6)
+	case 16:
+		b.rexMem(true, RAX, base, index, false)
+		b.emit(0x0F, 0xB7)
 	case 32:
 		b.rexMem(false, RAX, base, index, false)
 		b.emit(0x8B)
@@ -222,34 +225,69 @@ func (b *Buf) LoadMem(width, base, index int, disp int32) {
 	b.memOperand(RAX, base, index, disp)
 }
 
-// StoreMemReg stores the low width bits (8 or 64) of src at
+// StoreMemReg stores the low width bits (8, 16, 32, or 64) of src at
 // [base+index+disp].
 func (b *Buf) StoreMemReg(width, src, base, index int, disp int32) {
-	if width == 8 {
+	switch width {
+	case 8:
 		// sil and dil are only named with a REX prefix.
 		b.rexMem(false, src, base, index, src >= 4 && src < 8)
 		b.emit(0x88)
-	} else {
+	case 16:
+		// The operand-size prefix goes before REX.
+		b.emit(0x66)
+		b.rexMem(false, src, base, index, false)
+		b.emit(0x89)
+	case 32:
+		b.rexMem(false, src, base, index, false)
+		b.emit(0x89)
+	default:
 		b.rexMem(true, src, base, index, false)
 		b.emit(0x89)
 	}
 	b.memOperand(src, base, index, disp)
 }
 
-// StoreMemImm stores imm, as a byte or sign-extended to 64 bits, at
-// [base+index+disp].
+// StoreMemImm stores the low width bits of imm (sign-extended to 64 for a
+// 64-bit store) at [base+index+disp].
 func (b *Buf) StoreMemImm(width, base, index int, disp int32, imm int32) {
-	if width == 8 {
+	switch width {
+	case 8:
 		b.rexMem(false, 0, base, index, false)
 		b.emit(0xC6)
 		b.memOperand(0, base, index, disp)
 		b.emit(byte(imm))
-		return
+	case 16:
+		b.emit(0x66)
+		b.rexMem(false, 0, base, index, false)
+		b.emit(0xC7)
+		b.memOperand(0, base, index, disp)
+		b.emit(byte(imm), byte(imm>>8))
+	case 32:
+		b.rexMem(false, 0, base, index, false)
+		b.emit(0xC7)
+		b.memOperand(0, base, index, disp)
+		b.u32(uint32(imm))
+	default:
+		b.rexMem(true, 0, base, index, false)
+		b.emit(0xC7)
+		b.memOperand(0, base, index, disp)
+		b.u32(uint32(imm))
 	}
-	b.rexMem(true, 0, base, index, false)
-	b.emit(0xC7)
-	b.memOperand(0, base, index, disp)
-	b.u32(uint32(imm))
+}
+
+// BswapRax reverses the bytes of the low width bits (16, 32, or 64) of
+// rax and zero-extends: bswap, then for 16 a shift down by 48.
+func (b *Buf) BswapRax(width int) {
+	switch width {
+	case 32:
+		b.emit(0x0F, 0xC8)
+	default:
+		b.emit(0x48, 0x0F, 0xC8)
+		if width == 16 {
+			b.ShrRegImm(RAX, 48)
+		}
+	}
 }
 
 // Leave encodes leave: mov rsp, rbp; pop rbp.
