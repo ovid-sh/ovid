@@ -487,7 +487,10 @@ func localNamed(fn *ir.Func, name string) bool {
 	found := false
 	for _, st := range fn.Body {
 		st.Walk(func(n *ir.Node) {
-			if n.Op == "var" && n.Name == name {
+			if (n.Op == "var" || n.Op == "var2") && n.Name == name {
+				found = true
+			}
+			if n.Op == "var2" && n.Two.Name == name {
 				found = true
 			}
 		})

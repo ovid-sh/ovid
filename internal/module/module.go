@@ -724,6 +724,12 @@ func (m *Module) Locate(d *Diag) {
 // IsStd reports whether file index fi belongs to a shipped package.
 func (m *Module) IsStd(fi int) bool { return strings.HasPrefix(m.Files[fi].Path, "std:") }
 
+// declaresLocal reports whether statement n declares a local called name: a
+// var, or either name of a var that receives two results.
+func declaresLocal(n *ir.Node, name string) bool {
+	return (n.Op == "var" && n.Name == name) || (n.Op == "var2" && (n.Name == name || n.Two.Name == name))
+}
+
 // Lookup finds an id, also accepting a bare name or pkg.Name for decls.
 func (m *Module) Lookup(q string) ([]*Loc, error) {
 	if _, ok := m.Index()[q]; ok {
@@ -766,7 +772,7 @@ func (m *Module) Lookup(q string) ([]*Loc, error) {
 		var locals []string
 		for _, id := range m.Order() {
 			l := m.Index()[id]
-			if (l.Kind == "param" && strings.HasSuffix(id, "."+q)) || (l.Kind == "stmt" && l.Node.(*ir.Node).Op == "var" && l.Node.(*ir.Node).Name == q) {
+			if (l.Kind == "param" && strings.HasSuffix(id, "."+q)) || (l.Kind == "stmt" && declaresLocal(l.Node.(*ir.Node), q)) {
 				locals = append(locals, id)
 			}
 		}
