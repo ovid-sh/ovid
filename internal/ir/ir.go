@@ -285,6 +285,7 @@ func (n *Node) Walk(fn func(*Node)) {
 	n.Base.Walk(fn)
 	n.Addr.Walk(fn)
 	n.Val.Walk(fn)
+	n.Val2.Walk(fn)
 	n.Cond.Walk(fn)
 	for _, c := range n.Args {
 		c.Walk(fn)
