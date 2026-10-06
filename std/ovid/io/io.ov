@@ -130,18 +130,25 @@ func MarkHeap(io *Cap) *HeapMark {
 // pages past them, when a later region took over, are handed back to the
 // kernel (MADV_DONTNEED), which zeroes them on the next touch. m must be a
 // mark of this io not yet reset past: a reset to m frees any later mark.
+// It returns 0, or the kernel's error when it refused to unmap (a host's
+// seccomp policy): that mapping and the older ones stay, the next reset
+// tries them again, and the rest of the reset is done all the same.
 func ResetHeap(io *Cap, m *HeapMark) i64 {
   var end i64 = io.heap + io.used
   if io.heap != m.heap {
     end = m.heap + m.size
   }
   var q i64 = io.maps
-  while q != m.maps {
+  var r i64 = 0
+  while q != m.maps && r == 0 {
     var prev i64 = load64(q)
-    syscall(SYS_MUNMAP, q, load64(q + 8), 0, 0, 0, 0)
-    q = prev
+    r = syscall(SYS_MUNMAP, q, load64(q + 8), 0, 0, 0, 0)
+    if r == 0 {
+      q = prev
+    }
   }
-  io.maps = m.maps
+  // A refused mapping, and the older ones, stay linked for the next reset.
+  io.maps = q
   io.heap = m.heap
   io.size = m.size
   io.used = m.used
@@ -158,7 +165,7 @@ func ResetHeap(io *Cap, m *HeapMark) i64 {
     store64(p, 0)
     p = p + 8
   }
-  return 0
+  return r
 }
 
 // Map returns n fresh zeroed bytes from the kernel (mmap, private and

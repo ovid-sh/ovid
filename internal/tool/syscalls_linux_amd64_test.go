@@ -26,6 +26,14 @@ type sysCall struct {
 // included.
 func traceSyscalls(t *testing.T, bin string, args ...string) ([]sysCall, int) {
 	t.Helper()
+	return traceRefusing(t, ^uint64(0), bin, args...)
+}
+
+// traceRefusing is traceSyscalls with every call numbered refuse failing
+// with EPERM, as a host's seccomp policy would make it: the kernel never
+// runs it.
+func traceRefusing(t *testing.T, refuse uint64, bin string, args ...string) ([]sysCall, int) {
+	t.Helper()
 	// Every ptrace request must come from the thread that started the tracee.
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
@@ -69,7 +77,21 @@ func traceSyscalls(t *testing.T, bin string, args ...string) ([]sysCall, int) {
 			}
 			if entering {
 				calls = append(calls, sysCall{nr: r.Orig_rax, args: [4]uint64{r.Rdi, r.Rsi, r.Rdx, r.R10}})
+				if r.Orig_rax == refuse {
+					// No such call: the kernel skips it.
+					r.Orig_rax = ^uint64(0)
+					if err := syscall.PtraceSetRegs(pid, &r); err != nil {
+						t.Fatal(err)
+					}
+				}
 			} else {
+				if calls[len(calls)-1].nr == refuse {
+					eperm := -int64(syscall.EPERM)
+					r.Rax = uint64(eperm)
+					if err := syscall.PtraceSetRegs(pid, &r); err != nil {
+						t.Fatal(err)
+					}
+				}
 				calls[len(calls)-1].ret = int64(r.Rax)
 			}
 			entering = !entering
@@ -196,6 +218,41 @@ func main(io *ovid/io.Cap) i64 {
 		if n != 128<<20 {
 			t.Fatalf("the mapping left is %d bytes, want the startup region", n)
 		}
+	}
+}
+
+// TestResetHeapRefusedUnmap: a mapping the kernel refuses to unmap stays
+// linked, so the next reset tries it again rather than losing it for good,
+// and the reset reports the refusal.
+func TestResetHeapRefusedUnmap(t *testing.T) {
+	const sysMunmap = 11
+	dir := mkmod(t, demo(`package demo
+import ovid/io
+func main(io *ovid/io.Cap) i64 {
+  var m *ovid/io.HeapMark = ovid/io.MarkHeap(io)
+  ovid/io.Alloc(io, 100 << 20)
+  ovid/io.Alloc(io, 100 << 20)
+  if ovid/io.ResetHeap(io, m) == 0 {
+    return 10
+  }
+  if ovid/io.ResetHeap(io, m) == 0 {
+    return 11
+  }
+  return 3
+}
+`))
+	calls, code := traceRefusing(t, sysMunmap, mustBuild(t, dir))
+	if code != 3 {
+		t.Fatalf("exit %d, want 3 (10 or 11: a reset returned 0 for a refused munmap)", code)
+	}
+	var tried []uint64
+	for _, c := range calls {
+		if c.nr == sysMunmap {
+			tried = append(tried, c.args[0])
+		}
+	}
+	if len(tried) != 2 || tried[0] != tried[1] {
+		t.Fatalf("munmap of %#x, want the same mapping tried by both resets", tried)
 	}
 }
 

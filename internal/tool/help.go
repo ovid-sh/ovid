@@ -122,7 +122,8 @@ return 0 (out of memory ends the program, exit 71). Nothing is freed one
 block at a time: var m *ovid/io.HeapMark = ovid/io.MarkHeap(io) records
 the heap, and ovid/io.ResetHeap(io, m) gives back and zeroes everything
 allocated since, for a host between requests; an address allocated after
-the mark must not be used after the reset.
+the mark must not be used after the reset. It returns 0, or the kernel's
+error if it refused to unmap; the next reset tries those mappings again.
 Cast the address: var p *Pair = raw as *Pair.
 Each struct field takes 8 bytes, so a struct is 8 * fields bytes; never
 count them by hand, write sizeof(T) (T a struct; path.T for another
