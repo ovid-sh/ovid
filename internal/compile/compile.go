@@ -1482,12 +1482,21 @@ func (c *cg) emitStore(addr, val *ir.Node, width int, off int32) error {
 		c.b.StoreMemReg(width, asm.RAX, base, index, off+d)
 		return nil
 	}
+	// Any other base plus an index: only the base goes through rcx.
+	index := -1
+	if n != nil && n.Op == "add" {
+		if x, ok := c.indexOf(n.Right); ok {
+			n, index = n.Left, x
+		} else if x, ok := c.indexOf(n.Left); ok {
+			n, index = n.Right, x
+		}
+	}
 	if k, v := c.operand(n); k == kMem {
 		if err := c.emitExpr(val, 0); err != nil {
 			return err
 		}
 		c.b.MovRcxMemRbp(int32(v))
-		c.b.StoreMemReg(width, asm.RAX, asm.RCX, -1, off+d)
+		c.b.StoreMemReg(width, asm.RAX, asm.RCX, index, off+d)
 		return nil
 	}
 	if err := c.emitExpr(n, 0); err != nil {
@@ -1498,7 +1507,7 @@ func (c *cg) emitStore(addr, val *ir.Node, width int, off int32) error {
 		return err
 	}
 	c.loadTempRcx(0)
-	c.b.StoreMemReg(width, asm.RAX, asm.RCX, -1, off+d)
+	c.b.StoreMemReg(width, asm.RAX, asm.RCX, index, off+d)
 	return nil
 }
 

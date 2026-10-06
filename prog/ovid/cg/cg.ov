@@ -1536,13 +1536,26 @@ func EmitStore(c *C, addr *ovid/parse.Node, val *ovid/parse.Node, width i64, off
     }
     return ovid/asm.StoreMemReg(c.code, width, 0, base, index, off + bd)
   }
+  // Any other base plus an index: only the base goes through rcx.
+  var ix i64 = -1
+  if n != 0 as *ovid/parse.Node && n.op == ovid/parse.OP_ADD {
+    ix = IndexOf(c, n.right)
+    if ix >= 0 {
+      n = n.left
+    } else {
+      ix = IndexOf(c, n.left)
+      if ix >= 0 {
+        n = n.right
+      }
+    }
+  }
   if Operand(c, n) == KMEM {
     var slot i64 = c.opv
     if EmitExpr(c, val, 0) != 0 {
       return c.err
     }
     ovid/asm.MovRcxMemRbp(c.code, slot)
-    return ovid/asm.StoreMemReg(c.code, width, 0, 1, -1, off + bd)
+    return ovid/asm.StoreMemReg(c.code, width, 0, 1, ix, off + bd)
   }
   if EmitExpr(c, n, 0) != 0 {
     return c.err
@@ -1552,7 +1565,7 @@ func EmitStore(c *C, addr *ovid/parse.Node, val *ovid/parse.Node, width i64, off
     return c.err
   }
   ovid/asm.MovRcxMemRbp(c.code, TempDisp(c, 0))
-  return ovid/asm.StoreMemReg(c.code, width, 0, 1, -1, off + bd)
+  return ovid/asm.StoreMemReg(c.code, width, 0, 1, ix, off + bd)
 }
 
 // EmitAssign sets the local s names, whose record is loc, to s.val.
