@@ -332,7 +332,7 @@ func pkgsUsed(l *module.Loc) []string {
 		if n == nil {
 			return
 		}
-		if n.Op == "call" || n.Op == "name" {
+		if n.Op == "call" || n.Op == "name" || n.Op == "index" || n.Op == "len" {
 			p := n.Pkg
 			if p == "" && n.Op == "call" {
 				p = l.Pkg

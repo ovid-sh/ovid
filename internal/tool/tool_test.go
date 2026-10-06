@@ -1323,6 +1323,27 @@ func TestProgTests(t *testing.T) {
 	}
 }
 
+// TestMoveTableUse: a func whose only use of a package is a table read or
+// its length brings that import along when it moves.
+func TestMoveTableUse(t *testing.T) {
+	dir := mkmod(t, map[string]string{
+		"demo/main.ov": "package demo\nimport ovid/io\nimport util\nfunc Sum() i64 {\n  return util.Primes[0] + len(util.Primes)\n}\nfunc main(io *ovid/io.Cap) i64 {\n  return 0\n}\n",
+		"util/util.ov": "package util\nconst Primes [2]i64 = {2, 3}\n",
+	})
+	var b bytes.Buffer
+	if code := Move(dir, "Sum", "other", "", false, &b); code != 0 {
+		t.Fatalf("move %d: %s", code, b.String())
+	}
+	src, _ := os.ReadFile(filepath.Join(dir, "other/other.ov"))
+	if !strings.Contains(string(src), "import util\n") || !strings.Contains(string(src), "util.Primes[0] + len(util.Primes)") {
+		t.Fatalf("other.ov:\n%s", src)
+	}
+	b.Reset()
+	if code := Check(dir, false, &b); code != 0 {
+		t.Fatalf("after move: %s", b.String())
+	}
+}
+
 func TestMove(t *testing.T) {
 	dir := mkmod(t, map[string]string{
 		"demo/main.ov": `package demo
