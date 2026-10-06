@@ -150,6 +150,21 @@ did. Re-run it when a command's output or defaults change, and record the
 results in `docs/AGENT_FEEDBACK.md`. See
 [tests/agent/README.md](tests/agent/README.md).
 
+## Nix
+
+```sh
+nix run github:ovid-sh/ovid -- check   # the toolchain, nothing installed
+nix develop                            # go, gopls, jq, and ovid
+nix flake check                        # go test, prog/, the self-hosting fixed point, a NixOS VM
+```
+
+Ovid's output is static and has no libc, so it runs on NixOS as built: no
+patchelf, no nix-ld. `lib.buildOvidProgram pkgs { pname; src; }` builds a
+module into `$out/bin` and keeps the build receipt (size, system calls) in
+`$out/share/ovid`; `packages.hello-image` is a container holding that
+binary and nothing else. A flake sees only files git tracks: `git add` a
+new `.ov` file before `nix build` can find it.
+
 ## Not yet
 
 No HTTP client, no URL imports, no package
