@@ -248,6 +248,7 @@ type File struct {
   std i64
   next *File
   mnext *File
+  ord i64
 }
 
 // FindDecl returns the decl named np[0:nn] in the list d, or nil.

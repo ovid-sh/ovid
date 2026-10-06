@@ -444,33 +444,71 @@ func LineOf(f *ovid/parse.File, off i64, lp i64, ln i64) i64 {
   return line
 }
 
-// FileIndex is where f stands in the module's file list.
-func FileIndex(m *ovid/parse.Mod, f *ovid/parse.File) i64 {
-  var i i64 = 0
-  var g *ovid/parse.File = m.files
-  while g != 0 as *ovid/parse.File {
-    if g == f {
-      return i
-    }
-    i = i + 1
-    g = g.mnext
-  }
-  return i
-}
-
 // UseFile is the file a use sits in: that of the func or type it is in.
 func UseFile(u *ovid/parse.Use) *ovid/parse.File {
   return u.in.file
 }
 
-// Before orders uses as refs prints them: by file, then by position.
-func Before(m *ovid/parse.Mod, a *ovid/parse.Use, b *ovid/parse.Use) bool {
-  var fa i64 = FileIndex(m, UseFile(a))
-  var fb i64 = FileIndex(m, UseFile(b))
-  if fa != fb {
-    return fa < fb
+// SortKey orders uses as refs prints them: by file, then by position.
+// Files are numbered once (f.ord, set by NumberFiles) so a key is one
+// integer: file number above, offset below.
+func SortKey(u *ovid/parse.Use) i64 {
+  var f *ovid/parse.File = UseFile(u)
+  return (f.ord << 32) | (u.tokp - f.src)
+}
+
+// NumberFiles gives each module file its place in the list.
+func NumberFiles(m *ovid/parse.Mod) i64 {
+  var i i64 = 0
+  var f *ovid/parse.File = m.files
+  while f != 0 as *ovid/parse.File {
+    f.ord = i
+    i = i + 1
+    f = f.mnext
   }
-  return a.tokp < b.tokp
+  return 0
+}
+
+// MergeSort sorts the n (key, use) pairs at a (16 bytes each) by key,
+// bottom-up, with tmp as scratch of the same size. Stable.
+func MergeSort(a i64, tmp i64, n i64) i64 {
+  var w i64 = 1
+  while w < n {
+    var lo i64 = 0
+    while lo < n {
+      var mid i64 = lo + w
+      var hi i64 = lo + (2 * w)
+      if mid > n {
+        mid = n
+      }
+      if hi > n {
+        hi = n
+      }
+      var i i64 = lo
+      var j i64 = mid
+      var k i64 = lo
+      while k < hi {
+        var takeLeft bool = j >= hi
+        if !takeLeft && i < mid {
+          takeLeft = load64(a + (i * 16)) <= load64(a + (j * 16))
+        }
+        var src i64 = j
+        if takeLeft {
+          src = i
+          i = i + 1
+        } else {
+          j = j + 1
+        }
+        store64(tmp + (k * 16), load64(a + (src * 16)))
+        store64(tmp + (k * 16) + 8, load64(a + (src * 16) + 8))
+        k = k + 1
+      }
+      lo = hi
+    }
+    ovid/mem.Copy(a, tmp, n * 16)
+    w = w * 2
+  }
+  return 0
 }
 
 // CmdRefs prints every use of the named decl, grouped under the file and
@@ -504,22 +542,25 @@ func CmdRefs(io *ovid/io.Cap) i64 {
   if t.bad != 0 as *ovid/mem.Buf {
     return Fail(io, strptr("unsupported"), 11, t.bad.data, t.bad.len)
   }
-  // The uses of t, sorted by file and position (insertion sort; a decl
-  // has tens of uses, a few hundred at most).
-  var hits i64 = ovid/io.Alloc(io, (m.nuses + 1) * 8)
+  // The uses of t as (key, use) pairs, sorted by file and position.
+  NumberFiles(m)
+  var pairs i64 = ovid/io.Alloc(io, (m.nuses + 1) * 16)
   var n i64 = 0
   var u *ovid/parse.Use = m.uses
   while u != 0 as *ovid/parse.Use {
     if Hits(t, u) {
-      var j i64 = n
-      while j > 0 && Before(m, u, load64(hits + ((j - 1) * 8)) as *ovid/parse.Use) {
-        store64(hits + (j * 8), load64(hits + ((j - 1) * 8)))
-        j = j - 1
-      }
-      store64(hits + (j * 8), u as i64)
+      store64(pairs + (n * 16), SortKey(u))
+      store64(pairs + (n * 16) + 8, u as i64)
       n = n + 1
     }
     u = u.next
+  }
+  MergeSort(pairs, ovid/io.Alloc(io, (n + 1) * 16), n)
+  var hits i64 = ovid/io.Alloc(io, (n + 1) * 8)
+  var i i64 = 0
+  while i < n {
+    store64(hits + (i * 8), load64(pairs + (i * 16) + 8))
+    i = i + 1
   }
   var b *ovid/mem.Buf = ovid/mem.New(io, 4096)
   var lp i64 = ovid/io.Alloc(io, 8)
@@ -527,7 +568,7 @@ func CmdRefs(io *ovid/io.Cap) i64 {
   var last *ovid/parse.Decl = 0 as *ovid/parse.Decl
   var files i64 = 0
   var external i64 = 0
-  var i i64 = 0
+  i = 0
   while i < n {
     u = load64(hits + (i * 8)) as *ovid/parse.Use
     var f *ovid/parse.File = UseFile(u)
