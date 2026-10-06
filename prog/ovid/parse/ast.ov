@@ -117,6 +117,8 @@ type Node struct {
   name2n i64
   typ2p i64
   typ2n i64
+  tytok i64
+  ty2tok i64
   pkgp i64
   pkgn i64
   fnp i64
@@ -145,6 +147,7 @@ type Node struct {
 }
 
 // Decl is an import (name = path), const, type, field, func, or param.
+// tytok/ty2tok are where the name of typ/typ2 stands in the source.
 // typ is the const/field/param type or the func result; sub holds fields or
 // params. A func also has its package (set by IndexFuncs) and, for the code
 // generator, its label and whether it is reachable from main. The checker
@@ -174,6 +177,38 @@ type Decl struct {
   ro i64
   typ2p i64
   typ2n i64
+  tytok i64
+  ty2tok i64
+}
+
+// What a use is, as refs and rename see it: the node spells the target's
+// name as a call, a plain name, an assignment's target, a field read or
+// write, or a type; a func's result type is a result.
+const USE_CALL i64 = 1
+const USE_NAME i64 = 2
+const USE_ASSIGN i64 = 3
+const USE_FIELD i64 = 4
+const USE_SETFIELD i64 = 5
+const USE_TYPE i64 = 6
+const USE_RESULT i64 = 7
+
+// Use is one use of a declaration that the checker resolved. The target is
+// decl (a func, type, field, const, or param), or vnode, the var statement
+// that declares a local (vsecond: its second name). node spells the use,
+// or udecl does when the use is a field's, param's, or result's own type.
+// in is the func or type the use sits in; tokp/tokn is the name token in
+// the source. Mod keeps them in source order.
+type Use struct {
+  kind i64
+  decl *Decl
+  vnode *Node
+  vsecond i64
+  node *Node
+  udecl *Decl
+  in *Decl
+  tokp i64
+  tokn i64
+  next *Use
 }
 
 // Pkg is one package: the merged result of its files. mark, ord, low, and
@@ -243,7 +278,7 @@ func FuncHash(pp i64, pn i64, np i64, nn i64) i64 {
 }
 
 // IndexFuncs builds m.ftab, an open-addressing table from package path and
-// name to the func's Decl, and sets each func's pkg. Of two funcs with one
+// name to the func's Decl, and sets each func's and type's pkg. Of two funcs with one
 // name the first is kept; check reports the second.
 func IndexFuncs(m *Mod) i64 {
   var total i64 = 0
@@ -260,6 +295,11 @@ func IndexFuncs(m *Mod) i64 {
   m.fmask = sz - 1
   k = m.pkgs
   while k != 0 as *Pkg {
+    var t *Decl = k.ts
+    while t != 0 as *Decl {
+      t.pkg = k
+      t = t.next
+    }
     var f *Decl = k.fs
     while f != 0 as *Decl {
       f.pkg = k
@@ -697,6 +737,7 @@ func ParseTypeDecl(p *P, s i64) i64 {
     ParseType(p)
     f.typp = p.tp
     f.typn = p.tn
+    f.tytok = p.ttok
     AddSub(d, f)
     ExpectEnd(p)
   }
@@ -723,6 +764,7 @@ func ParseFunc(p *P, s i64) i64 {
       ParseType(p)
       pa.typp = p.tp
       pa.typn = p.tn
+      pa.tytok = p.ttok
       AddSub(d, pa)
       if PeekByte(p, 41) {
         more = false
@@ -738,10 +780,12 @@ func ParseFunc(p *P, s i64) i64 {
     ParseType(p)
     d.typp = p.tp
     d.typn = p.tn
+    d.tytok = p.ttok
     Expect(p, 44)
     ParseType(p)
     d.typ2p = p.tp
     d.typ2n = p.tn
+    d.ty2tok = p.ttok
     if !ovid/mem.Eq(p.tp, p.tn, strptr("i64"), 3) {
       if ErrBegin(p) {
         EW(p, strptr("the second result is an error code; write ("), strlen("the second result is an error code; write ("))
@@ -755,6 +799,7 @@ func ParseFunc(p *P, s i64) i64 {
     ParseType(p)
     d.typp = p.tp
     d.typn = p.tn
+    d.tytok = p.ttok
   }
   d.body = ParseBlock(p)
   AddFunc(p.pkg, d)
@@ -917,21 +962,25 @@ func VarName(p *P, n *Node, second bool) i64 {
   var nn i64 = p.tn
   var tp i64 = 0
   var tn i64 = 0
+  var tok i64 = 0
   if !IsBlank(np, nn) {
     ParseType(p)
     tp = p.tp
     tn = p.tn
+    tok = p.ttok
   }
   if second {
     n.name2p = np
     n.name2n = nn
     n.typ2p = tp
     n.typ2n = tn
+    n.ty2tok = tok
   } else {
     n.namep = np
     n.namen = nn
     n.typp = tp
     n.typn = tn
+    n.tytok = tok
   }
   return 0
 }
@@ -1163,6 +1212,7 @@ func Postfix(p *P) *Node {
       c.num = Eid(p)
       c.typp = p.tp
       c.typn = p.tn
+      c.tytok = p.ttok
       c.arg = e
       c.off = e.off
       c.end = p.last
@@ -1316,11 +1366,13 @@ func Primary0(p *P) *Node {
     ParseType(p)
     var zp i64 = p.tp
     var zn i64 = p.tn
+    var ztok i64 = p.ttok
     Expect(p, 41)
     var z *Node = NewNode(p, OP_SIZEOF)
     z.num = Eid(p)
     z.typp = zp
     z.typn = zn
+    z.tytok = ztok
     return z
   }
   if PeekKw(p, strptr("strptr"), 6) || PeekKw(p, strptr("strlen"), 6) {
