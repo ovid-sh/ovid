@@ -451,17 +451,22 @@ func IndexPkgs(c *Ch) i64 {
 
 // CheckPkgConst types a reference pkg.NAME to another package's const.
 func CheckPkgConst(c *Ch, n *ovid/parse.Node, pkp i64, pkn i64, np i64, nn i64) i64 {
+  // The use is recorded whether or not the name is used rightly, or the
+  // package imported, as the Go checker records it.
+  var k *ovid/parse.Pkg = FindPkg(c, pkp, pkn)
+  var cd *ovid/parse.Decl = 0 as *ovid/parse.Decl
+  if k != 0 as *ovid/parse.Pkg {
+    cd = ovid/parse.FindDecl(k.cs, np, nn)
+    if cd != 0 as *ovid/parse.Decl {
+      NewUse(c, ovid/parse.USE_NAME, n, c.fd, np, nn).decl = cd
+    }
+  }
   if !Imported(c, pkp, pkn) {
     Err(c, strptr("unknown_package"), strlen("unknown_package"), pkp, pkn)
     return SetBad(c)
   }
-  var k *ovid/parse.Pkg = FindPkg(c, pkp, pkn)
   if k != 0 as *ovid/parse.Pkg {
-    var cd *ovid/parse.Decl = ovid/parse.FindDecl(k.cs, np, nn)
     if cd != 0 as *ovid/parse.Decl {
-      // The use is recorded whether or not the name is used rightly, as
-      // the Go checker records it.
-      NewUse(c, ovid/parse.USE_NAME, n, c.fd, np, nn).decl = cd
       if cd.istab != 0 {
         Err(c, strptr("bad_type"), strlen("bad_type"), strptr("a table is not a value"), strlen("a table is not a value"))
         return SetBad(c)
