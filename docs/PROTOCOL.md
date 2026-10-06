@@ -191,8 +191,13 @@ ships, such as `ovid/io`). From the checker: `type_mismatch`,
 `unknown_name`, `unknown_field`, `unknown_package`, `missing_import`,
 `missing_return`, `missing_expr`, `arity`, `bad_type`, `bad_op`,
 `struct_value`, `duplicate_name`, `duplicate_id`, `duplicate_package`,
-`import_self`, `syscall_forbidden`, `bad_main`, `bad_abi`, `no_entry`,
-`bad_module`.
+`import_self`, `syscall_forbidden`, `opaque_type`, `bad_main`, `bad_abi`,
+`no_entry`, `bad_module`.
+
+`opaque_type`: outside `ovid/io`, a pointer to one of its types (`Cap` today)
+was made by a cast, cast to something else, or had a field read or written.
+Those types are handles on what the program may do; they come from `main` or
+from an `ovid/io` func, and only `ovid/io` looks inside them.
 
 `syscall_forbidden` is decided by where a package came from, not only by its
 name: `syscall` is valid in `ovid/io` as the toolchain ships it. A module
