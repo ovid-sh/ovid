@@ -179,6 +179,19 @@ services.ovid.programs.cat = { package = catfile; args = [ "/etc/os-release" ]; 
 plus the few systemd always allows; any other call kills it with SIGSYS.
 `lib.syscallFilter` makes that filter for a unit of your own.
 
+An HTTP handler serves the network with no code of its own for it:
+
+```nix
+services.ovid.programs.greet = { package = greet; listen = 8080; };
+```
+
+systemd listens on `ovid-greet.socket` and starts `ovid-greet@.service`
+for each connection, with the connection as standard input and output,
+which the host `ovid build` writes for a handler already reads and writes.
+That process serves the connection's requests in turn and never gets a
+system call to open a socket of its own. An idle keep-alive connection
+holds its process; the socket's `MaxConnections` (64) bounds them.
+
 ## Not yet
 
 No HTTP client, no URL imports, no package
