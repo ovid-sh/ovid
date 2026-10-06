@@ -6,7 +6,8 @@
   outputs = { self, nixpkgs }:
     let
       inherit (nixpkgs) lib;
-      systems = [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ];
+      # Not x86_64-darwin: nixpkgs dropped it in 26.11 and refuses to evaluate it.
+      systems = [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ];
       forAll = f: lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
 
       # Only what each derivation reads, so editing the README or this file
