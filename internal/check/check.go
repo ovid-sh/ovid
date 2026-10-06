@@ -525,10 +525,10 @@ func (c *checker) checkEntry(p *ir.Program) {
 			c.err(io.ID, "bad_abi", "ovid/io has no type Cap")
 			return
 		}
-		need := []string{"argc", "argv", "heap", "used", "size"}
+		need := []string{"argc", "argv", "heap", "used", "size", "maps"}
 		for i, n := range need {
 			if i >= len(capTy.Fields) || capTy.Fields[i].Name != n || capTy.Fields[i].Type != "i64" {
-				c.issue(Issue{Code: "bad_abi", ID: capTy.ID, Message: "the runtime fills Cap's first five fields", Expected: "argc, argv, heap, used, size (all i64, in order)"})
+				c.issue(Issue{Code: "bad_abi", ID: capTy.ID, Message: "the runtime fills Cap's first six fields", Expected: "argc, argv, heap, used, size, maps (all i64, in order)"})
 				return
 			}
 		}

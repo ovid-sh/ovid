@@ -123,8 +123,13 @@ printing one needs only its address:
   ovid/io.Stdout(p, n)                 // n bytes at p, for non-literals
 
 Memory: no implicit allocation. ovid/io.Alloc(io, nbytes) returns an i64
-address of zeroed bytes from the heap, which grows as needed and is never
-freed; it does not return 0 (out of memory ends the program, exit 71).
+address of zeroed bytes from the heap, which grows as needed; it does not
+return 0 (out of memory ends the program, exit 71). Nothing is freed one
+block at a time: var m *ovid/io.HeapMark = ovid/io.MarkHeap(io) records
+the heap, and ovid/io.ResetHeap(io, m) gives back and zeroes everything
+allocated since, for a host between requests; an address allocated after
+the mark must not be used after the reset. It returns 0, or the kernel's
+error if it refused to unmap; the next reset tries those mappings again.
 Cast the address: var p *Pair = raw as *Pair.
 Each struct field takes 8 bytes, so a struct is 8 * fields bytes; never
 count them by hand, write sizeof(T) (T a struct; path.T for another

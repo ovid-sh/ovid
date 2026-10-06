@@ -12,17 +12,27 @@ import (
 	"testing"
 )
 
-// sysCall is one system call a traced program made: its number and its
-// first four arguments.
+// sysCall is one system call a traced program made: its number, its
+// first four arguments, and its result (0 for a call that never returns,
+// like exit).
 type sysCall struct {
 	nr   uint64
 	args [4]uint64
+	ret  int64
 }
 
 // traceSyscalls runs bin under ptrace and returns every system call it
 // makes, in order, and its exit code. The exec that starts it is not
 // included.
 func traceSyscalls(t *testing.T, bin string, args ...string) ([]sysCall, int) {
+	t.Helper()
+	return traceRefusing(t, ^uint64(0), bin, args...)
+}
+
+// traceRefusing is traceSyscalls with every call numbered refuse failing
+// with EPERM, as a host's seccomp policy would make it: the kernel never
+// runs it.
+func traceRefusing(t *testing.T, refuse uint64, bin string, args ...string) ([]sysCall, int) {
 	t.Helper()
 	// Every ptrace request must come from the thread that started the tracee.
 	runtime.LockOSThread()
@@ -61,12 +71,28 @@ func traceSyscalls(t *testing.T, bin string, args ...string) ([]sysCall, int) {
 			t.Fatalf("%s was killed by %v after %d calls", filepath.Base(bin), ws.Signal(), len(calls))
 		case ws.Stopped() && ws.StopSignal() == syscall.SIGTRAP|0x80:
 			sig = 0
+			var r syscall.PtraceRegs
+			if err := syscall.PtraceGetRegs(pid, &r); err != nil {
+				t.Fatal(err)
+			}
 			if entering {
-				var r syscall.PtraceRegs
-				if err := syscall.PtraceGetRegs(pid, &r); err != nil {
-					t.Fatal(err)
+				calls = append(calls, sysCall{nr: r.Orig_rax, args: [4]uint64{r.Rdi, r.Rsi, r.Rdx, r.R10}})
+				if r.Orig_rax == refuse {
+					// No such call: the kernel skips it.
+					r.Orig_rax = ^uint64(0)
+					if err := syscall.PtraceSetRegs(pid, &r); err != nil {
+						t.Fatal(err)
+					}
 				}
-				calls = append(calls, sysCall{r.Orig_rax, [4]uint64{r.Rdi, r.Rsi, r.Rdx, r.R10}})
+			} else {
+				if calls[len(calls)-1].nr == refuse {
+					eperm := -int64(syscall.EPERM)
+					r.Rax = uint64(eperm)
+					if err := syscall.PtraceSetRegs(pid, &r); err != nil {
+						t.Fatal(err)
+					}
+				}
+				calls[len(calls)-1].ret = int64(r.Rax)
 			}
 			entering = !entering
 		case ws.Stopped():
@@ -118,8 +144,115 @@ func main(io *ovid/io.Cap) i64 {
 				c.args[1], flags, mapPrivate|mapAnonymous|mapNoReserve)
 		}
 	}
-	if want := []uint64{128 << 20, 100 << 20, 128 << 20}; !slices.Equal(sizes, want) {
+	// The large block carries Alloc's 16-byte mapping header.
+	if want := []uint64{128 << 20, 100<<20 + 16, 128 << 20}; !slices.Equal(sizes, want) {
 		t.Fatalf("mmap sizes %v, want %v: the startup region, the large block, and a second region", sizes, want)
+	}
+}
+
+// TestResetHeapUnmaps: a reset gives back every mapping Alloc took after
+// the mark, the blocks with mappings of their own and the regions it grew
+// into, so a host that resets between requests keeps only its first region.
+func TestResetHeapUnmaps(t *testing.T) {
+	const (
+		sysMmap   = 9
+		sysMunmap = 11
+	)
+	dir := mkmod(t, demo(`package demo
+import ovid/io
+func main(io *ovid/io.Cap) i64 {
+  var m *ovid/io.HeapMark = ovid/io.MarkHeap(io)
+  var r i64 = 0
+  while r < 3 {
+    var i i64 = 0
+    while i < 200 {
+      if i == 50 {
+        ovid/io.Alloc(io, 100 << 20)
+      }
+      ovid/io.Alloc(io, 1 << 20)
+      i = i + 1
+    }
+    ovid/io.ResetHeap(io, m)
+    r = r + 1
+  }
+  return 3
+}
+`))
+	calls, code := traceSyscalls(t, mustBuild(t, dir))
+	if code != 3 {
+		t.Fatalf("exit %d, want 3", code)
+	}
+	// live is every mapping not yet given back, by address: its length.
+	live := map[uint64]uint64{}
+	var sizes []uint64
+	unmaps := 0
+	for _, c := range calls {
+		switch c.nr {
+		case sysMmap:
+			if c.ret < 0 {
+				t.Fatalf("mmap of %d bytes failed: %d", c.args[1], c.ret)
+			}
+			live[uint64(c.ret)] = c.args[1]
+			sizes = append(sizes, c.args[1])
+		case sysMunmap:
+			if c.ret != 0 {
+				t.Fatalf("munmap(%#x, %d) failed: %d", c.args[0], c.args[1], c.ret)
+			}
+			if n, ok := live[c.args[0]]; !ok || n != c.args[1] {
+				t.Fatalf("munmap(%#x, %d) is not a whole mapping the program took", c.args[0], c.args[1])
+			}
+			delete(live, c.args[0])
+			unmaps++
+		}
+	}
+	// Three requests' worth of a large block and a second region.
+	want := []uint64{128 << 20, 100<<20 + 16, 128 << 20, 100<<20 + 16, 128 << 20, 100<<20 + 16, 128 << 20}
+	if !slices.Equal(sizes, want) {
+		t.Fatalf("mmap sizes %v, want the startup region and then %v", sizes, want[1:])
+	}
+	// Every mapping but the startup region is given back.
+	if unmaps != len(want)-1 || len(live) != 1 {
+		t.Fatalf("%d munmaps, %d mappings left, want %d and only the startup region", unmaps, len(live), len(want)-1)
+	}
+	for _, n := range live {
+		if n != 128<<20 {
+			t.Fatalf("the mapping left is %d bytes, want the startup region", n)
+		}
+	}
+}
+
+// TestResetHeapRefusedUnmap: a mapping the kernel refuses to unmap stays
+// linked, so the next reset tries it again rather than losing it for good,
+// and the reset reports the refusal.
+func TestResetHeapRefusedUnmap(t *testing.T) {
+	const sysMunmap = 11
+	dir := mkmod(t, demo(`package demo
+import ovid/io
+func main(io *ovid/io.Cap) i64 {
+  var m *ovid/io.HeapMark = ovid/io.MarkHeap(io)
+  ovid/io.Alloc(io, 100 << 20)
+  ovid/io.Alloc(io, 100 << 20)
+  if ovid/io.ResetHeap(io, m) == 0 {
+    return 10
+  }
+  if ovid/io.ResetHeap(io, m) == 0 {
+    return 11
+  }
+  return 3
+}
+`))
+	calls, code := traceRefusing(t, sysMunmap, mustBuild(t, dir))
+	if code != 3 {
+		t.Fatalf("exit %d, want 3 (10 or 11: a reset returned 0 for a refused munmap)", code)
+	}
+	var tried []uint64
+	for _, c := range calls {
+		if c.nr == sysMunmap {
+			tried = append(tried, c.args[0])
+		}
+	}
+	if len(tried) != 2 || tried[0] != tried[1] {
+		t.Fatalf("munmap of %#x, want the same mapping tried by both resets", tried)
 	}
 }
 

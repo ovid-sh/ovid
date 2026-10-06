@@ -989,8 +989,8 @@ func Opaque(c *Ch, tp i64, tn i64) bool {
   return !ovid/mem.Eq(c.pathp, c.pathn, strptr("ovid/io"), strlen("ovid/io")) || c.pkg.std == 0
 }
 
-// CheckAbi checks that ovid/io.Cap starts with the five fields the runtime
-// fills before main: argc, argv, heap, used, size, all i64.
+// CheckAbi checks that ovid/io.Cap starts with the six fields the runtime
+// fills before main: argc, argv, heap, used, size, maps, all i64.
 func CheckAbi(c *Ch) i64 {
   c.fnp = 0
   c.fnn = 0
@@ -1007,11 +1007,11 @@ func CheckAbi(c *Ch) i64 {
     return 0
   }
   // The names are four bytes each, five bytes apart.
-  var names i64 = strptr("argc argv heap used size")
+  var names i64 = strptr("argc argv heap used size maps")
   var f *ovid/parse.Decl = t.sub
   var ok bool = true
   var i i64 = 0
-  while i < 5 {
+  while i < 6 {
     if f == 0 as *ovid/parse.Decl {
       ok = false
     } else {
@@ -1027,7 +1027,7 @@ func CheckAbi(c *Ch) i64 {
   }
   if !ok {
     HereDecl(c, H_TYPE, k, t, 0 as *ovid/parse.Decl)
-    Err(c, strptr("bad_abi"), strlen("bad_abi"), strptr("the runtime fills Cap's first five fields: argc, argv, heap, used, size (all i64, in order)"), strlen("the runtime fills Cap's first five fields: argc, argv, heap, used, size (all i64, in order)"))
+    Err(c, strptr("bad_abi"), strlen("bad_abi"), strptr("the runtime fills Cap's first six fields: argc, argv, heap, used, size, maps (all i64, in order)"), strlen("the runtime fills Cap's first six fields: argc, argv, heap, used, size, maps (all i64, in order)"))
   }
   return 0
 }

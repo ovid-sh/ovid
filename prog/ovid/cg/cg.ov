@@ -2183,6 +2183,7 @@ func EmitStartup(c *C, mainLab i64) i64 {
   var heapOff i64 = CapOff(c, strptr("heap"), strlen("heap"))
   var usedOff i64 = CapOff(c, strptr("used"), strlen("used"))
   var sizeOff i64 = CapOff(c, strptr("size"), strlen("size"))
+  var mapsOff i64 = CapOff(c, strptr("maps"), strlen("maps"))
   if argcOff < 0 {
     return c.err
   }
@@ -2196,6 +2197,9 @@ func EmitStartup(c *C, mainLab i64) i64 {
     return c.err
   }
   if sizeOff < 0 {
+    return c.err
+  }
+  if mapsOff < 0 {
     return c.err
   }
   var fail i64 = ovid/asm.NewLabel(c.code)
@@ -2224,6 +2228,7 @@ func EmitStartup(c *C, mainLab i64) i64 {
   ovid/asm.MovMemRegDispRax(c.code, 1, heapOff)
   ovid/asm.MovRegImm64(c.code, 0, 0)
   ovid/asm.MovMemRegDispRax(c.code, 1, usedOff)
+  ovid/asm.MovMemRegDispRax(c.code, 1, mapsOff)
   ovid/asm.MovRegImm64(c.code, 0, HEAP)
   ovid/asm.MovMemRegDispRax(c.code, 1, sizeOff)
   ovid/asm.MovRegReg(c.code, 7, 4)
