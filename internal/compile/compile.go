@@ -1464,13 +1464,13 @@ func (c *cg) splitAddr(n *ir.Node) (*ir.Node, int32) {
 	return n, int32(d)
 }
 
-// emitStore stores val, width bits of it, at addr + off.
 // The widths of the memory builtins, in bits.
 var (
 	loadWidth  = map[string]int{"load8": 8, "load16": 16, "load32": 32, "load64": 64}
 	storeWidth = map[string]int{"store8": 8, "store16": 16, "store32": 32, "store64": 64}
 )
 
+// emitStore stores val, width bits of it, at addr + off.
 func (c *cg) emitStore(addr, val *ir.Node, width int, off int32) error {
 	if k, v := c.operand(val); k != kNone {
 		base, index, d, err := c.emitAddr(addr, 0)
