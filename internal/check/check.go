@@ -885,7 +885,15 @@ func (c *checker) expr0(e *env, n *ir.Node) string {
 		c.unknownName(n.ID, n.Name, e)
 		return "invalid"
 	case "index", "len":
-		cn := c.table(n)
+		// A param or local of the name shadows a table, as it does a const.
+		var cn *ir.Const
+		if _, id, ok := e.lookup(n.Name); ok && n.Pkg == "" {
+			c.use(id, n.ID, "name", c.fn.ID, n.NameSpan)
+			c.issue(Issue{Code: "bad_type", ID: n.ID, Message: n.Name + " is a variable, not a table",
+				Hint: "only a const declared [N]i64 can be indexed or measured"})
+		} else {
+			cn = c.table(n)
+		}
 		if n.Op == "index" {
 			c.want(e, n.Arg, "i64", "index of "+n.Name)
 		}

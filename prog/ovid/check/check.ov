@@ -593,7 +593,13 @@ func CheckExprIn(c *Ch, n *ovid/parse.Node) i64 {
     return SetBad(c)
   }
   if op == ovid/parse.OP_INDEX || op == ovid/parse.OP_LEN {
-    var td *ovid/parse.Decl = Table(c, n)
+    // A param or local of the name shadows a table, as it does a const.
+    var td *ovid/parse.Decl = 0 as *ovid/parse.Decl
+    if n.pkgn == 0 && Lookup(c, n.namep, n.namen) != 0 {
+      Err(c, strptr("bad_type"), strlen("bad_type"), strptr("a variable is not a table"), strlen("a variable is not a table"))
+    } else {
+      td = Table(c, n)
+    }
     if op == ovid/parse.OP_INDEX {
       CheckExpr(c, n.arg)
       NeedI64(c, strptr("index"), strlen("index"))
