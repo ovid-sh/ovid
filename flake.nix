@@ -68,9 +68,10 @@
           inherit ovid hello;
           default = ovid;
         } // lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "x86_64-linux") {
-          # It runs s1, and Ovid's output runs only on Linux x86-64.
+          # Ovid's output runs only on Linux x86-64: ovid-selfhost runs s1,
+          # and an image built elsewhere would be tagged for an architecture
+          # its binary is not.
           inherit ovid-selfhost;
-        } // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
           # The program and nothing else: no libc, no shell, no loader.
           hello-image = pkgs.dockerTools.buildImage {
             name = "ovid-hello";
