@@ -516,11 +516,20 @@ func NeedBool(c *Ch, msg i64, msgn i64) i64 {
   return NeedTy(c, strptr("bool"), strlen("bool"), msg, msgn)
 }
 
+// CheckExpr types expression n, leaving the checker at n, so that an error
+// a caller then reports about the value is placed at the expression and
+// not at whatever node inside it was typed last.
 func CheckExpr(c *Ch, n *ovid/parse.Node) i64 {
   if n == 0 as *ovid/parse.Node {
     Err(c, strptr("missing_expr"), strlen("missing_expr"), strptr("empty"), strlen("empty"))
     return SetBad(c)
   }
+  CheckExprIn(c, n)
+  Here(c, n)
+  return 0
+}
+
+func CheckExprIn(c *Ch, n *ovid/parse.Node) i64 {
   Here(c, n)
   var op i64 = n.op
   if op == ovid/parse.OP_INT || op == ovid/parse.OP_STRPTR || op == ovid/parse.OP_STRLEN {
@@ -559,23 +568,14 @@ func CheckExpr(c *Ch, n *ovid/parse.Node) i64 {
     }
     return SetI64(c)
   }
+  // An operand of the wrong type is reported at that operand, as soon as
+  // it is typed; a comparison of two different types is reported at its
+  // right side.
   if op >= ovid/parse.OP_ADD && op <= ovid/parse.OP_SHR {
     CheckExpr(c, n.left)
-    var lp i64 = c.typ
-    var ln i64 = c.tyn
-    var lb bool = Bad(c)
+    NeedI64(c, strptr("arith needs i64"), strlen("arith needs i64"))
     CheckExpr(c, n.right)
-    var rb bool = Bad(c)
-    if !lb {
-      if !TyEq(lp, ln, strptr("i64"), strlen("i64")) {
-        Err(c, strptr("type_mismatch"), strlen("type_mismatch"), strptr("arith needs i64"), strlen("arith needs i64"))
-      }
-    }
-    if !rb {
-      if !IsTy(c, strptr("i64"), strlen("i64")) {
-        Err(c, strptr("type_mismatch"), strlen("type_mismatch"), strptr("arith needs i64"), strlen("arith needs i64"))
-      }
-    }
+    NeedI64(c, strptr("arith needs i64"), strlen("arith needs i64"))
     return SetI64(c)
   }
   if op == ovid/parse.OP_EQ || op == ovid/parse.OP_NE {
@@ -595,28 +595,15 @@ func CheckExpr(c *Ch, n *ovid/parse.Node) i64 {
   }
   if op >= ovid/parse.OP_LT && op <= ovid/parse.OP_GE {
     CheckExpr(c, n.left)
-    var lb bool = Bad(c)
-    var lp i64 = c.typ
-    var ln i64 = c.tyn
+    NeedI64(c, strptr("order needs i64"), strlen("order needs i64"))
     CheckExpr(c, n.right)
-    if !lb {
-      if !TyEq(lp, ln, strptr("i64"), strlen("i64")) {
-        Err(c, strptr("type_mismatch"), strlen("type_mismatch"), strptr("order needs i64"), strlen("order needs i64"))
-      }
-    }
     NeedI64(c, strptr("order needs i64"), strlen("order needs i64"))
     return SetBool(c)
   }
   if op == ovid/parse.OP_LAND || op == ovid/parse.OP_LOR {
     CheckExpr(c, n.left)
-    var lb bool = Bad(c)
-    var lbool bool = IsTy(c, strptr("bool"), strlen("bool"))
+    NeedBool(c, strptr("logic needs bool"), strlen("logic needs bool"))
     CheckExpr(c, n.right)
-    if !lb {
-      if !lbool {
-        Err(c, strptr("type_mismatch"), strlen("type_mismatch"), strptr("logic needs bool"), strlen("logic needs bool"))
-      }
-    }
     NeedBool(c, strptr("logic needs bool"), strlen("logic needs bool"))
     return SetBool(c)
   }
@@ -669,6 +656,7 @@ func CheckExpr(c *Ch, n *ovid/parse.Node) i64 {
       return SetBad(c)
     }
     if FieldTy(c, c.typ, c.tyn, n.namep, n.namen) != 0 {
+      Here(c, n)
       Err(c, strptr("unknown_field"), strlen("unknown_field"), n.namep, n.namen)
       return SetBad(c)
     }
@@ -825,6 +813,7 @@ func CheckStmt(c *Ch, s *ovid/parse.Node) i64 {
     }
     if !was {
       if FieldTy(c, c.typ, c.tyn, s.namep, s.namen) != 0 {
+        Here(c, s)
         Err(c, strptr("unknown_field"), strlen("unknown_field"), s.namep, s.namen)
         was = true
       } else {

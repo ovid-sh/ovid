@@ -14,6 +14,7 @@ import (
 	"reflect"
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -1623,6 +1624,27 @@ func TestSelfHost(t *testing.T) {
 	out, code = run(t, s1, "check", broken, "--std", stdDir)
 	if d := last(t, out); code != 1 || d["fact"] != "summary" || d["ok"] != false || d["errors"] != float64(1) {
 		t.Fatalf("check of a syntax error %d: %s", code, out)
+	}
+
+	// An unknown field is reported at the access, not at its base, which
+	// starts at the same column: the two checkers must name the same id.
+	fields := mkmod(t, demo("package demo\nimport ovid/io\ntype P struct {\n  x i64\n}\nfunc main(io *ovid/io.Cap) i64 {\n  var p *P = ovid/io.Alloc(io, sizeof(P)) as *P\n  p.y = 1\n  return p.z + p.x\n}\n"))
+	b.Reset()
+	Check(fields, false, &b)
+	out, _ = run(t, s1, "check", fields, "--std", stdDir)
+	var goIDs, selfIDs []string
+	for _, d := range lines(t, b.String()) {
+		if d["fact"] == "error" {
+			goIDs = append(goIDs, fmt.Sprint(d["code"], " ", d["id"]))
+		}
+	}
+	for _, d := range lines(t, out) {
+		if d["fact"] == "error" {
+			selfIDs = append(selfIDs, fmt.Sprint(d["code"], " ", d["id"]))
+		}
+	}
+	if want := []string{"unknown_field st:demo.main:2", "unknown_field ex:demo.main:9"}; !slices.Equal(goIDs, want) || !slices.Equal(selfIDs, want) {
+		t.Fatalf("unknown field ids: go %v, self-hosted %v, want %v", goIDs, selfIDs, want)
 	}
 
 	// Both dumps are valid JSON and say the same thing. A literal's bytes

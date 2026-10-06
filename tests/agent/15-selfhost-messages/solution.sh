@@ -1,18 +1,15 @@
-# Each vague message becomes a call to Mismatch, which spells it as the Go
-# checker does; the helpers are appended to ovid/check. Every line the
+# Each vague message becomes a call to NeedOp or Mismatch, which spell it as
+# the Go checker does; the helpers are appended to ovid/check. Every line the
 # rewrite expects must be found, or prog/ changed under this task.
 set -e
 f=ovid/check/check.ov
 awk '
-/Err\(c, .*"arith needs i64"/ { arith++; sub(/Err\(.*/, arith == 1 ? "Mismatch(c, true, op, lp, ln, strptr(\"i64\"))" : "Mismatch(c, false, op, c.typ, c.tyn, strptr(\"i64\"))"); n++ }
+/NeedI64\(c, strptr\("arith needs i64"\)/ { arith++; sub(/NeedI64\(.*/, "NeedOp(c, " (arith == 1 ? "true" : "false") ", op, strptr(\"i64\"))"); n++ }
 /Err\(c, .*"comparison types differ"/ { sub(/Err\(.*/, "Mismatch(c, false, op, c.typ, c.tyn, ovid/io.CStr(c.io, lp, ln))"); n++ }
-/Err\(c, .*"order needs i64"/ { sub(/Err\(.*/, "Mismatch(c, true, op, lp, ln, strptr(\"i64\"))"); n++ }
-/NeedI64\(c, strptr\("order needs i64"\)/ { sub(/NeedI64\(.*/, "NeedOp(c, op, strptr(\"i64\"))"); n++ }
-/Err\(c, .*"logic needs bool"/ { sub(/Err\(.*/, "Mismatch(c, true, op, lp, ln, strptr(\"bool\"))"); n++ }
-/NeedBool\(c, strptr\("logic needs bool"\)/ { sub(/NeedBool\(.*/, "NeedOp(c, op, strptr(\"bool\"))"); n++ }
+/NeedI64\(c, strptr\("order needs i64"\)/ { order++; sub(/NeedI64\(.*/, "NeedOp(c, " (order == 1 ? "true" : "false") ", op, strptr(\"i64\"))"); n++ }
+/NeedBool\(c, strptr\("logic needs bool"\)/ { logic++; sub(/NeedBool\(.*/, "NeedOp(c, " (logic == 1 ? "true" : "false") ", op, strptr(\"bool\"))"); n++ }
 { print }
-/var lbool bool = IsTy\(c, strptr\("bool"\), strlen\("bool"\)\)/ { ind = $0; sub(/[^ ].*/, "", ind); print ind "var lp i64 = c.typ"; print ind "var ln i64 = c.tyn"; n++ }
-END { if (n != 8) { print "rewrote " n " lines, want 8" > "/dev/stderr"; exit 1 } }
+END { if (n != 7) { print "rewrote " n " lines, want 7" > "/dev/stderr"; exit 1 } }
 ' "$f" > "$f.new"
 mv "$f.new" "$f"
 ovid append ovid/check <<'EOF2'
@@ -73,11 +70,11 @@ func Mismatch(c *Ch, left bool, op i64, gp i64, gn i64, want i64) i64 {
   return Err(c, strptr("type_mismatch"), strlen("type_mismatch"), m.data, m.len)
 }
 
-// NeedOp reports the right operand of op unless the current type is want
-// (a NUL-terminated literal) or invalid.
-func NeedOp(c *Ch, op i64, want i64) i64 {
+// NeedOp reports the operand of op just typed (left or right) unless the
+// current type is want (a NUL-terminated literal) or invalid.
+func NeedOp(c *Ch, left bool, op i64, want i64) i64 {
   if !Bad(c) && !IsTy(c, want, ovid/io.CLen(want)) {
-    return Mismatch(c, false, op, c.typ, c.tyn, want)
+    return Mismatch(c, left, op, c.typ, c.tyn, want)
   }
   return 0
 }
