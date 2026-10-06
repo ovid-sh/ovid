@@ -12,6 +12,8 @@ import (
 const (
 	ptraceGetSiginfo = 0x4202
 	ptraceExitKill   = 0x100000
+	ptraceTraceExec  = 0x10
+	ptraceEventExec  = 4
 )
 
 // runTraced runs bin under ptrace. On a fatal signal it records the
@@ -22,7 +24,10 @@ func runTraced(bin string, args []string, pio procIO, timeout time.Duration) (r 
 	// Every ptrace request must come from the thread that started the tracee.
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
-	cmd := pio.command(bin, args)
+	cmd, err := pio.command(bin, args)
+	if err != nil {
+		return procResult{err: err}, true
+	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Ptrace: true}
 	if err := cmd.Start(); err != nil {
 		return r, false
@@ -57,9 +62,13 @@ func runTraced(bin string, args []string, pio procIO, timeout time.Duration) (r 
 		case ws.Stopped():
 			sig := ws.StopSignal()
 			if !started && sig == syscall.SIGTRAP {
-				// The stop after exec.
+				// The stop after exec. A confined program execs twice, the
+				// launcher and then itself; the second stop is marked as an
+				// exec event and is not a signal to deliver.
 				started = true
-				syscall.PtraceSetOptions(pid, ptraceExitKill)
+				syscall.PtraceSetOptions(pid, ptraceExitKill|ptraceTraceExec)
+				sig = 0
+			} else if sig == syscall.SIGTRAP && ws.TrapCause() == ptraceEventExec {
 				sig = 0
 			} else if fatalSignal(sig) && r.pc == 0 {
 				capture(pid, sig, &r)
@@ -97,4 +106,12 @@ func capture(pid int, sig syscall.Signal, r *procResult) {
 		}
 		bp = next
 	}
+}
+
+// signalHint explains a death by a signal only confinement sends.
+func signalHint(sig syscall.Signal) string {
+	if sig == syscall.SIGSYS {
+		return confineHint
+	}
+	return ""
 }

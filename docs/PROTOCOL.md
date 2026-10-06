@@ -62,6 +62,27 @@ Each of `stdout` and `stderr` keeps its first 65,536 bytes, or
 as it is written. Bytes that are not UTF-8 are replaced, so the line is
 always valid JSON.
 
+On Linux x86-64 the program is **confined** unless `--no-confine` is given
+(the same for `test`): it runs under a seccomp filter that allows exactly
+the system calls its build receipt lists (`syscalls`) and kills it on any
+other, reported as `"signal":"bad system call"` with a hint; and, where the
+kernel has Landlock, under a file system it can read everywhere and write
+only in one fresh directory, its working directory. The record adds
+`"confined"`, the list of what was applied (`["seccomp"]`, or
+`["seccomp","landlock"]`), and `"writable"`, that directory, when the
+program left anything in it; an empty one is removed. Where no temporary
+directory can be made, the program runs with nowhere to write if the kernel
+has Landlock; without it there is no way to make the file system read-only,
+and the request fails (`"error":"run"`) rather than run the program with
+the caller's write rights: set `TMPDIR`, or pass `--no-confine`. `test`'s
+summary carries the same fields. Reads are not restricted: a confined
+program can still read any file the caller can. A program that must write
+elsewhere, by an absolute path, needs `--no-confine`.
+If the confinement itself cannot be set up (the kernel refuses a rule or
+the filter), the program is not started and the request fails with
+`"error":"run"` and the reason; `confined` is never claimed for a program
+that did not run under it.
+
 A module that does not build ends as without `--json`: the diagnostics,
 then `{"ok":false,"errors":N}`, exit 125. So does a program that could not
 be placed or started: `{"ok":false,"error":"run",...}`, exit 125.

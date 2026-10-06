@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"syscall"
 	"time"
@@ -35,33 +36,86 @@ type procIO struct {
 	stdout, stderr io.Writer
 	extra          []*os.File // fd 3 and up
 	argv0          string     // the program's name for itself, when it is not bin
+	confine        *confineSpec
 }
 
-func (pio procIO) command(bin string, args []string) *exec.Cmd {
-	cmd := exec.Command(bin, args...)
-	// An empty environment, not ovid's own: the kernel puts the environment
-	// on the stack after argv, where any program can read it, and the
-	// caller's often holds secrets.
-	cmd.Env = []string{}
+func (pio procIO) command(bin string, args []string) (*exec.Cmd, error) {
+	var cmd *exec.Cmd
+	if pio.confine != nil {
+		// ovid itself, as the launcher: it confines the process and then
+		// becomes the program. It gets the spec and nothing else of ours;
+		// GODEBUG keeps the Go runtime from sending itself a signal between
+		// installing the filter and execve.
+		self, err := os.Executable()
+		if err != nil {
+			self = os.Args[0]
+		}
+		c := pio.confine
+		c.Argv0 = pio.argv0
+		if c.Argv0 == "" {
+			c.Argv0 = bin
+		}
+		// The launcher's status pipe is the last extra file. Without it
+		// nothing would show whether the program was started, so without it
+		// nothing is started.
+		w, err := c.openStatus(len(pio.extra))
+		if err != nil {
+			return nil, fmt.Errorf("cannot make the launcher's status pipe: %v", err)
+		}
+		pio.extra = append(pio.extra, w)
+		// The launcher changes directory before it looks at the program and
+		// the writable directory, so both must be absolute (TMPDIR may be
+		// relative, and the staged program and the directory come from it).
+		if bin, err = filepath.Abs(bin); err != nil {
+			return nil, err
+		}
+		if c.Writable != "" {
+			if c.Writable, err = filepath.Abs(c.Writable); err != nil {
+				return nil, err
+			}
+		}
+		cmd = exec.Command(self, append([]string{"--", bin}, args...)...)
+		cmd.Env = []string{confineEnv + "=" + c.encode(), "GODEBUG=asyncpreemptoff=1"}
+		if c.Writable != "" {
+			cmd.Dir = c.Writable
+		}
+	} else {
+		cmd = exec.Command(bin, args...)
+		// An empty environment, not ovid's own: the kernel puts the
+		// environment on the stack after argv, where any program can read
+		// it, and the caller's often holds secrets.
+		cmd.Env = []string{}
+		if pio.argv0 != "" {
+			cmd.Args[0] = pio.argv0
+		}
+	}
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = pio.stdin, pio.stdout, pio.stderr
 	cmd.ExtraFiles = pio.extra
-	if pio.argv0 != "" {
-		cmd.Args[0] = pio.argv0
-	}
-	return cmd
+	return cmd, nil
 }
 
 // runProc runs bin, traced where the platform allows so a fault can be
 // traced back to a statement. A timeout of 0 means none.
 func runProc(bin string, args []string, pio procIO, timeout time.Duration) procResult {
-	if r, ok := runTraced(bin, args, pio, timeout); ok {
-		return r
+	r, ok := runTraced(bin, args, pio, timeout)
+	if !ok {
+		r = runPlain(bin, args, pio, timeout)
 	}
-	return runPlain(bin, args, pio, timeout)
+	// A launcher that could not confine the program never started it: that
+	// is a failure of the request, not an exit of the program.
+	if pio.confine != nil {
+		if err := pio.confine.setupError(); err != nil {
+			return procResult{err: err}
+		}
+	}
+	return r
 }
 
 func runPlain(bin string, args []string, pio procIO, timeout time.Duration) procResult {
-	cmd := pio.command(bin, args)
+	cmd, err := pio.command(bin, args)
+	if err != nil {
+		return procResult{err: err}
+	}
 	if err := cmd.Start(); err != nil {
 		return procResult{err: err}
 	}
@@ -127,7 +181,7 @@ func crashStack(m *module.Module, marks []compile.Mark, r procResult) []map[stri
 // signal: the signal, the statement it died in and the calls that led
 // there, the faulting address, and a hint for the common causes. exe is the
 // program's image.
-func describeCrash(m *module.Module, exe []byte, marks []compile.Mark, pr procResult, r map[string]any) {
+func describeCrash(m *module.Module, exe []byte, marks []compile.Mark, pr procResult, confined bool, r map[string]any) {
 	r["signal"] = pr.signal.String()
 	if st := crashStack(m, marks, pr); len(st) > 0 {
 		r["at"] = st[0]
@@ -135,6 +189,9 @@ func describeCrash(m *module.Module, exe []byte, marks []compile.Mark, pr procRe
 	}
 	if pr.signal == syscall.SIGFPE {
 		r["hint"] = "an integer / or % by zero (or the most negative i64 / -1)"
+	}
+	if h := signalHint(pr.signal); h != "" && confined {
+		r["hint"] = h
 	}
 	if pr.hasAddr {
 		r["fault_addr"] = fmt.Sprintf("%#x", pr.addr)

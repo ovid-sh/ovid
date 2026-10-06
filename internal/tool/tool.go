@@ -226,6 +226,11 @@ type RunOpts struct {
 	// MaxOutput is how many bytes of stdout, and of stderr, the JSON record
 	// keeps; 0 is DefaultRunOutput.
 	MaxOutput int
+	// NoConfine runs the program with the caller's own rights. By default,
+	// on Linux x86-64, it runs under a seccomp filter of its own system
+	// calls and, where the kernel has Landlock, a file system it can write
+	// only in a fresh directory, its working directory.
+	NoConfine bool
 }
 
 // DefaultRunOutput is how much of each output stream run --json keeps.
@@ -255,11 +260,12 @@ func RunWith(dir string, args []string, o RunOpts, w io.Writer) int {
 		emit(w, map[string]any{"ok": false, "errors": len(c.diags)})
 		return ExitBuild
 	}
-	exe, marks, err := compile.CompileMap(serveProgram(m.Prog))
+	out, err := compile.CompileAll(serveProgram(m.Prog))
 	if err != nil {
 		fail(w, "compile", err.Error(), "")
 		return ExitBuild
 	}
+	exe, marks := out.Bin, out.Marks
 	// A missing temporary directory is not fatal yet: stage may still hold
 	// the program in memory.
 	tmpd, terr := os.MkdirTemp("", "ovid-run-")
@@ -279,6 +285,15 @@ func RunWith(dir string, args []string, o RunOpts, w io.Writer) int {
 	pio := procIO{stdin: os.Stdin, stdout: os.Stdout, stderr: os.Stderr, argv0: name}
 	if st.extra != nil {
 		pio.extra = []*os.File{st.extra}
+	}
+	if !o.NoConfine && confineSupported {
+		pio.confine = newConfine(out.Syscalls, writableDir(), name)
+		// Whatever happens next, an empty writable directory is not left.
+		defer pio.confine.keepWritable()
+		if err := pio.confine.unenforceable(); err != nil {
+			fail(w, "run", err.Error(), tmpHint+"; or --no-confine")
+			return ExitBuild
+		}
 	}
 	var outc, errc *pipeCapture
 	if o.JSON {
@@ -319,7 +334,7 @@ func RunWith(dir string, args []string, o RunOpts, w io.Writer) int {
 			r["signal"] = "timeout"
 			r["hint"] = fmt.Sprintf("killed after %s", o.Timeout)
 		default:
-			describeCrash(m, exe, marks, pr, r)
+			describeCrash(m, exe, marks, pr, pio.confine != nil, r)
 		}
 		cut := func(key string, b []byte, n int64) {
 			if n > int64(len(b)) { // more was written than was kept
@@ -329,6 +344,12 @@ func RunWith(dir string, args []string, o RunOpts, w io.Writer) int {
 		}
 		cut("stdout", stdout, outN)
 		cut("stderr", stderr, errN)
+		if pio.confine != nil {
+			r["confined"] = pio.confine.applied()
+			if dir := pio.confine.keepWritable(); dir != "" {
+				r["writable"] = dir
+			}
+		}
 		// ok still says the program ran; that it changed its own module is
 		// reported beside it for the caller to weigh.
 		moduleChanged(m, r)
@@ -343,7 +364,7 @@ func RunWith(dir string, args []string, o RunOpts, w io.Writer) int {
 		return pr.code
 	}
 	r := map[string]any{"ok": false, "error": "killed", "exit": 128 + int(pr.signal)}
-	describeCrash(m, exe, marks, pr, r)
+	describeCrash(m, exe, marks, pr, pio.confine != nil, r)
 	if pr.timedOut {
 		r["signal"], r["exit"] = "timeout", ExitTimeout
 		r["hint"] = fmt.Sprintf("killed after %s", o.Timeout)

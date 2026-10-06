@@ -95,6 +95,8 @@ func pageArg(cmd string, a args) tool.Page {
 }
 
 func main() {
+	// With OVID_CONFINE set this process is a launcher for a confined
+	// program, and tool's init has already replaced it; see tool.ConfineMain.
 	argv := os.Args[1:]
 	dir := ""
 	// A leading -C dir applies to every command.
@@ -145,8 +147,8 @@ func main() {
 		a := parse(cmd, argv, []string{"C", "o"}, nil)
 		os.Exit(tool.Build(dirArg(a, 0), a.vals["o"], w))
 	case "run":
-		a := parse(cmd, argv, []string{"C", "timeout", "max-output"}, []string{"json"})
-		o := tool.RunOpts{JSON: a.bools["json"]}
+		a := parse(cmd, argv, []string{"C", "timeout", "max-output"}, []string{"json", "no-confine"})
+		o := tool.RunOpts{JSON: a.bools["json"], NoConfine: a.bools["no-confine"]}
 		if v, ok := a.vals["timeout"]; ok {
 			d, err := time.ParseDuration(v)
 			if err != nil || d <= 0 {
@@ -163,8 +165,8 @@ func main() {
 		}
 		os.Exit(tool.RunWith(dirArg(a, 0), a.rest, o, w))
 	case "test":
-		a := parse(cmd, argv, []string{"C", "run"}, []string{"list"})
-		os.Exit(tool.Test(dirArg(a, 0), a.vals["run"], a.bools["list"], w))
+		a := parse(cmd, argv, []string{"C", "run"}, []string{"list", "no-confine"})
+		os.Exit(tool.TestWith(dirArg(a, 0), tool.TestOpts{Filter: a.vals["run"], List: a.bools["list"], NoConfine: a.bools["no-confine"]}, w))
 	case "dump":
 		a := parse(cmd, argv, []string{"C", "pkg", "o"}, nil)
 		os.Exit(tool.Dump(dirArg(a, 0), a.vals["pkg"], a.vals["o"], w))
