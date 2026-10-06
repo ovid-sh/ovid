@@ -125,6 +125,9 @@
             systemd.services = lib.mapAttrs'
               (name: p: lib.nameValuePair (service name p) {
                 wantedBy = lib.optionals (p.listen == null) [ "multi-user.target" ];
+                # A timed-out instance would otherwise stay loaded, failed,
+                # one per such connection.
+                unitConfig = lib.optionalAttrs (p.listen != null) { CollectMode = "inactive-or-failed"; };
                 serviceConfig = {
                   ExecStart = utils.escapeSystemdExecArgs ([ (lib.getExe p.package) ] ++ p.args);
                   DynamicUser = true;
@@ -140,6 +143,11 @@
                   StandardInput = "socket";
                   StandardOutput = "socket";
                   StandardError = "journal";
+                  # The host waits on read with no timeout, so a peer that
+                  # sends nothing would hold its instance, and one of the
+                  # socket's connection slots, for good. Bound each
+                  # connection's life.
+                  RuntimeMaxSec = lib.mkDefault "60s";
                 };
               })
               cfg;
@@ -147,7 +155,11 @@
               (name: p: lib.nameValuePair "ovid-${name}" {
                 wantedBy = [ "sockets.target" ];
                 listenStreams = [ (toString p.listen) ];
-                socketConfig.Accept = true;
+                socketConfig = {
+                  Accept = true;
+                  # Of the 64 connections systemd allows, one peer gets 8.
+                  MaxConnectionsPerSource = lib.mkDefault 8;
+                };
               })
               (lib.filterAttrs (_: p: p.listen != null) cfg);
           };
@@ -237,6 +249,7 @@
                 cat = { package = catfile; args = [ "/etc/os-release" ]; };
                 greet = { package = greet; listen = 8080; };
               };
+              systemd.services."ovid-greet@".serviceConfig.RuntimeMaxSec = "3s";
             };
             testScript = ''
               machine.wait_for_unit("multi-user.target")
@@ -269,6 +282,11 @@
               out = machine.succeed("curl -sS -w '%{http_code} %{num_connects}\\n' 'http://127.0.0.1:8080/hello?a' 'http://127.0.0.1:8080/nope'")
               assert out == "hello, a\n200 1\n404 0\n", out
               machine.succeed("test $(systemctl show ovid-greet.socket -p NAccepted --value) = 2")
+              # A connection that sends nothing is closed when its instance
+              # runs out of time (3 s here, not the 60 s default), and the
+              # failed instance does not stay behind.
+              machine.succeed("timeout 15 bash -c 'exec 3<>/dev/tcp/127.0.0.1/8080; cat <&3'")
+              machine.wait_until_succeeds("test -z \"$(systemctl list-units --all --plain --no-legend 'ovid-greet@*')\"", timeout=30)
 
               machine.succeed("cp -r ${./nix/example} /tmp/ex && chmod -R u+w /tmp/ex")
               machine.succeed("cd /tmp/ex && ovid build -o /tmp/h && /tmp/h | grep 'hello from'")
