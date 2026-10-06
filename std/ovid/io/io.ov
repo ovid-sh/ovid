@@ -353,7 +353,10 @@ func ReadFile(io *Cap, path i64, pathn i64, outn i64) (i64, i64) {
     }
     got = got + r
   }
-  Close(fd)
+  e = Close(fd)
+  if e != 0 {
+    return 0, e
+  }
   store8(buf + sz, 0)
   store64(outn, sz)
   return buf, 0
