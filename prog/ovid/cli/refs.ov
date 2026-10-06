@@ -23,6 +23,7 @@ type Target struct {
   pkg *ovid/parse.Pkg
   own *ovid/parse.Decl
   nmatch i64
+  bad *ovid/mem.Buf
 }
 
 // Eq2 reports whether the two strings are the same.
@@ -60,14 +61,11 @@ func ParseInt(p i64, n i64) i64 {
   return v
 }
 
-// FindVar finds statement number num of func fn: a var or var2 statement.
+// FindVar finds statement number num in the statement list s.
 func FindVar(s *ovid/parse.Node, num i64) *ovid/parse.Node {
   while s != 0 as *ovid/parse.Node {
     if s.num == num {
-      if s.op == ovid/parse.OP_VAR || s.op == ovid/parse.OP_VAR2 {
-        return s
-      }
-      return 0 as *ovid/parse.Node
+      return s
     }
     var r *ovid/parse.Node = FindVar(s.then, num)
     if r == 0 as *ovid/parse.Node {
@@ -107,6 +105,19 @@ func ByID(m *ovid/parse.Mod, t *Target, qp i64, qn i64) i64 {
     kind = T_PARAM
   } else if Eq2(qp, colon, strptr("st"), 2) {
     kind = T_VAR
+  } else if Eq2(qp, colon, strptr("ex"), 2) || Eq2(qp, colon, strptr("pkg"), 3) || Eq2(qp, colon, strptr("im"), 2) {
+    // An id refs cannot follow, as the Go refs says.
+    t.bad = ovid/mem.New(m.io, 256)
+    ovid/mem.WBytes(m.io, t.bad, strptr("refs works on funcs, types, fields, consts, params, and var statements, not "), strlen("refs works on funcs, types, fields, consts, params, and var statements, not "))
+    if load8(qp) == 101 {
+      ovid/mem.WBytes(m.io, t.bad, strptr("expr"), 4)
+    } else if load8(qp) == 112 {
+      ovid/mem.WBytes(m.io, t.bad, strptr("package"), 7)
+    } else {
+      ovid/mem.WBytes(m.io, t.bad, strptr("import"), 6)
+    }
+    t.nmatch = 1
+    return 0
   } else {
     return 0
   }
@@ -170,8 +181,23 @@ func ByID(m *ovid/parse.Mod, t *Target, qp i64, qn i64) i64 {
     if t.own != 0 as *ovid/parse.Decl && num >= 0 {
       t.vn = FindVar(t.own.body, num)
     }
-    if t.vn != 0 as *ovid/parse.Node {
-      t.nmatch = 1
+    if t.vn == 0 as *ovid/parse.Node {
+      return 0
+    }
+    t.nmatch = 1
+    if t.vn.op == ovid/parse.OP_VAR2 {
+      t.bad = ovid/mem.New(m.io, 256)
+      ovid/mem.WBytes(m.io, t.bad, qp, qn)
+      ovid/mem.WBytes(m.io, t.bad, strptr(" declares two locals, "), strlen(" declares two locals, "))
+      ovid/mem.WBytes(m.io, t.bad, t.vn.namep, t.vn.namen)
+      ovid/mem.WBytes(m.io, t.bad, strptr(" and "), 5)
+      ovid/mem.WBytes(m.io, t.bad, t.vn.name2p, t.vn.name2n)
+      ovid/mem.WBytes(m.io, t.bad, strptr(", and an id names only one; refs cannot reach either yet (ovid grep finds their uses)"), strlen(", and an id names only one; refs cannot reach either yet (ovid grep finds their uses)"))
+    } else if t.vn.op != ovid/parse.OP_VAR {
+      t.bad = ovid/mem.New(m.io, 256)
+      ovid/mem.WBytes(m.io, t.bad, strptr("refs works on funcs, types, fields, consts, params, and var statements; "), strlen("refs works on funcs, types, fields, consts, params, and var statements; "))
+      ovid/mem.WBytes(m.io, t.bad, qp, qn)
+      ovid/mem.WBytes(m.io, t.bad, strptr(" is another kind of statement"), strlen(" is another kind of statement"))
     }
     return 0
   }
@@ -181,8 +207,35 @@ func ByID(m *ovid/parse.Mod, t *Target, qp i64, qn i64) i64 {
   return 0
 }
 
-// ByName resolves Name or pkg.Name among funcs, types, and consts; nmatch
-// counts how many decls answer to it.
+// PkgIs reports whether package k is named by q[0:n]: its whole path, or
+// the tail of it after a "/" (mem for ovid/mem), as the Go toolchain's
+// name lookup allows.
+func PkgIs(k *ovid/parse.Pkg, q i64, n i64) bool {
+  if Eq2(k.pathp, k.pathn, q, n) {
+    return true
+  }
+  if k.pathn > n && load8((k.pathp + k.pathn) - (n + 1)) == 47 {
+    return Eq2((k.pathp + k.pathn) - n, n, q, n)
+  }
+  return false
+}
+
+// Found counts one decl that answers to the name.
+func Found(t *Target, kind i64, k *ovid/parse.Pkg, d *ovid/parse.Decl, own *ovid/parse.Decl) i64 {
+  if d == 0 as *ovid/parse.Decl {
+    return 0
+  }
+  t.nmatch = t.nmatch + 1
+  t.kind = kind
+  t.d = d
+  t.pkg = k
+  t.own = own
+  return 0
+}
+
+// ByName resolves Name, pkg.Name, Owner.name, or pkg.Owner.name among
+// funcs, types, consts, fields, and params (pkg being a package path or
+// the tail of one); nmatch counts how many decls answer to it.
 func ByName(m *ovid/parse.Mod, t *Target, qp i64, qn i64) i64 {
   var dot i64 = Split(qp, qn, 46)
   var np i64 = qp
@@ -191,29 +244,35 @@ func ByName(m *ovid/parse.Mod, t *Target, qp i64, qn i64) i64 {
     np = (qp + dot) + 1
     nn = (qn - dot) - 1
   }
+  // The qualifier as an owner (Type or Func), itself maybe qualified.
+  var op i64 = 0
+  var on i64 = 0
+  var pp i64 = 0
+  var pn i64 = -1
+  if dot > 0 {
+    var dot2 i64 = Split(qp, dot, 46)
+    op = (qp + dot2) + 1
+    on = (dot - dot2) - 1
+    if dot2 > 0 {
+      pp = qp
+      pn = dot2
+    }
+  }
   var k *ovid/parse.Pkg = m.pkgs
   while k != 0 as *ovid/parse.Pkg {
-    if dot < 0 || Eq2(k.pathp, k.pathn, qp, dot) {
-      var d *ovid/parse.Decl = ovid/parse.FindDecl(k.fs, np, nn)
-      if d != 0 as *ovid/parse.Decl {
-        t.nmatch = t.nmatch + 1
-        t.kind = T_FUNC
-        t.d = d
-        t.pkg = k
+    if dot < 0 || PkgIs(k, qp, dot) {
+      Found(t, T_FUNC, k, ovid/parse.FindDecl(k.fs, np, nn), 0 as *ovid/parse.Decl)
+      Found(t, T_TYPE, k, ovid/parse.FindDecl(k.ts, np, nn), 0 as *ovid/parse.Decl)
+      Found(t, T_CONST, k, ovid/parse.FindDecl(k.cs, np, nn), 0 as *ovid/parse.Decl)
+    }
+    if dot > 0 && (pn < 0 || PkgIs(k, pp, pn)) {
+      var ty *ovid/parse.Decl = ovid/parse.FindDecl(k.ts, op, on)
+      if ty != 0 as *ovid/parse.Decl {
+        Found(t, T_FIELD, k, ovid/parse.FindDecl(ty.sub, np, nn), ty)
       }
-      d = ovid/parse.FindDecl(k.ts, np, nn)
-      if d != 0 as *ovid/parse.Decl {
-        t.nmatch = t.nmatch + 1
-        t.kind = T_TYPE
-        t.d = d
-        t.pkg = k
-      }
-      d = ovid/parse.FindDecl(k.cs, np, nn)
-      if d != 0 as *ovid/parse.Decl {
-        t.nmatch = t.nmatch + 1
-        t.kind = T_CONST
-        t.d = d
-        t.pkg = k
+      var fn *ovid/parse.Decl = ovid/parse.FindDecl(k.fs, op, on)
+      if fn != 0 as *ovid/parse.Decl {
+        Found(t, T_PARAM, k, ovid/parse.FindDecl(fn.sub, np, nn), fn)
       }
     }
     k = k.next
@@ -357,6 +416,9 @@ func CmdRefs(io *ovid/io.Cap) i64 {
   }
   if t.nmatch > 1 {
     return Fail(io, strptr("ambiguous"), 9, strptr("several declarations have that name; use a full id"), strlen("several declarations have that name; use a full id"))
+  }
+  if t.bad != 0 as *ovid/mem.Buf {
+    return Fail(io, strptr("unsupported"), 11, t.bad.data, t.bad.len)
   }
   // The uses of t, sorted by file and position (insertion sort; a decl
   // has tens of uses, a few hundred at most).

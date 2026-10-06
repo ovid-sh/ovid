@@ -1686,7 +1686,8 @@ func TestSelfHost(t *testing.T) {
 	// target: its checker records the same uses.
 	for _, q := range []string{"fn:ovid/parse.FindDecl", "fn:ovid/mem.Eq", "ty:ovid/parse.Decl", "ty:ovid/io.Cap",
 		"fld:ovid/parse.Decl.next", "fld:ovid/parse.Node.op", "pa:ovid/check.Err.code", "cn:ovid/parse.OP_CALL",
-		"cn:ovid/asm.LOADADDR", "st:ovid/sha.Sum:1", "Block", "ovid/cg.Max", "Revision", "ovid/parse.CountDecls"} {
+		"cn:ovid/asm.LOADADDR", "st:ovid/sha.Sum:1", "Block", "ovid/cg.Max", "Revision", "ovid/parse.CountDecls",
+		"mem.Eq", "Decl.next", "parse.Node.op", "Err.code"} {
 		// Both print module-relative paths: this toolchain under
 		// OVID_PATHS=module, the self-hosted one when run in the module on ".".
 		t.Setenv("OVID_PATHS", "module")
