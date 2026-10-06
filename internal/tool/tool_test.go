@@ -1188,6 +1188,22 @@ func TestEdges(io *ovid/io.Cap) i64 {
 	}
 }
 
+// TestTwoResultFuncIsNoTest: a TestX that returns a value and an error code
+// is not a test, since the runner would take its first result and drop the
+// code unseen.
+func TestTwoResultFuncIsNoTest(t *testing.T) {
+	dir := mkmod(t, map[string]string{
+		"demo/main.ov":      "package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  return 0\n}\n",
+		"demo/main_test.ov": "package demo\nimport ovid/io\nfunc TestOne(io *ovid/io.Cap) i64 {\n  return 0\n}\nfunc TestTwo(io *ovid/io.Cap) (i64, i64) {\n  return 0, 1\n}\n",
+	})
+	var b bytes.Buffer
+	code := Test(dir, "", true, &b)
+	rs := lines(t, b.String())
+	if code != 0 || len(rs) != 3 || rs[0]["code"] != "bad_test" || rs[0]["id"] != "fn:demo.TestTwo" || rs[1]["id"] != "fn:demo.TestOne" || rs[2]["count"] != float64(1) {
+		t.Fatalf("list %d %s", code, b.String())
+	}
+}
+
 func TestTestCommand(t *testing.T) {
 	dir := mkmod(t, map[string]string{
 		"demo/main.ov": "package demo\nimport ovid/io\nfunc Two() i64 {\n  return 2\n}\nfunc main(io *ovid/io.Cap) i64 {\n  return 0\n}\n",

@@ -257,7 +257,7 @@ func moduleChanged(m *module.Module, r map[string]any) bool {
 
 // isTest reports whether fn has a test's signature, func(io *ovid/io.Cap) i64.
 func isTest(fn *ir.Func) bool {
-	return strings.HasPrefix(fn.Name, "Test") && len(fn.Params) == 1 && fn.Params[0].Type == "*ovid/io.Cap" && fn.Result == "i64"
+	return strings.HasPrefix(fn.Name, "Test") && len(fn.Params) == 1 && fn.Params[0].Type == "*ovid/io.Cap" && fn.Result == "i64" && fn.Result2 == ""
 }
 
 // returnsOf finds the return statements in a test that could have produced

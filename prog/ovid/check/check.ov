@@ -1140,7 +1140,7 @@ func CheckMain(c *Ch) i64 {
 // func handle(io *ovid/io.Cap, req *ovid/http.Request, res *ovid/http.Response) i64.
 func HandleSig(fn *ovid/parse.Decl) bool {
   var p *ovid/parse.Decl = fn.sub
-  if ovid/parse.CountDecls(p) != 3 || !ovid/mem.Eq(fn.typp, fn.typn, strptr("i64"), 3) {
+  if ovid/parse.CountDecls(p) != 3 || !ovid/mem.Eq(fn.typp, fn.typn, strptr("i64"), 3) || fn.typ2n != 0 {
     return false
   }
   if !ovid/mem.Eq(p.typp, p.typn, strptr("*ovid/io.Cap"), strlen("*ovid/io.Cap")) {

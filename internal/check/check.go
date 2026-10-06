@@ -507,7 +507,7 @@ func (c *checker) checkEntry(p *ir.Program) {
 				ok = pt == t
 			}
 		}
-		if res, _ := c.resolve(handle.Result); !ok || res != "i64" {
+		if res, _ := c.resolve(handle.Result); !ok || res != "i64" || handle.Result2 != "" {
 			c.issue(Issue{Code: "bad_handler", ID: handle.ID, Message: "handle has the wrong signature", Expected: hw, Got: Signature(ep.Path, handle)})
 		}
 	} else {
@@ -517,7 +517,7 @@ func (c *checker) checkEntry(p *ir.Program) {
 			pt, _ = c.resolve(main.Params[0].Type)
 		}
 		res, _ := c.resolve(main.Result)
-		if len(main.Params) != 1 || pt != "*ovid/io.Cap" || res != "i64" {
+		if len(main.Params) != 1 || pt != "*ovid/io.Cap" || res != "i64" || main.Result2 != "" {
 			c.issue(Issue{Code: "bad_main", ID: main.ID, Message: "main has the wrong signature", Expected: want, Got: Signature(ep.Path, main)})
 		}
 	}
