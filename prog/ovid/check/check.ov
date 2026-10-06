@@ -915,6 +915,9 @@ func CheckStmt(c *Ch, s *ovid/parse.Node) i64 {
       t1n = c.tyn
     }
     if !ovid/parse.IsBlank(s.name2p, s.name2n) {
+      if ovid/mem.Eq(s.namep, s.namen, s.name2p, s.name2n) {
+        Err(c, strptr("duplicate_name"), strlen("duplicate_name"), s.name2p, s.name2n)
+      }
       t2p = RecvTy(c, s, s.name2p, s.name2n, s.typ2p, s.typ2n)
       t2n = c.tyn
     }

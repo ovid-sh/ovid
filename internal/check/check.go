@@ -752,6 +752,9 @@ func (c *checker) stmt(e *env, s *ir.Node) {
 				ts[i] = "_"
 				continue
 			}
+			if i == 1 && name == s.Name {
+				c.err(s.ID, "duplicate_name", name+" receives both results; give the error code its own name, or _")
+			}
 			if s.Op == "var2" {
 				typ, sp := s.Type, s.TypeSpan
 				if i == 1 {
