@@ -1,0 +1,2 @@
+module greet
+entry greet

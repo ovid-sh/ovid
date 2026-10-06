@@ -71,12 +71,16 @@
             > $out/lib/systemd/system/${unit}.d/ovid-syscalls.conf
         '';
 
-      # services.ovid.programs.<name> = { package; args; }: run a program
-      # from buildOvidProgram as ovid-<name>.service, sandboxed, under the
-      # filter syscallFilter makes from its build receipt.
+      # services.ovid.programs.<name> = { package; args; listen; }: run a
+      # program from buildOvidProgram as ovid-<name>.service, sandboxed,
+      # under the filter syscallFilter makes from its build receipt; with
+      # listen, as ovid-<name>@.service once per connection to
+      # ovid-<name>.socket.
       nixosModules.default = { config, lib, pkgs, utils, ... }:
         let
           cfg = config.services.ovid.programs;
+          # One service per connection when it listens: a template.
+          service = name: p: if p.listen == null then "ovid-${name}" else "ovid-${name}@";
         in
         {
           options.services.ovid.programs = lib.mkOption {
@@ -93,6 +97,19 @@
                   default = [ ];
                   description = "Arguments to the program.";
                 };
+                listen = lib.mkOption {
+                  type = lib.types.nullOr (lib.types.either lib.types.port lib.types.str);
+                  default = null;
+                  example = 8080;
+                  description = ''
+                    Serve connections here instead of running once at boot: a
+                    port, or any systemd ListenStream= value ("[::1]:8080",
+                    "/run/greet.sock"). systemd accepts each connection and
+                    starts ovid-<name>@.service with it as standard input and
+                    output, which is what the host ovid build writes for an
+                    HTTP handler reads and writes.
+                  '';
+                };
               };
             });
           };
@@ -103,11 +120,11 @@
               message = "services.ovid.programs: Ovid programs are Linux x86-64 binaries";
             }];
             systemd.packages = lib.mapAttrsToList
-              (name: p: self.lib.syscallFilter pkgs { program = p.package; unit = "ovid-${name}.service"; })
+              (name: p: self.lib.syscallFilter pkgs { program = p.package; unit = "${service name p}.service"; })
               cfg;
             systemd.services = lib.mapAttrs'
-              (name: p: lib.nameValuePair "ovid-${name}" {
-                wantedBy = [ "multi-user.target" ];
+              (name: p: lib.nameValuePair (service name p) {
+                wantedBy = lib.optionals (p.listen == null) [ "multi-user.target" ];
                 serviceConfig = {
                   ExecStart = utils.escapeSystemdExecArgs ([ (lib.getExe p.package) ] ++ p.args);
                   DynamicUser = true;
@@ -117,9 +134,22 @@
                   PrivateDevices = true;
                   NoNewPrivileges = true;
                   MemoryDenyWriteExecute = true;
+                } // lib.optionalAttrs (p.listen != null) {
+                  # The connection is standard input and output, so the
+                  # stdio host serves it as it would a pipe.
+                  StandardInput = "socket";
+                  StandardOutput = "socket";
+                  StandardError = "journal";
                 };
               })
               cfg;
+            systemd.sockets = lib.mapAttrs'
+              (name: p: lib.nameValuePair "ovid-${name}" {
+                wantedBy = [ "sockets.target" ];
+                listenStreams = [ (toString p.listen) ];
+                socketConfig.Accept = true;
+              })
+              (lib.filterAttrs (_: p: p.listen != null) cfg);
           };
         };
 
@@ -172,6 +202,7 @@
         let
           inherit (self.packages.${pkgs.stdenv.hostPlatform.system}) ovid hello;
           catfile = self.lib.buildOvidProgram pkgs { pname = "catfile"; src = ./nix/catfile; };
+          greet = self.lib.buildOvidProgram pkgs { pname = "greet"; src = ./nix/greet; };
         in
         {
           go-test = pkgs.buildGoModule {
@@ -200,10 +231,11 @@
             name = "ovid-on-nixos";
             nodes.machine = {
               imports = [ self.nixosModules.default ];
-              environment.systemPackages = [ ovid hello catfile ];
+              environment.systemPackages = [ ovid hello catfile pkgs.curl ];
               services.ovid.programs = {
                 hello.package = hello;
                 cat = { package = catfile; args = [ "/etc/os-release" ]; };
+                greet = { package = greet; listen = 8080; };
               };
             };
             testScript = ''
@@ -226,6 +258,17 @@
               # The filter is enforced: catfile under hello's list is killed.
               out = machine.fail("systemd-run --wait --collect -p DynamicUser=yes -p 'SystemCallFilter=write mmap exit' ${lib.getExe catfile} /etc/os-release 2>&1")
               assert "status=31/SYS" in out, out
+
+              # An HTTP handler behind socket activation: each connection is
+              # one ovid-greet@ instance, under the handler's own filter. Two
+              # URLs in one curl share a connection, so one host serves both.
+              machine.wait_for_unit("ovid-greet.socket")
+              machine.succeed("grep -x 'SystemCallFilter=read write mmap munmap madvise exit' '/etc/systemd/system/ovid-greet@.service.d/ovid-syscalls.conf'")
+              out = machine.succeed("curl -fsS 'http://127.0.0.1:8080/hello?nixos'")
+              assert out == "hello, nixos\n", out
+              out = machine.succeed("curl -sS -w '%{http_code} %{num_connects}\\n' 'http://127.0.0.1:8080/hello?a' 'http://127.0.0.1:8080/nope'")
+              assert out == "hello, a\n200 1\n404 0\n", out
+              machine.succeed("test $(systemctl show ovid-greet.socket -p NAccepted --value) = 2")
 
               machine.succeed("cp -r ${./nix/example} /tmp/ex && chmod -R u+w /tmp/ex")
               machine.succeed("cd /tmp/ex && ovid build -o /tmp/h && /tmp/h | grep 'hello from'")
