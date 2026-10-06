@@ -5,3 +5,5 @@ bin/
 /tmpbin/
 agent-tools/
 .claude/worktrees/
+result
+result-*

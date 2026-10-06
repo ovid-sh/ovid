@@ -33,6 +33,8 @@ bin/ovid build -C prog -o /tmp/s1          # Go compiles the Ovid compiler
 cmp /tmp/s1 /tmp/s2                        # must be byte-identical
 ```
 
+`flake.nix` packages the same (`nix flake check` runs the Go suite everywhere, and on x86_64-linux, where Ovid output can run, also the `prog/` checks, the self-hosting fixed point, and a NixOS VM test). Nix sees only git-tracked files, so `git add` new files before any `nix` command; a new top-level directory the Go tests read must also join `testSrc` there.
+
 No third-party Go dependencies (`go.mod` has none). Built binaries only execute on Linux x86-64. On other hosts, tests that execute compiled programs (the corpus, `internal/asm`, `internal/compile`, `internal/tool`) still build and check, then skip the run; the `*_linux_amd64_test.go` files build only on Linux x86-64.
 
 ## Architecture
