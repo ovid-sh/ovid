@@ -1,6 +1,7 @@
 package tool
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"path"
@@ -386,6 +387,7 @@ func MoveMany(dir string, qs []string, to, file string, dryRun bool, w io.Writer
 	base := map[string][]byte{}   // each changed file's source after the moves so far
 	loaded := map[string][]byte{} // and as it is on disk; a file the moves create has none
 	var plans []*planned
+	var receipts []bytes.Buffer // each move's diagnostics and receipt, in order
 	var moved []string
 	for _, q := range qs {
 		p, code := planMove(dir, q, to, file, base, w)
@@ -403,6 +405,14 @@ func MoveMany(dir string, qs []string, to, file string, dryRun bool, w io.Writer
 			}
 			base[abs] = src
 		}
+		// Its receipt now, while the module it was checked in is here, so
+		// that the next move does not add a tree to the ones kept; it is
+		// printed once the files are written.
+		var out bytes.Buffer
+		p.emit(&out, dryRun)
+		p.after.m.Release()
+		p.after = nil
+		receipts = append(receipts, out)
 		plans = append(plans, p)
 		moved = append(moved, q)
 	}
@@ -412,8 +422,8 @@ func MoveMany(dir string, qs []string, to, file string, dryRun bool, w io.Writer
 		}
 	}
 	// Each move's receipt, then the whole one's.
-	for _, p := range plans {
-		p.emit(w, dryRun)
+	for i := range receipts {
+		w.Write(receipts[i].Bytes())
 	}
 	emit(w, map[string]any{"ok": true, "moved": moved, "to": to, "written": !dryRun})
 	return ExitOK

@@ -443,10 +443,11 @@ func planSplices(w io.Writer, dir string, m *module.Module, base map[string][]by
 			return nil, ExitFail
 		}
 	}
-	before := runCheck(m)
-	// Everything the plan needed from m is in sps, loaded, and before; what
-	// follows needs only its root. Let the tree go before the next is built,
-	// or an edit costs two modules' memory at its peak.
+	// Of the first check only its diagnostics are needed from here on; let
+	// its result and the tree go before the next module is built, or an
+	// edit costs two modules' memory at its peak. What follows needs only
+	// m's root and sps, loaded, and overlay.
+	before := runCheck(m).diags
 	m.Release()
 	full := map[string][]byte{}
 	for k, v := range base {
@@ -460,7 +461,7 @@ func planSplices(w io.Writer, dir string, m *module.Module, base map[string][]by
 		return nil, fail(w, "load", err.Error(), "")
 	}
 	after := runCheck(nm)
-	added := newDiags(before.diags, after.diags)
+	added := newDiags(before, after.diags)
 	worse := len(added) > 0
 	if (guard == guardClean && len(after.diags) > 0) || (guard == guardNoWorse && worse) {
 		if guard == guardNoWorse {
@@ -470,7 +471,7 @@ func planSplices(w io.Writer, dir string, m *module.Module, base map[string][]by
 			after.writeDiags(w)
 		}
 		emit(w, map[string]any{"ok": false, "error": "check", "message": "the change leaves check errors; nothing was written",
-			"errors": len(after.diags), "errors_before": len(before.diags),
+			"errors": len(after.diags), "errors_before": len(before),
 			"hint": "fix the text, or pass --allow-broken to write it anyway"})
 		return nil, ExitFail
 	}
@@ -479,7 +480,7 @@ func planSplices(w io.Writer, dir string, m *module.Module, base map[string][]by
 		files = append(files, rel(m, abs))
 	}
 	res := map[string]any{"ok": true, "files": files, "check_ok": len(after.diags) == 0,
-		"errors": len(after.diags), "errors_before": len(before.diags), "revision": nm.Revision()}
+		"errors": len(after.diags), "errors_before": len(before), "revision": nm.Revision()}
 	if ops != nil {
 		res["ops"] = newIDs(nm, sps, len(ops), show)
 	}

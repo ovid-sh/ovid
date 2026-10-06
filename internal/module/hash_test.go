@@ -85,17 +85,35 @@ func TestDigestOfOneDeclTouchesOneDecl(t *testing.T) {
 }
 
 // TestReleaseKeepsWhatNamesTheModule: after Release the module still says
-// where it is and what its files are called, and holds no tree.
+// where it is and what its files are called, and holds no tree and none of
+// the caches built from it.
 func TestReleaseKeepsWhatNamesTheModule(t *testing.T) {
 	m, err := Load(filepath.Join("..", "..", "tests", "run", "split_package"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	root, rev, path := m.Root, m.Revision(), m.DisplayPath(m.Files[0])
-	m.Index()
+	// Build every cache: the id index and its companions, and a statement's
+	// digest, which fills hashes and byDecl.
+	var stmt *Loc
+	for _, l := range m.Locs() {
+		if l.Kind == "stmt" {
+			stmt = l
+			break
+		}
+	}
+	if stmt == nil {
+		t.Fatal("no statement in the module")
+	}
+	m.LocDigest(stmt)
+	if m.Prog == nil || m.index == nil || m.order == nil || m.locs == nil || m.copies == nil ||
+		m.byNode == nil || m.hashes == nil || m.byDecl == nil {
+		t.Fatal("a cache was not built before Release")
+	}
 	m.Release()
-	if m.Prog != nil || m.index != nil || m.hashes != nil || m.locs != nil {
-		t.Fatal("the tree or an index survived Release")
+	if m.Prog != nil || m.index != nil || m.order != nil || m.locs != nil || m.copies != nil ||
+		m.byNode != nil || m.hashes != nil || m.byDecl != nil {
+		t.Fatal("the tree or a cache survived Release")
 	}
 	if m.Root != root || m.Revision() != rev || m.DisplayPath(m.Files[0]) != path {
 		t.Fatal("Release changed what names the module")
