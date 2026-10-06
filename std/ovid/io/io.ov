@@ -80,25 +80,25 @@ func Alloc(io *Cap, n i64) i64 {
   }
   var u i64 = io.used
   if (u + align) > io.size {
-    if align > HEAPCHUNK / 2 {
-      return mapped(io, align + MAPHEAD) + MAPHEAD
+    // Every mapping is linked into io.maps, so ResetHeap can find it.
+    var own bool = align > HEAPCHUNK / 2
+    var size i64 = HEAPCHUNK
+    if own {
+      size = align + MAPHEAD
     }
-    io.heap = mapped(io, HEAPCHUNK)
+    var q i64 = Map(size)
+    store64(q, io.maps)
+    store64(q + 8, size)
+    io.maps = q
+    if own {
+      return q + MAPHEAD
+    }
+    io.heap = q
     io.size = HEAPCHUNK
     u = MAPHEAD
   }
   var p i64 = io.heap + u
   io.used = u + align
-  return p
-}
-
-// mapped maps n bytes and links them into io.maps, so ResetHeap can find
-// them.
-func mapped(io *Cap, n i64) i64 {
-  var p i64 = Map(n)
-  store64(p, io.maps)
-  store64(p + 8, n)
-  io.maps = p
   return p
 }
 
