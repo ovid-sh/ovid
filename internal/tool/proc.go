@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"syscall"
 	"time"
@@ -38,7 +39,7 @@ type procIO struct {
 	confine        *confineSpec
 }
 
-func (pio procIO) command(bin string, args []string) *exec.Cmd {
+func (pio procIO) command(bin string, args []string) (*exec.Cmd, error) {
 	var cmd *exec.Cmd
 	if pio.confine != nil {
 		// ovid itself, as the launcher: it confines the process and then
@@ -54,9 +55,24 @@ func (pio procIO) command(bin string, args []string) *exec.Cmd {
 		if c.Argv0 == "" {
 			c.Argv0 = bin
 		}
-		// The launcher's status pipe is the last extra file.
-		if w, err := c.openStatus(len(pio.extra)); err == nil {
-			pio.extra = append(pio.extra, w)
+		// The launcher's status pipe is the last extra file. Without it
+		// nothing would show whether the program was started, so without it
+		// nothing is started.
+		w, err := c.openStatus(len(pio.extra))
+		if err != nil {
+			return nil, fmt.Errorf("cannot make the launcher's status pipe: %v", err)
+		}
+		pio.extra = append(pio.extra, w)
+		// The launcher changes directory before it looks at the program and
+		// the writable directory, so both must be absolute (TMPDIR may be
+		// relative, and the staged program and the directory come from it).
+		if bin, err = filepath.Abs(bin); err != nil {
+			return nil, err
+		}
+		if c.Writable != "" {
+			if c.Writable, err = filepath.Abs(c.Writable); err != nil {
+				return nil, err
+			}
 		}
 		cmd = exec.Command(self, append([]string{"--", bin}, args...)...)
 		cmd.Env = []string{confineEnv + "=" + c.encode(), "GODEBUG=asyncpreemptoff=1"}
@@ -75,7 +91,7 @@ func (pio procIO) command(bin string, args []string) *exec.Cmd {
 	}
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = pio.stdin, pio.stdout, pio.stderr
 	cmd.ExtraFiles = pio.extra
-	return cmd
+	return cmd, nil
 }
 
 // runProc runs bin, traced where the platform allows so a fault can be
@@ -96,7 +112,10 @@ func runProc(bin string, args []string, pio procIO, timeout time.Duration) procR
 }
 
 func runPlain(bin string, args []string, pio procIO, timeout time.Duration) procResult {
-	cmd := pio.command(bin, args)
+	cmd, err := pio.command(bin, args)
+	if err != nil {
+		return procResult{err: err}
+	}
 	if err := cmd.Start(); err != nil {
 		return procResult{err: err}
 	}

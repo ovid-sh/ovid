@@ -342,3 +342,32 @@ func TestSIGSYSHintOnlyWhenConfined(t *testing.T) {
 		t.Fatalf("confined: %v", r)
 	}
 }
+
+// TestConfineRelativeTempDir: TMPDIR may be relative, and the staged program
+// and the writable directory then are too; the launcher changes directory
+// before it uses either, so both must have been made absolute.
+func TestConfineRelativeTempDir(t *testing.T) {
+	needExec(t)
+	dir := mkmod(t, demo(writerProg))
+	base := t.TempDir()
+	os.Mkdir(filepath.Join(base, "rel"), 0o755)
+	wd, _ := os.Getwd()
+	if err := os.Chdir(base); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(wd)
+	t.Setenv("TMPDIR", "rel")
+	var b bytes.Buffer
+	if code := RunWith(dir, []string{filepath.Join(dir, "demo", "leak.txt")}, RunOpts{JSON: true}, &b); code != 0 {
+		t.Fatalf("exit %d: %s", code, b.String())
+	}
+	r := last(t, b.String())
+	if r["exit"] != float64(0) || r["confined"] == nil {
+		t.Fatalf("%v", r)
+	}
+	if w, _ := r["writable"].(string); w == "" || !filepath.IsAbs(w) {
+		t.Fatalf("writable %q: want an absolute path under rel/", w)
+	} else {
+		os.RemoveAll(w)
+	}
+}

@@ -24,7 +24,10 @@ func runTraced(bin string, args []string, pio procIO, timeout time.Duration) (r 
 	// Every ptrace request must come from the thread that started the tracee.
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
-	cmd := pio.command(bin, args)
+	cmd, err := pio.command(bin, args)
+	if err != nil {
+		return procResult{err: err}, true
+	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Ptrace: true}
 	if err := cmd.Start(); err != nil {
 		return r, false
