@@ -1,7 +1,8 @@
 # Ovid
 
 Ovid is a small compiled language whose toolchain is built for agents. A
-program is plain `.ov` text; every tool command answers in JSON lines; every
+program is plain `.ov` text; every tool command answers in JSON lines
+(the read commands as text, with `--json` for the records); every
 error carries a file, line, column, the offending source line, and when
 known what was expected, what was found, and a hint. Edits can be made by
 hand or through id-addressed batch edits that are checked before they are
@@ -46,7 +47,12 @@ it under a seccomp filter that allows nothing else.
 
 ## Commands
 
-Every command prints JSON lines and the last line has `"ok"`. Exit codes:
+Every command prints JSON lines and the last line has `"ok"`, except
+`help`, `run`, `dump` without `-o` (one JSON document), and the read
+commands (`outline`, `show`, `refs`, `grep`), which print text by default:
+`outline`, `refs`, and `grep` still end with the JSON `"ok"` line, a
+successful `show` prints a header and the source with no JSON line, and
+`--json` makes any of the four print records. Exit codes:
 0 ok, 1 errors, 2 stale edit, 64 usage, 124 `run --timeout` ended the program, 125 `run` could not build or start it.
 
 | command | what |
@@ -56,10 +62,11 @@ Every command prints JSON lines and the last line has `"ok"`. Exit codes:
 | `ovid build [-o out]` / `ovid run [-- args]` | compile, leaving out `_test.ov` files; run passes stdio and the exit code through and reports a death by signal on stderr, on Linux with the statement and call stack |
 | `ovid run --json [--timeout 5s] [--max-output N]` | run with the output captured: one last line with `exit` or `signal`, `stdout`, `stderr`, and `truncated` |
 | `ovid test [--run substr] [--list]` | each `TestX(io *ovid/io.Cap) i64` in its own process; 0 passes; a failure names the `return` that produced it, a crash its signal (on Linux, the statement and call stack) |
-| `ovid outline [--pkg P]` | packages, or a package's decls with signature, doc, struct size, lines, hash |
-| `ovid show <id\|name>... [--plain] [--exprs]` | source of a node (a decl with its doc comment), each statement line tagged with its id; a statement's expressions listed with ids and hashes |
-| `ovid refs <id\|name>` | every use the checker resolves to a func, type, field, const, param, or local |
-| `ovid grep <regexp>` | text matches, each tagged with its enclosing decl and statement id |
+| `ovid outline [--pkg P] [--ids]` | packages, or a package's decls one line each: line and signature (a struct by its field count), with id and hash after `--ids` |
+| `ovid show <id\|name>... [--ids] [--exprs]` | source of a node (a decl with its doc comment) under a header with its id and hash; `--ids` tags each statement line with its id; a statement's expressions are listed with ids and hashes |
+| `ovid refs <id\|name>` | every use the checker resolves to a func, type, field, const, param, or local, grouped by the decl it is in |
+| `ovid grep <regexp>` | matching lines grouped by file and enclosing decl |
+| `--json` | on `outline`, `show`, `refs`, `grep`: one JSON record per line instead of text |
 | `--offset N`, `--limit N` | `outline`, `refs`, and `grep` print 200 records a page; the last line has `total`, `has_more`, and `next_offset` |
 | `ovid edit <file\|-> [--show]` | batch of replace/delete/insert/append ops, all or nothing; returns new ids and hashes |
 | `ovid replace <id>`, `insert --after <id>`, `append <id>`, `delete <id>` | one edit op with its code on stdin, so a heredoc needs no JSON escaping |

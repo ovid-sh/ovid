@@ -14,9 +14,12 @@ const GrepLimit = PageLimit
 // Grep finds a regexp in the module's own source (not shipped packages
 // unless std) and names, for each match, the decl and the innermost
 // statement around it, so the result can feed show, refs, or edit directly.
-// It prints matches offset through offset+limit-1 (limit <= 0 means all);
-// the last line counts every match and says where the next page starts.
-func Grep(dir, pattern, pkg string, std bool, offset, limit int, w io.Writer) int {
+// As text the matches are grouped under their file and decl, one line per
+// match with its line number and source; asJSON prints one record per
+// match. It prints matches offset through offset+limit-1 (limit <= 0
+// means all); the last line counts every match and says where the next
+// page starts.
+func Grep(dir, pattern, pkg string, std, asJSON bool, offset, limit int, w io.Writer) int {
 	re, err := regexp.Compile(pattern)
 	if err != nil {
 		return fail(w, "bad_pattern", err.Error(), "the pattern is a Go regexp (RE2); quote it for the shell")
@@ -39,6 +42,8 @@ func Grep(dir, pattern, pkg string, std bool, offset, limit int, w io.Writer) in
 		}
 	}
 	pg := pager{Page: Page{offset, limit}}
+	var grp groups
+	lastLine := -1
 	for fi, f := range m.Files {
 		if m.IsStd(fi) && !std {
 			continue
@@ -71,7 +76,18 @@ func Grep(dir, pattern, pkg string, std bool, offset, limit int, w io.Writer) in
 					r["decl"] = id
 				}
 			}
-			emit(w, r)
+			if asJSON {
+				emit(w, r)
+				continue
+			}
+			// As text a line with several matches is printed once, as grep
+			// prints it; count and total still count matches.
+			if p.Line == lastLine && grp.file == r["file"] {
+				continue
+			}
+			lastLine = p.Line
+			decl, _ := r["decl"].(string)
+			grp.line(w, r["file"].(string), decl, p.Line, r["source"].(string))
 		}
 	}
 	res := map[string]any{"ok": true, "revision": m.Revision()}

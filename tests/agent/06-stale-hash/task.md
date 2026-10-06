@@ -4,8 +4,8 @@ Earlier you read this function of the module `price` in this directory:
 $ ovid show fn:price.Price
 // func fn:price.Price price/main.ov:5-8 hash=0094bd675479
 // Price is what n items cost, in cents.
-func Price(n i64) i64 {  // @fn:price.Price
-  return n * 250  // @st:price.Price:1
+func Price(n i64) i64 {
+  return n * 250
 }
 ```
 

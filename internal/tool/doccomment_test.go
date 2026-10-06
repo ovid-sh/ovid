@@ -154,7 +154,7 @@ func TestDocCommentShow(t *testing.T) {
 	}
 	// outline's doc is the same comment.
 	b.Reset()
-	Outline(dir, "demo", false, false, Page{}, &b)
+	Outline(dir, "demo", false, false, false, true, Page{}, &b)
 	for _, d := range lines(t, b.String()) {
 		if d["id"] == "fn:demo.H" && (d["doc"] != "H returns zero. It is never more." || d["line"] != 12.0) {
 			t.Fatalf("outline H: %v", d)
@@ -165,7 +165,7 @@ func TestDocCommentShow(t *testing.T) {
 	}
 	// grep places a match in a doc comment in its decl.
 	b.Reset()
-	Grep(dir, "never more", "", false, 0, 0, &b)
+	Grep(dir, "never more", "", false, true, 0, 0, &b)
 	if g := lines(t, b.String())[0]; g["decl"] != "fn:demo.H" {
 		t.Fatalf("grep: %s", b.String())
 	}

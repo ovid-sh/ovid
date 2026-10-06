@@ -7,15 +7,23 @@ toolchain (`cmd/ovid`); the self-hosted compiler in `prog/` implements only
 
 ## Output
 
-Every command except `run` without `--json`, `help`, and `show` without `--json` writes JSON
-lines to stdout, one object per line, and nothing else. `show` prints the
-source with an id comment on each line; its failures are JSON like any
-other. The **last line**
-always has a boolean `"ok"`; earlier lines are records (a diagnostic, a
-match, a test result, a decl). Key order is not significant. A consumer
-should read every line, take the last as the result, and ignore keys it does
-not know: new keys are added without notice, existing ones keep their
-meaning (the one exception so far is `refs`'s `count`; see Paging).
+Every command writes JSON lines to stdout, one object per line, and
+nothing else, except `help`, `run` without `--json`, `dump` without `-o`
+(one JSON document, described below), and the four read commands without
+`--json`. `outline`, `show`, `refs`, and `grep` print
+source and listings as text, since an agent reads them in place of `cat`
+and `grep`, sized like what those print (within a fifth, measured on
+`prog/`); their failures are JSON like any other, and `outline`, `refs`,
+and `grep` still end with the JSON line below, while a successful `show`
+prints a header line and the source and nothing after it.
+
+For JSON output the **last line** always has a boolean `"ok"`; earlier
+lines are records (a diagnostic, a match, a test result, a decl). Key
+order is not significant. A consumer should read every line, take the
+last as the result, and ignore keys it does not know: new keys are added
+without notice, existing ones keep their meaning (the one exception so far
+is `refs`'s `count`; see Paging). For the text listings, take the last
+line the same way and treat the lines before it as text.
 
 `run` passes the program's stdin, stdout, stderr, and exit code through. It
 writes JSON to stdout only when the build fails (the diagnostics, then

@@ -29,7 +29,7 @@ func TestRenameSeesTwoNameVar(t *testing.T) {
 		t.Fatalf("rename of the two-name var: %d %s", code, b.String())
 	}
 	b.Reset()
-	if code := Refs(dir, "st:demo.main:2", Page{}, &b); code == 0 || !strings.Contains(b.String(), "declares two locals, v and e") {
+	if code := Refs(dir, "st:demo.main:2", true, Page{}, &b); code == 0 || !strings.Contains(b.String(), "declares two locals, v and e") {
 		t.Fatalf("refs of the two-name var: %d %s", code, b.String())
 	}
 }
