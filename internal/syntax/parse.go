@@ -18,6 +18,7 @@ type Error struct {
 	File int
 	Off  int
 	Msg  string
+	Hint string // what the language wants instead, when the slip is a known one
 }
 
 func (e *Error) Error() string { return e.Msg }
@@ -59,6 +60,11 @@ func ParseFile(file int, src []byte) (pkg *ir.Package, err *Error) {
 }
 
 func (p *parser) errorf(f string, args ...any) {
+	p.fail("", f, args...)
+}
+
+// fail is errorf with a hint.
+func (p *parser) fail(hint string, f string, args ...any) {
 	p.skip()
 	msg := fmt.Sprintf(f, args...)
 	if strings.HasPrefix(msg, "expected") {
@@ -69,7 +75,7 @@ func (p *parser) errorf(f string, args ...any) {
 		// Point at the end of the line the problem is on, not the next one.
 		off = p.last
 	}
-	panic(&Error{File: p.file, Off: off, Msg: msg})
+	panic(&Error{File: p.file, Off: off, Msg: msg, Hint: hint})
 }
 
 // found describes the next token for error messages.
@@ -303,6 +309,9 @@ func (p *parser) expectEnd() {
 		return
 	}
 	if !p.nl {
+		if p.peekByte(';') {
+			p.fail("statements are one per line; there is no ;", "expected newline")
+		}
 		p.errorf("expected newline")
 	}
 }
@@ -687,6 +696,9 @@ func (p *parser) varName() (string, ir.Span, string, ir.Span) {
 	ns := p.tok(name)
 	if name == "_" {
 		return name, ns, "", ir.Span{}
+	}
+	if p.peekByte('=') {
+		p.fail("every local is declared with its type: var "+name+" i64 = ...", "expected a type after "+name)
 	}
 	typ, ts := p.parseType()
 	return name, ns, typ, ts

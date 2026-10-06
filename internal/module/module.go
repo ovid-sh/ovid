@@ -389,7 +389,7 @@ func (m *Module) addPackage(pkgPath string, files []*File, from int) {
 		}
 		pkg, perr := syntax.ParseFile(idx, f.Src)
 		if perr != nil {
-			hint := ""
+			hint := perr.Hint
 			if strings.HasPrefix(perr.Msg, "expected package") {
 				hint = "every .ov file starts with `package " + pkgPath + "` (its directory path), then its imports"
 			}
