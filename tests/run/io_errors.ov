@@ -1,0 +1,24 @@
+// ovid/io reports failure as an error code: ReadFile of a missing file
+// is E_NOENT, reading a directory is E_ISDIR, and ErrText names them.
+// stdout: "no such file or directory\nis a directory\n"
+// exit: 2
+package demo
+import ovid/io
+func main(io *ovid/io.Cap) i64 {
+  var nn i64 = ovid/io.Alloc(io, 8)
+  var _, e i64 = ovid/io.ReadFile(io, strptr("no-such-file"), strlen("no-such-file"), nn)
+  ovid/io.Print(ovid/io.ErrText(e))
+  ovid/io.Print(strptr("\n"))
+  var fd i64, oe i64 = ovid/io.Open(strptr("."), ovid/io.O_RDONLY, 0)
+  if oe != 0 {
+    return 1
+  }
+  var buf i64 = ovid/io.Alloc(io, 8)
+  var n i64, re i64 = ovid/io.Read(fd, buf, 8)
+  ovid/io.Print(ovid/io.ErrText(re))
+  ovid/io.Print(strptr("\n"))
+  if n != 0 || re != ovid/io.E_ISDIR || ovid/io.Close(fd) != 0 {
+    return 3
+  }
+  return e
+}

@@ -29,7 +29,21 @@ const O_WRONLY i64 = 1
 const O_CREAT i64 = 64
 const O_EXCL i64 = 128
 const O_TRUNC i64 = 512
-const EEXIST i64 = -17
+
+// Error codes: the second result of a func that can fail, 0 for success.
+// They are the kernel's errno values. ErrText names the common ones.
+const E_PERM i64 = 1
+const E_NOENT i64 = 2
+const E_INTR i64 = 4
+const E_IO i64 = 5
+const E_BADF i64 = 9
+const E_AGAIN i64 = 11
+const E_ACCES i64 = 13
+const E_EXIST i64 = 17
+const E_NOTDIR i64 = 20
+const E_ISDIR i64 = 21
+const E_INVAL i64 = 22
+const E_NOSPC i64 = 28
 const O_DIRECTORY i64 = 65536
 const SYS_GETDENTS64 i64 = 217
 const SYS_GETPID i64 = 39
@@ -192,13 +206,58 @@ func CLen(p i64) i64 {
   return i
 }
 
-// Write writes all n bytes at p to fd. It returns 0, or -1 on error.
+// Code turns a syscall's result into an error code: 0 for a result that is
+// not an error, else the errno (a positive E_ value).
+func Code(r i64) i64 {
+  if r < 0 && r > -4096 {
+    return 0 - r
+  }
+  return 0
+}
+
+// ErrText is a NUL-terminated name for the error code e, for a message:
+// ovid/io.Eprint(ovid/io.ErrText(e)).
+func ErrText(e i64) i64 {
+  if e == 0 {
+    return strptr("ok")
+  } else if e == E_PERM {
+    return strptr("not permitted")
+  } else if e == E_NOENT {
+    return strptr("no such file or directory")
+  } else if e == E_INTR {
+    return strptr("interrupted")
+  } else if e == E_IO {
+    return strptr("i/o error")
+  } else if e == E_BADF {
+    return strptr("bad file descriptor")
+  } else if e == E_AGAIN {
+    return strptr("try again")
+  } else if e == E_ACCES {
+    return strptr("permission denied")
+  } else if e == E_EXIST {
+    return strptr("file exists")
+  } else if e == E_NOTDIR {
+    return strptr("not a directory")
+  } else if e == E_ISDIR {
+    return strptr("is a directory")
+  } else if e == E_INVAL {
+    return strptr("invalid argument")
+  } else if e == E_NOSPC {
+    return strptr("no space left on device")
+  }
+  return strptr("error")
+}
+
+// Write writes all n bytes at p to fd. It returns 0, or an error code.
 func Write(fd i64, p i64, n i64) i64 {
   var off i64 = 0
   while off < n {
     var w i64 = syscall(SYS_WRITE, fd, p + off, n - off, 0, 0, 0)
-    if w <= 0 {
-      return -1
+    if w < 0 {
+      return Code(w)
+    }
+    if w == 0 {
+      return E_IO
     }
     off = off + w
   }
@@ -227,72 +286,87 @@ func CStr(io *Cap, p i64, n i64) i64 {
   return d
 }
 
-// Open opens the NUL-terminated path; it returns an fd, or < 0 on error.
-func Open(path i64, flags i64, mode i64) i64 {
-  return syscall(SYS_OPENAT, AT_FDCWD, path, flags, mode, 0, 0)
+// Open opens the NUL-terminated path: an fd and 0, or 0 and an error code.
+func Open(path i64, flags i64, mode i64) (i64, i64) {
+  var r i64 = syscall(SYS_OPENAT, AT_FDCWD, path, flags, mode, 0, 0)
+  if r < 0 {
+    return 0, Code(r)
+  }
+  return r, 0
 }
 
-// Close closes fd.
+// Close closes fd. It returns 0, or an error code.
 func Close(fd i64) i64 {
-  return syscall(SYS_CLOSE, fd, 0, 0, 0, 0, 0)
+  return Code(syscall(SYS_CLOSE, fd, 0, 0, 0, 0, 0))
 }
 
-// Read reads up to n bytes from fd into p; it returns the count, 0 at the
-// end, or < 0 on error.
-func Read(fd i64, p i64, n i64) i64 {
-  return syscall(SYS_READ, fd, p, n, 0, 0, 0)
+// Read reads up to n bytes from fd into p: the count (0 at the end) and 0,
+// or 0 and an error code.
+func Read(fd i64, p i64, n i64) (i64, i64) {
+  var r i64 = syscall(SYS_READ, fd, p, n, 0, 0, 0)
+  if r < 0 {
+    return 0, Code(r)
+  }
+  return r, 0
 }
 
-// Fstat fills buf (256 bytes) with struct stat for fd: size at 48.
+// Fstat fills buf (256 bytes) with struct stat for fd: size at 48. It
+// returns 0, or an error code.
 func Fstat(fd i64, buf i64) i64 {
-  return syscall(SYS_FSTAT, fd, buf, 0, 0, 0, 0)
+  return Code(syscall(SYS_FSTAT, fd, buf, 0, 0, 0, 0))
 }
 
-// FstatAt fills buf (256 bytes) with struct stat for the NUL-terminated path.
+// FstatAt fills buf (256 bytes) with struct stat for the NUL-terminated
+// path. It returns 0, or an error code.
 func FstatAt(path i64, buf i64) i64 {
-  return syscall(SYS_FSTATAT, AT_FDCWD, path, buf, 0, 0, 0)
+  return Code(syscall(SYS_FSTATAT, AT_FDCWD, path, buf, 0, 0, 0))
 }
 
-// ReadFile reads the whole file named by path (pathn bytes). It returns 0
-// and stores the data address at outp and its length at outn (allocate
-// two 8-byte cells and load64 them), or -1. The data is NUL-terminated.
-func ReadFile(io *Cap, path i64, pathn i64, outp i64, outn i64) i64 {
+// ReadFile reads the whole file named by path (pathn bytes): the address
+// of its data, NUL-terminated, and 0, with the length stored at outn (an
+// 8-byte cell: var nn i64 = ovid/io.Alloc(io, 8)); or 0 and an error code.
+func ReadFile(io *Cap, path i64, pathn i64, outn i64) (i64, i64) {
   var cs i64 = CStr(io, path, pathn)
-  var fd i64 = Open(cs, O_RDONLY, 0)
-  if fd < 0 {
-    return -1
+  var fd i64, e i64 = Open(cs, O_RDONLY, 0)
+  if e != 0 {
+    return 0, e
   }
   var st i64 = Alloc(io, 256)
-  if Fstat(fd, st) < 0 {
+  e = Fstat(fd, st)
+  if e != 0 {
     Close(fd)
-    return -1
+    return 0, e
   }
   var sz i64 = load64(st + 48)
   var buf i64 = Alloc(io, sz + 1)
   var got i64 = 0
   while got < sz {
-    var r i64 = Read(fd, buf + got, sz - got)
-    if r <= 0 {
+    var r i64, re i64 = Read(fd, buf + got, sz - got)
+    if re != 0 {
       Close(fd)
-      return -1
+      return 0, re
+    }
+    if r == 0 {
+      // The file shrank under us.
+      Close(fd)
+      return 0, E_IO
     }
     got = got + r
   }
   Close(fd)
   store8(buf + sz, 0)
-  store64(outp, buf)
   store64(outn, sz)
-  return 0
+  return buf, 0
 }
 
 // WriteFile creates or truncates path with permission mode (493 is 0755,
-// 420 is 0644) and writes datan bytes. It returns 0, or < 0 on error.
+// 420 is 0644) and writes datan bytes. It returns 0, or an error code.
 func WriteFile(io *Cap, path i64, pathn i64, data i64, datan i64, mode i64) i64 {
   var cs i64 = CStr(io, path, pathn)
   var flags i64 = (O_WRONLY + O_CREAT) + O_TRUNC
-  var fd i64 = Open(cs, flags, mode)
-  if fd < 0 {
-    return -1
+  var fd i64, e i64 = Open(cs, flags, mode)
+  if e != 0 {
+    return e
   }
   var w i64 = Write(fd, data, datan)
   var c i64 = Close(fd)
@@ -304,21 +378,22 @@ func WriteFile(io *Cap, path i64, pathn i64, data i64, datan i64, mode i64) i64 
 
 // Fsync waits until everything written to fd is on the disk. On a
 // directory's fd it makes the names in it (a create, rename, or unlink)
-// durable. It returns 0, or < 0 on error.
+// durable. It returns 0, or an error code.
 func Fsync(fd i64) i64 {
-  return syscall(SYS_FSYNC, fd, 0, 0, 0, 0, 0)
+  return Code(syscall(SYS_FSYNC, fd, 0, 0, 0, 0, 0))
 }
 
 // Rename moves the file at the NUL-terminated path from to the path to,
 // replacing what is there in one step: a reader sees the old file or the
-// new one, never a part of either.
+// new one, never a part of either. It returns 0, or an error code.
 func Rename(from i64, to i64) i64 {
-  return syscall(SYS_RENAME, from, to, 0, 0, 0, 0)
+  return Code(syscall(SYS_RENAME, from, to, 0, 0, 0, 0))
 }
 
-// Unlink removes the name at the NUL-terminated path.
+// Unlink removes the name at the NUL-terminated path. It returns 0, or an
+// error code.
 func Unlink(path i64) i64 {
-  return syscall(SYS_UNLINK, path, 0, 0, 0, 0, 0)
+  return Code(syscall(SYS_UNLINK, path, 0, 0, 0, 0, 0))
 }
 
 // DirLen is the length of path's directory part, its last "/" included;
@@ -345,19 +420,19 @@ func PutInt(dst i64, v i64) i64 {
   return dst
 }
 
-// Temp is a temp file that CreateTemp made: its open fd (< 0 if it could
-// not be made) and its NUL-terminated name.
+// Temp is a temp file that CreateTemp made: its open fd and its
+// NUL-terminated name.
 type Temp struct {
   fd i64
   name i64
 }
 
 // CreateTemp makes a new, empty file beside path (pathn bytes), named
-// <dir>/.<base>.<pid>.<n>.ovid-tmp, open for writing. The file is created
-// exclusively and private (0600), so a name someone else put there, a
-// symlink included, is never written through: the next n is tried. Check
-// fd on the result.
-func CreateTemp(io *Cap, path i64, pathn i64) *Temp {
+// <dir>/.<base>.<pid>.<n>.ovid-tmp, open for writing: the Temp and 0, or a
+// null pointer and an error code. The file is created exclusively and
+// private (0600), so a name someone else put there, a symlink included, is
+// never written through: the next n is tried.
+func CreateTemp(io *Cap, path i64, pathn i64) (*Temp, i64) {
   var t *Temp = Alloc(io, sizeof(Temp)) as *Temp
   var slash i64 = DirLen(path, pathn)
   var tmp i64 = Alloc(io, pathn + 48)
@@ -379,9 +454,10 @@ func CreateTemp(io *Cap, path i64, pathn i64) *Temp {
   store8(tail, 46)
   tail = tail + 1
   t.name = tmp
-  t.fd = EEXIST
+  var fd i64 = 0
+  var e i64 = E_EXIST
   var try i64 = 0
-  while t.fd == EEXIST && try < 100 {
+  while e == E_EXIST && try < 100 {
     var end i64 = PutInt(tail, try)
     var suffix i64 = strptr(".ovid-tmp")
     i = 0
@@ -389,20 +465,24 @@ func CreateTemp(io *Cap, path i64, pathn i64) *Temp {
       store8(end + i, load8(suffix + i))
       i = i + 1
     }
-    t.fd = Open(tmp, (O_WRONLY + O_CREAT) + O_EXCL, 384)
+    fd, e = Open(tmp, (O_WRONLY + O_CREAT) + O_EXCL, 384)
     try = try + 1
   }
-  return t
+  if e != 0 {
+    return 0 as *Temp, e
+  }
+  t.fd = fd
+  return t, 0
 }
 
 // FillTemp writes datan bytes to the temp file t, gives it permission mode
 // (not masked by the umask) once the data is in, syncs it if sync, and
-// closes it. It returns 0, or < 0 on error, and then the file is removed.
+// closes it. It returns 0, or an error code, and then the file is removed.
 // An error that only close reports (a write the kernel had put off) counts.
 func FillTemp(t *Temp, data i64, datan i64, mode i64, sync bool) i64 {
   var r i64 = Write(t.fd, data, datan)
   if r == 0 {
-    r = syscall(SYS_FCHMOD, t.fd, mode, 0, 0, 0, 0)
+    r = Code(syscall(SYS_FCHMOD, t.fd, mode, 0, 0, 0, 0))
   }
   if r == 0 && sync {
     r = Fsync(t.fd)
@@ -418,11 +498,11 @@ func FillTemp(t *Temp, data i64, datan i64, mode i64, sync bool) i64 {
 }
 
 // SyncPath syncs the file or directory at the NUL-terminated path (see
-// Fsync), which must be readable. It returns 0, or < 0 on error.
+// Fsync), which must be readable. It returns 0, or an error code.
 func SyncPath(path i64) i64 {
-  var fd i64 = Open(path, O_RDONLY, 0)
-  if fd < 0 {
-    return fd
+  var fd i64, e i64 = Open(path, O_RDONLY, 0)
+  if e != 0 {
+    return e
   }
   var r i64 = Fsync(fd)
   var c i64 = Close(fd)
@@ -438,12 +518,12 @@ func SyncPath(path i64) i64 {
 // process sees the old file or the new one, never a part, and a program
 // that is running from path can be replaced. Nothing is synced, so after a
 // power loss the file may be empty: use it for a file that can be made
-// again, WriteFileDurable for one that cannot. It returns 0, or < 0 on
-// error, and then path is untouched.
+// again, WriteFileDurable for one that cannot. It returns 0, or an error
+// code, and then path is untouched.
 func WriteFileAtomic(io *Cap, path i64, pathn i64, data i64, datan i64, mode i64) i64 {
-  var t *Temp = CreateTemp(io, path, pathn)
-  if t.fd < 0 {
-    return t.fd
+  var t *Temp, e i64 = CreateTemp(io, path, pathn)
+  if e != 0 {
+    return e
   }
   var r i64 = FillTemp(t, data, datan, mode, false)
   if r != 0 {
@@ -459,15 +539,15 @@ func WriteFileAtomic(io *Cap, path i64, pathn i64, data i64, datan i64, mode i64
 // WriteFileDurable is WriteFileAtomic that also survives a crash: the
 // temp file is synced before the rename and the directory after it, so
 // once it returns 0 the new content is on the disk. The two syncs cost
-// milliseconds on a disk. It returns < 0 on error. If the temp file or the
-// rename failed, path is untouched; but the last step, syncing the
+// milliseconds on a disk. It returns 0, or an error code. If the temp file
+// or the rename failed, path is untouched; but the last step, syncing the
 // directory, comes after the rename, so when that is what failed path
 // already holds the new content and it is only not known to be durable.
 // A caller that must tell the two apart reads path back.
 func WriteFileDurable(io *Cap, path i64, pathn i64, data i64, datan i64, mode i64) i64 {
-  var t *Temp = CreateTemp(io, path, pathn)
-  if t.fd < 0 {
-    return t.fd
+  var t *Temp, e i64 = CreateTemp(io, path, pathn)
+  if e != 0 {
+    return e
   }
   var r i64 = FillTemp(t, data, datan, mode, true)
   if r != 0 {
@@ -488,28 +568,33 @@ func WriteFileDurable(io *Cap, path i64, pathn i64, data i64, datan i64, mode i6
 // Getdents reads directory entries from fd (opened with O_DIRECTORY) into
 // buf, at most n bytes, as linux_dirent64 records: d_ino at 0, d_off at 8,
 // d_reclen (u16) at 16, d_type at 18 (4 dir, 8 file, 10 symlink, 0 unknown),
-// NUL-terminated name at 19. Returns the bytes read, 0 at the end, or < 0.
-func Getdents(fd i64, buf i64, n i64) i64 {
-  return syscall(SYS_GETDENTS64, fd, buf, n, 0, 0, 0)
+// NUL-terminated name at 19. It returns the bytes read (0 at the end) and
+// 0, or 0 and an error code.
+func Getdents(fd i64, buf i64, n i64) (i64, i64) {
+  var r i64 = syscall(SYS_GETDENTS64, fd, buf, n, 0, 0, 0)
+  if r < 0 {
+    return 0, Code(r)
+  }
+  return r, 0
 }
 
-// Mkdir creates the directory at the NUL-terminated path, mode 0755.
+// Mkdir creates the directory at the NUL-terminated path, mode 0755. It
+// returns 0, or an error code.
 func Mkdir(path i64) i64 {
-  return syscall(SYS_MKDIRAT, AT_FDCWD, path, 493, 0, 0, 0)
+  return Code(syscall(SYS_MKDIRAT, AT_FDCWD, path, 493, 0, 0, 0))
 }
 
-// IsDir is 1 if path (pathn bytes) is a directory, else 0.
-func IsDir(io *Cap, path i64, pathn i64) i64 {
+// IsDir reports whether path (pathn bytes) is a directory, and 0, or false
+// and the error code of looking.
+func IsDir(io *Cap, path i64, pathn i64) (bool, i64) {
   var cs i64 = CStr(io, path, pathn)
   var st i64 = Alloc(io, 256)
-  if FstatAt(cs, st) < 0 {
-    return 0
+  var e i64 = FstatAt(cs, st)
+  if e != 0 {
+    return false, e
   }
   var m i64 = load32(st + 24)
-  if (m & 0xF000) == 0x4000 {
-    return 1
-  }
-  return 0
+  return (m & 0xF000) == 0x4000, 0
 }
 
 // Print writes the NUL-terminated string at p to standard output, so a

@@ -192,13 +192,13 @@ func StdHas(m *Mod, pathp i64, pathn i64) bool {
 // (name = relp/reln, std = d_type), sorted by name, without . and ..
 // It uses getdents64 through ovid/io.Getdents.
 func ListDir(io *ovid/io.Cap, path i64) *File {
-  var fd i64 = ovid/io.Open(path, 65536, 0)
-  if fd < 0 {
+  var fd i64, e i64 = ovid/io.Open(path, 65536, 0)
+  if e != 0 {
     return 0 as *File
   }
   var head *File = 0 as *File
   var buf i64 = ovid/io.Alloc(io, 32768)
-  var r i64 = ovid/io.Getdents(fd, buf, 32768)
+  var r i64, _ = ovid/io.Getdents(fd, buf, 32768)
   while r > 0 {
     var o i64 = 0
     while o < r {
@@ -216,7 +216,7 @@ func ListDir(io *ovid/io.Cap, path i64) *File {
       }
       o = o + reclen
     }
-    r = ovid/io.Getdents(fd, buf, 32768)
+    r, _ = ovid/io.Getdents(fd, buf, 32768)
   }
   ovid/io.Close(fd)
   return head
@@ -243,7 +243,8 @@ func EntIsDir(io *ovid/io.Cap, dir i64, e *File) bool {
   }
   if e.std == 0 {
     var full i64 = Path(io, dir, ovid/io.CLen(dir), e.relp, e.reln)
-    return ovid/io.IsDir(io, full, ovid/io.CLen(full)) == 1
+    var isdir bool, _ = ovid/io.IsDir(io, full, ovid/io.CLen(full))
+    return isdir
   }
   return false
 }
@@ -295,13 +296,13 @@ func Walk(m *Mod, abs i64, relp i64, reln i64) i64 {
     if EntIsDir(m.io, abs, e) {
       var modf i64 = Path(m.io, full, ovid/io.CLen(full), strptr("ovid.mod"), 8)
       var st i64 = ovid/io.Alloc(m.io, 256)
-      if load8(e.relp) != 46 && ovid/io.FstatAt(modf, st) < 0 {
+      if load8(e.relp) != 46 && ovid/io.FstatAt(modf, st) != 0 {
         Walk(m, full, crel, creln)
       }
     } else if HasOvSuffix(e.relp, e.reln) && !(m.notests && IsTestFile(e.relp, e.reln)) {
-      var pp i64 = ovid/io.Alloc(m.io, 8)
       var pn i64 = ovid/io.Alloc(m.io, 8)
-      if ovid/io.ReadFile(m.io, full, ovid/io.CLen(full), pp, pn) == 0 {
+      var src i64, re i64 = ovid/io.ReadFile(m.io, full, ovid/io.CLen(full), pn)
+      if re == 0 {
         var f *File = ovid/io.Alloc(m.io, sizeof(File)) as *File
         f.relp = crel
         f.reln = creln
@@ -312,7 +313,7 @@ func Walk(m *Mod, abs i64, relp i64, reln i64) i64 {
           f.dispp = full
           f.dispn = ovid/io.CLen(full)
         }
-        f.src = load64(pp)
+        f.src = src
         f.n = load64(pn)
         var k *Pkg = GroupFor(m, relp, reln)
         k.files = InsertByName(k.files, f)
@@ -526,16 +527,16 @@ func StdPass(m *Mod) i64 {
       var en *File = e.next
       if !EntIsDir(m.io, dir, e) && HasOvSuffix(e.relp, e.reln) {
         var full i64 = Path(m.io, dir, ovid/io.CLen(dir), e.relp, e.reln)
-        var pp i64 = ovid/io.Alloc(m.io, 8)
         var pn i64 = ovid/io.Alloc(m.io, 8)
-        if ovid/io.ReadFile(m.io, full, ovid/io.CLen(full), pp, pn) == 0 {
+        var src i64, re i64 = ovid/io.ReadFile(m.io, full, ovid/io.CLen(full), pn)
+        if re == 0 {
           var f *File = ovid/io.Alloc(m.io, sizeof(File)) as *File
           var t i64 = Cat(m.io, strptr("std:"), 4, sorted.pathp, sorted.pathn)
           f.relp = Path(m.io, t, 4 + sorted.pathn, e.relp, e.reln)
           f.reln = (5 + sorted.pathn) + e.reln
           f.dispp = full
           f.dispn = ovid/io.CLen(full)
-          f.src = load64(pp)
+          f.src = src
           f.n = load64(pn)
           f.std = 1
           files = InsertByName(files, f)
@@ -639,17 +640,17 @@ func Load(io *ovid/io.Cap, dirp i64, dirn i64, stdp i64, stdn i64, notests bool)
   m.dirn = dirn
   m.out = ovid/mem.New(io, 4096)
   var modp i64 = Path(io, dirp, dirn, strptr("ovid.mod"), 8)
-  var pp i64 = ovid/io.Alloc(io, 8)
-  var pn i64 = ovid/io.Alloc(io, 8)
-  if ovid/io.ReadFile(io, modp, ovid/io.CLen(modp), pp, pn) != 0 {
+  var mn i64 = ovid/io.Alloc(io, 8)
+  var msrc i64, me i64 = ovid/io.ReadFile(io, modp, ovid/io.CLen(modp), mn)
+  if me != 0 {
     var b *ovid/mem.Buf = Msg(io, strptr("no ovid.mod in "), 15)
     ovid/mem.WBytes(io, b, dirp, dirn)
     ovid/mem.WBytes(io, b, strptr("; pass the module directory (the one holding ovid.mod)"), strlen("; pass the module directory (the one holding ovid.mod)"))
     LoadErr(m, strptr("no_module"), 9, 0 as *File, 0, b)
     return m
   }
-  m.modsrc = load64(pp)
-  m.modlen = load64(pn)
+  m.modsrc = msrc
+  m.modlen = load64(mn)
   ReadMod(m, m.modsrc, m.modlen, stdp, stdn)
   if m.nerr != 0 {
     return m
