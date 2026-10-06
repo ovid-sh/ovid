@@ -23,6 +23,17 @@ or `grep`, one called `ovid show`, and none edited through ovid. They
 navigated with `grep`, `sed -n`, and `cat` and edited with python, `sed`,
 or Edit, reading 29–93 KB of the 180 KB.
 
+That is the cheaper choice, not a habit to correct. Told to navigate and
+edit through ovid (`preamble.guided.md`), sonnet did navigate with it
+(`show` 39 times, `grep` 24, `outline` 10 in five runs) and the task cost
+more: a median of $0.20 against $0.15, 52 KB read against 30 KB, twice
+the input tokens. ovid's read commands print more than the shell tools
+they stand in for: on prog/, `show` of one func is 1.7 times its text,
+`grep` 3.7 times `grep -rn`, and `outline` of a package 6.2 times
+`grep -n '^func\|^type\|^const'`. Even when told to, the agents did not edit through
+ovid: one run of five used `ovid insert`, the rest python and `sed`
+(611c7e2, below; #125).
+
 In the small modules ovid's guard still does its job: in `14-rename-vs-call`
 an edit that named the function the other agent had just renamed was
 refused with `unknown_name` and nothing written, and the agent re-read and
@@ -33,6 +44,77 @@ told to retry a lost `ovid edit` first, every agent in `07-replay` got
 `stale`, confirmed the change was already in, and made it no second time
 (d8c0be0, below). The two problems the b4c231f run found are fixed by #100
 (#98, #99), not yet re-run with a model.
+
+## 2026-10-05, 611c7e2: does telling agents to use ovid's read commands pay?
+
+`15-selfhost-messages` only, five runs with each of two preambles, model
+`us.anthropic.claude-sonnet-5-5` (Bedrock), both at the same time on
+starship, Claude Code 2.1.286, $2 budget per agent, $1.84 in all. The
+plain preamble is `preamble.md`. The guided one, `preamble.guided.md`, adds
+one paragraph: find your way with `ovid outline`, `show`, `refs`, and
+`grep` rather than by reading files, and change code with `ovid replace`,
+`insert`, `append`, `delete`, or `edit`. Records:
+`2026-10-05-611c7e2-nav-{plain,guided}-sonnet.jsonl`.
+
+Medians over all five runs of each (the plain column includes its one
+failed run):
+
+| preamble | passed | calls | ovid calls | failed calls | bytes read | bytes written | tokens in | tokens out | cost | seconds |
+|---|---|---|---|---|---|---|---|---|---|---|
+| plain | 4/5 | 13 | 10 | 1 | 30056 | 7504 | 166222 | 6471 | $0.15 | 56 |
+| guided | 5/5 | 16 | 15 | 0 | 52036 | 8640 | 321401 | 7212 | $0.20 | 61 |
+
+ovid calls by subcommand, summed over the five runs, and the shell tools,
+all counted from the transcripts. (The records' `ovid_cmds` field has one
+`check` fewer for guided run 4: it was written as `ovid -C DIR check`,
+which the counter did not see past until the fix in this PR.)
+
+| | check | build | test | help | outline | show | grep | refs | insert | shell grep | sed | cat | python3 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| plain | 28 | 10 | 8 | 12 | 2 | 0 | 0 | 0 | 0 | 40 | 23 | 18 | 11 |
+| guided | 32 | 13 | 8 | 8 | 10 | 39 | 24 | 1 | 4 | 16 | 23 | 22 | 13 |
+
+What it shows:
+
+- **The guidance was followed for reading.** Every guided run used
+  `show` (3–11 times), `grep` (3–6), and `outline` (1–3). Shell `grep`
+  fell from 40 uses to 16.
+- **Reading through ovid cost more.** Each guided run read more than each
+  plain one (40–70 KB against 25–31 KB) and the median cost rose by a
+  third. Five runs a side is too few to say anything about the pass rate
+  (5/5 against 4/5).
+- **The reason is the size of the output.** Measured on prog/ at this
+  commit:
+
+  | read | ovid | shell | ratio |
+  |---|---|---|---|
+  | one func, `fn:ovid/check.CheckExpr` (211 lines) | `show`: 11,937 B (`--plain`: 7,033 B) | the text: 7,033 B | 1.7 |
+  | every line with `type_mismatch` | `grep`: 4,917 B | `grep -rn`: 1,316 B | 3.7 |
+  | the decls of `ovid/check` | `outline --pkg`: 16,951 B | `grep -n '^func\|^type\|^const'`: 2,729 B | 6.2 |
+
+  `show` appends an id comment to every line where a statement starts,
+  `grep` wraps each match in a JSON object with its file, decl, and
+  source line, and `outline` prints a JSON object per decl with its doc
+  comment and hash. #125 proposes compact forms.
+- **The guidance was not followed for editing.** `ovid insert` was called
+  4 times, all in run 2; no run used `replace` or `edit`. Edits were made
+  with python (13 uses) and `sed`, as without the guidance. The ids that
+  `show` printed were paid for and not used.
+- **The guided preamble misdescribed `show`, and is corrected since.** The
+  wording these runs used (sha256 `153196d9…`) said `show` prints "the id
+  and hash of each statement". It prints each statement's id and the
+  declaration's hash, which is the guard an edit to those statements
+  takes. An agent that looked for per-statement hashes would not have
+  found them, so this run cannot say how much of the missing `ovid edit`
+  use is the wording's doing. The corrected file names the declaration's
+  hash and `--expect`; it has not been run.
+- **A fault in the runner, fixed in this commit's PR.** All ten runs were
+  flagged as looking outside their directory, because the output
+  directories (`/tmp/ovid-exp-plain`, `-guided`) began with the
+  checkout's path (`/tmp/ovid-exp`) and the test was a substring match.
+  No tool input named the checkout itself, `tests/agent`, or `ovid-sh`.
+  The table above therefore comes from the records directly, not from
+  `-summary`, which leaves flagged runs out.
 
 ## 2026-10-05, 5d9f9d9 / 3d0c0f9: four harder tasks, opus, sonnet, and haiku
 

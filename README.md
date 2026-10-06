@@ -28,7 +28,7 @@ ovid.mod              module <name> / entry <pkg>
 <pkg path>/*.ov       one directory per package; any number of files
 ```
 
-The package path is the directory path. `ovid/io`, `ovid/mem`, and `ovid/test` (`Eq`, `True`: a failing check prints got/want) ship with
+The package path is the directory path. `ovid/io`, `ovid/mem`, `ovid/test` (`Eq`, `True`: a failing check prints got/want), and `ovid/http` (an HTTP handler's request and response, and a host that serves one request over stdin and stdout) ship with
 the toolchain (`std/`, embedded in the binary). A module cannot replace them:
 a package of its own with one of those paths is an error (`reserved_path`),
 and `ovid.mod` has no way to name another standard library. Only the shipped
@@ -117,7 +117,7 @@ cmp /tmp/s1 /tmp/s2                        # byte-identical
 
 The two compilers emit byte-identical binaries for the same source, and
 `go test ./internal/tool -run TestSelfHost` checks it. The self-hosted
-compiler is about 99 KB, and `TestSelfHostSize` fails if it outgrows its
+compiler is about 112 KB, and `TestSelfHostSize` fails if it outgrows its
 budget. On starship (Ryzen 7 8745HS, 2026-10-04) it built `prog/` in 9 ms,
 against 27 ms for the Go one, and a generated program of 100,000 funcs
 (300,000 lines) in 0.57 s against 2.25 s. One command measures all of it:

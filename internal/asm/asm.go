@@ -30,6 +30,9 @@ type Buf struct {
 	labels []int
 	fixups []fixup
 	abs    []absFix
+	// Marks counts the labels marked so far: code between two of them
+	// runs straight through.
+	Marks int
 }
 
 type fixup struct {
@@ -51,6 +54,7 @@ func (b *Buf) NewLabel() int {
 
 func (b *Buf) Mark(id int) {
 	b.labels[id] = len(b.Code)
+	b.Marks++
 }
 
 func (b *Buf) Pos() int { return len(b.Code) }
@@ -195,7 +199,7 @@ func (b *Buf) ShrRegImm(reg int, n byte) { b.emit(0x48, 0xC1, modrm(3, 5, byte(r
 // rexMem emits the REX prefix for an instruction with operands reg and
 // [base+index+disp] (index -1 for none), when one is needed or forced.
 func (b *Buf) rexMem(w bool, reg, base, index int, force bool) {
-	v := rex(w, reg >= 8, index >= 8, base >= 8)
+	v := rex(w, reg >= 8, index >= 0 && index&8 != 0, base >= 8)
 	if v != 0x40 || force {
 		b.emit(v)
 	}
@@ -396,7 +400,8 @@ func (b *Buf) memReg(op byte, reg, base int, disp int32, wide bool) {
 }
 
 // memOperand encodes the ModRM, SIB, and displacement bytes for reg,
-// [base+index+disp]; index is -1 for none and is never rsp.
+// [base+index+disp]; index is -1 for none and is never rsp. Bits 4 and 5
+// of index scale it: index | s<<4 is the register times 2^s.
 func (b *Buf) memOperand(reg, base, index int, disp int32) {
 	rb := byte(base & 7)
 	rg := byte(reg & 7)
@@ -417,7 +422,7 @@ func (b *Buf) memOperand(reg, base, index int, disp int32) {
 	if sib {
 		x := byte(4)
 		if index >= 0 {
-			x = byte(index & 7)
+			x = byte(index&7) | byte(index>>4&3)<<3
 		}
 		b.emit(x<<3 | rb)
 	}

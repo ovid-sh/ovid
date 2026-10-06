@@ -149,7 +149,27 @@ Control flow, all of it:
 Programs: the entry package (ovid.mod "entry") has
   func main(io *ovid/io.Cap) i64    // result is the exit code
 io is the capability for argv, heap, and syscalls. syscall(...) is only
-allowed inside ovid/io; everyone else calls ovid/io funcs.
+allowed inside ovid/io; everyone else calls ovid/io funcs. ovid/io's types
+are handles: outside ovid/io a pointer to one cannot be made by a cast, cast
+to anything, or have its fields read or written (opaque_type).
+
+Serving HTTP: write a handler, and a main that is the host around it. The
+stdio host (ovid help std, ovid/http) reads one request from stdin and
+writes the response to stdout, so a platform that spawns the binary per
+request can run it:
+  func handle(io *ovid/io.Cap, req *ovid/http.Request, res *ovid/http.Response) i64 {
+    ovid/http.Write(io, res, strptr("hi"), strlen("hi"))
+    return 0                        // anything else answers 500
+  }
+  func main(io *ovid/io.Cap) i64 {
+    var req *ovid/http.Request = ovid/http.ReadStdio(io)
+    var res *ovid/http.Response = ovid/http.NewResponse(io)
+    if ovid/http.Err(req) != 0 {
+      return ovid/http.WriteStdio(io, req, res, 0)
+    }
+    return ovid/http.WriteStdio(io, req, res, handle(io, req, res))
+  }
+A test calls handle with ovid/http.NewRequest and reads ovid/http.Sent.
 
 Tests: any func TestX(io *ovid/io.Cap) i64 in any module package; 0 passes,
 anything else fails (the value is reported as the exit code). build and run
