@@ -12,8 +12,9 @@ import (
 )
 
 // TestHTTPStdioLimit: ovid/http.ReadStdio takes a request of exactly
-// MAX_REQUEST bytes and answers one byte more with 413, reading no
-// further than the byte that told it so. A corpus case
+// MAX_REQUEST bytes and answers one byte more with 413, by its
+// Content-Length or by a head that does not end, reading no further than
+// one byte past the limit. A corpus case
 // cannot carry 8 MiB of input in a comment, so this one builds the program
 // itself.
 func TestHTTPStdioLimit(t *testing.T) {
@@ -41,15 +42,22 @@ func main(io *ovid/io.Cap) i64 {
 	if !canExec {
 		t.Skip("built only: ovid programs are linux/amd64 binaries")
 	}
-	head := "POST / HTTP/1.1\r\n\r\n" // no Content-Length: the body is the rest
-	body := max - len(head)
+	// The Content-Length values below are all 7 digits, so the head is
+	// the same length in each case.
+	head := func(n int) string { return fmt.Sprintf("POST / HTTP/1.1\r\nContent-Length: %d\r\n\r\n", n) }
+	body := max - len(head(1000000))
+	tooLarge := "HTTP/1.1 413 Content Too Large\r\nContent-Length: 0\r\n\r\n"
 	for _, c := range []struct {
-		extra int
-		want  string
+		in   string
+		want string
 	}{
-		{0, fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n%d", len(fmt.Sprint(body)), body)},
-		{1, "HTTP/1.1 413 Content Too Large\r\nContent-Length: 0\r\n\r\n"},
-		{max, "HTTP/1.1 413 Content Too Large\r\nContent-Length: 0\r\n\r\n"},
+		{head(body) + strings.Repeat("x", body), fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n%d", len(fmt.Sprint(body)), body)},
+		// Answered by the head's Content-Length, without waiting for the
+		// rest of the body.
+		{head(body+1) + strings.Repeat("x", body+1), tooLarge},
+		{"POST / HTTP/1.1\r\nContent-Length: 99999999999999999999\r\n\r\n" + strings.Repeat("x", max), tooLarge},
+		// A head with no end, longer than a request may be.
+		{"GET / HTTP/1.1\r\nX: " + strings.Repeat("x", 2*max), tooLarge},
 	} {
 		// stdin is a regular file, which a single read can drain whole,
 		// unlike a pipe; the program shares its offset, so afterwards the
@@ -58,7 +66,7 @@ func main(io *ovid/io.Cap) i64 {
 		if err != nil {
 			t.Fatal(err)
 		}
-		in := head + strings.Repeat("x", body+c.extra)
+		in := c.in
 		if _, err := f.WriteString(in); err != nil {
 			t.Fatal(err)
 		}

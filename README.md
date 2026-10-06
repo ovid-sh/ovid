@@ -31,10 +31,11 @@ ovid.mod              module <name> / entry <pkg>
 The entry package has `func main(io *ovid/io.Cap) i64`, or, for an HTTP
 handler, `func handle(io *ovid/io.Cap, req *ovid/http.Request, res
 *ovid/http.Response) i64` and no main: `ovid build` then writes the main
-itself, a host that reads one request from stdin and writes the response to
-stdout.
+itself, a host that reads requests from stdin one after another
+(Content-Length framed), writes each response to stdout, and resets the heap
+between them.
 
-The package path is the directory path. `ovid/io`, `ovid/mem`, `ovid/test` (`Eq`, `True`: a failing check prints got/want), and `ovid/http` (an HTTP handler's request and response, and a host that serves one request over stdin and stdout) ship with
+The package path is the directory path. `ovid/io`, `ovid/mem`, `ovid/test` (`Eq`, `True`: a failing check prints got/want), and `ovid/http` (an HTTP handler's request and response, and a host that serves requests over stdin and stdout) ship with
 the toolchain (`std/`, embedded in the binary). A module cannot replace them:
 a package of its own with one of those paths is an error (`reserved_path`),
 and `ovid.mod` has no way to name another standard library. Only the shipped
@@ -97,8 +98,8 @@ re-read).
 `i64`, `bool`, and pointers to structs (`*T`). Struct fields are 8 bytes and `sizeof(T)` gives a struct's size.
 No struct values, globals, function pointers, methods, generics, or implicit
 allocation. At most six parameters, one result. Operators follow Go
-precedence; `>>` is arithmetic. String literals exist only as `strptr("…")`
-and `strlen("…")`, and are read-only. Memory is `load8/32/64`, `store8/64`, and
+precedence and are signed; `>>` is arithmetic, and `ushr`, `umulhi`, `udiv`, `urem`, and `ult` are the unsigned forms. String literals exist only as `strptr("…")`
+and `strlen("…")`, and are read-only. Memory is `load8/16/32/64`, `store8/16/32/64`, `bswap16/32/64`, and
 `ovid/io.Alloc`. `main` is `func main(io *ovid/io.Cap) i64`; `io` is the
 capability for argv, the heap, and syscalls, and `syscall` is only allowed in
 `ovid/io`. Other packages' funcs and consts spell the import path:

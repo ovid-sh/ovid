@@ -231,6 +231,10 @@ func (c *cg) emitStartup(mainLab int) error {
 	if err != nil {
 		return err
 	}
+	maps, err := capOff(c.prog, "maps")
+	if err != nil {
+		return err
+	}
 	fail := c.b.NewLabel()
 	c.b.MovR12MemRsp()
 	c.b.LeaR13RspPlus8()
@@ -260,6 +264,7 @@ func (c *cg) emitStartup(mainLab int) error {
 	c.b.MovMemRegDispRax(asm.RCX, heap)
 	c.b.MovRegImm64(asm.RAX, 0)
 	c.b.MovMemRegDispRax(asm.RCX, used)
+	c.b.MovMemRegDispRax(asm.RCX, maps)
 	c.b.MovRegImm64(asm.RAX, heapSize)
 	c.b.MovMemRegDispRax(asm.RCX, size)
 	c.b.MovRegReg(asm.RDI, asm.RSP)
@@ -686,7 +691,7 @@ func stmtMax(s *ir.Node) int {
 		return exprMax(s.Val, 0)
 	case "setfield":
 		return max2(exprMax(s.Base, 0), exprMax(s.Val, 1), 1)
-	case "store8", "store64":
+	case "store8", "store16", "store32", "store64":
 		return max2(exprMax(s.Addr, 0), exprMax(s.Val, 1), 1)
 	case "if":
 		m := exprMax(s.Cond, 0)
@@ -707,11 +712,11 @@ func exprMax(n *ir.Node, lv int) int {
 	switch n.Op {
 	case "int", "bool", "name", "strptr", "strlen", "sizeof":
 		return -1
-	case "add", "sub", "mul", "div", "mod", "and", "or", "xor", "shl", "shr", "eq", "ne", "lt", "le", "gt", "ge":
+	case "add", "sub", "mul", "div", "mod", "and", "or", "xor", "shl", "shr", "ushr", "umulhi", "udiv", "urem", "ult", "eq", "ne", "lt", "le", "gt", "ge":
 		return max2(exprMax(n.Left, lv), exprMax(n.Right, lv+1), lv)
 	case "land", "lor":
 		return max1(exprMax(n.Left, lv), exprMax(n.Right, lv))
-	case "not", "neg", "bnot", "cast", "load8", "load32", "load64":
+	case "not", "neg", "bnot", "cast", "load8", "load16", "load32", "load64", "bswap16", "bswap32", "bswap64":
 		return exprMax(n.Arg, lv)
 	case "field":
 		return exprMax(n.Base, lv)
@@ -799,10 +804,8 @@ func (c *cg) emitStmt(s *ir.Node) error {
 			return err
 		}
 		return c.emitStore(s.Base, s.Val, 64, off)
-	case "store8":
-		return c.emitStore(s.Addr, s.Val, 8, 0)
-	case "store64":
-		return c.emitStore(s.Addr, s.Val, 64, 0)
+	case "store8", "store16", "store32", "store64":
+		return c.emitStore(s.Addr, s.Val, storeWidth[s.Op], 0)
 	case "expr":
 		return c.emitExpr(s.Val, 0)
 	case "return":
@@ -1167,6 +1170,22 @@ func (c *cg) arithRcx(op string) {
 		c.b.Cqo()
 		c.b.IdivRcx()
 		c.b.MovRegReg(asm.RAX, asm.RDX)
+	case "ushr":
+		c.b.ShrRaxCl()
+	case "umulhi":
+		c.b.MulRcx()
+		c.b.MovRegReg(asm.RAX, asm.RDX)
+	case "udiv":
+		c.b.XorEdxEdx()
+		c.b.DivRcx()
+	case "urem":
+		c.b.XorEdxEdx()
+		c.b.DivRcx()
+		c.b.MovRegReg(asm.RAX, asm.RDX)
+	case "ult":
+		c.b.CmpRaxRcx()
+		c.b.SetccAl(0x92)
+		c.b.MovzxRaxAl()
 	}
 }
 
@@ -1466,6 +1485,12 @@ func (c *cg) splitAddr(n *ir.Node) (*ir.Node, int32) {
 	return n, int32(d)
 }
 
+// The widths of the memory builtins, in bits.
+var (
+	loadWidth  = map[string]int{"load8": 8, "load16": 16, "load32": 32, "load64": 64}
+	storeWidth = map[string]int{"store8": 8, "store16": 16, "store32": 32, "store64": 64}
+)
+
 // emitStore stores val, width bits of it, at addr + off.
 func (c *cg) emitStore(addr, val *ir.Node, width int, off int32) error {
 	if k, v := c.operand(val); k != kNone {
@@ -1565,6 +1590,9 @@ func (c *cg) emitAssign(i int, val *ir.Node) error {
 			}
 		}
 	}
+	if inReg && isLoad(val) {
+		return c.emitLoad(val, 0, reg)
+	}
 	if err := c.emitExpr(val, 0); err != nil {
 		return err
 	}
@@ -1593,15 +1621,22 @@ func (c *cg) emitArgs(args []*ir.Node, regs []int, lv int) error {
 		if kinds[i] != kNone {
 			continue
 		}
+		// The last of them, if it reads memory, goes straight into its
+		// register: no other argument's register is set yet.
+		if i == last && regs[i] != asm.RAX && isLoad(a) {
+			if err := c.emitLoad(a, lv+i, regs[i]); err != nil {
+				return err
+			}
+			continue
+		}
 		if err := c.emitExpr(a, lv+i); err != nil {
 			return err
 		}
 		if i != last {
 			c.storeTemp(lv + i)
+		} else if regs[i] != asm.RAX {
+			c.b.MovRegReg(regs[i], asm.RAX)
 		}
-	}
-	if last >= 0 && regs[last] != asm.RAX {
-		c.b.MovRegReg(regs[last], asm.RAX)
 	}
 	for i := range args {
 		if kinds[i] == kNone && i != last {
@@ -1668,7 +1703,7 @@ func (c *cg) emitExpr(n *ir.Node, lv int) error {
 			return nil
 		}
 		return fmt.Errorf("name %s", n.Name)
-	case "add", "sub", "mul", "div", "mod", "and", "or", "xor", "shl", "shr":
+	case "add", "sub", "mul", "div", "mod", "and", "or", "xor", "shl", "shr", "ushr", "umulhi", "udiv", "urem", "ult":
 		return c.emitArith(n, lv)
 	case "eq", "ne", "lt", "le", "gt", "ge":
 		cc, err := c.emitCmp(n, lv)
@@ -1728,23 +1763,13 @@ func (c *cg) emitExpr(n *ir.Node, lv int) error {
 		return nil
 	case "cast":
 		return c.emitExpr(n.Arg, lv)
-	case "field":
-		off, err := c.fieldOff(n.Base, n.Name)
-		if err != nil {
+	case "field", "load8", "load16", "load32", "load64":
+		return c.emitLoad(n, lv, asm.RAX)
+	case "bswap16", "bswap32", "bswap64":
+		if err := c.emitExpr(n.Arg, lv); err != nil {
 			return err
 		}
-		base, index, d, err := c.emitAddr(n.Base, lv)
-		if err != nil {
-			return err
-		}
-		c.b.LoadMem(64, base, index, off+d)
-		return nil
-	case "load8", "load32", "load64":
-		base, index, d, err := c.emitAddr(n.Arg, lv)
-		if err != nil {
-			return err
-		}
-		c.b.LoadMem(map[string]int{"load8": 8, "load32": 32, "load64": 64}[n.Op], base, index, d)
+		c.b.BswapRax(map[string]int{"bswap16": 16, "bswap32": 32, "bswap64": 64}[n.Op])
 		return nil
 	case "call":
 		path := n.Pkg
@@ -1787,6 +1812,37 @@ func (c *cg) emitExpr(n *ir.Node, lv int) error {
 	default:
 		return fmt.Errorf("expr %s", n.Op)
 	}
+}
+
+// isLoad reports whether n reads memory and nothing else: a field or a
+// load, which emitLoad can put in any register.
+func isLoad(n *ir.Node) bool {
+	n = uncast(n)
+	return n != nil && (n.Op == "field" || loadWidth[n.Op] != 0)
+}
+
+// emitLoad evaluates n, a field or a load, into dst. Its address may be
+// evaluated into rax first.
+func (c *cg) emitLoad(n *ir.Node, lv int, dst int) error {
+	n = uncast(n)
+	if n.Op == "field" {
+		off, err := c.fieldOff(n.Base, n.Name)
+		if err != nil {
+			return err
+		}
+		base, index, d, err := c.emitAddr(n.Base, lv)
+		if err != nil {
+			return err
+		}
+		c.b.LoadMemReg(64, dst, base, index, off+d)
+		return nil
+	}
+	base, index, d, err := c.emitAddr(n.Arg, lv)
+	if err != nil {
+		return err
+	}
+	c.b.LoadMemReg(loadWidth[n.Op], dst, base, index, d)
+	return nil
 }
 
 // sizeOf is the byte size of struct type t (pkg.T): 8 per field.
@@ -1836,9 +1892,9 @@ func (c *cg) typeOf(n *ir.Node) string {
 		return "invalid"
 	}
 	switch n.Op {
-	case "int", "strptr", "strlen", "sizeof", "add", "sub", "mul", "div", "mod", "and", "or", "xor", "shl", "shr", "neg", "bnot", "load8", "load32", "load64", "syscall":
+	case "int", "strptr", "strlen", "sizeof", "add", "sub", "mul", "div", "mod", "and", "or", "xor", "shl", "shr", "ushr", "umulhi", "udiv", "urem", "neg", "bnot", "load8", "load16", "load32", "load64", "bswap16", "bswap32", "bswap64", "syscall":
 		return "i64"
-	case "bool", "eq", "ne", "lt", "le", "gt", "ge", "land", "lor", "not":
+	case "bool", "eq", "ne", "lt", "le", "gt", "ge", "ult", "land", "lor", "not":
 		return "bool"
 	case "name":
 		if n.Pkg != "" {

@@ -521,7 +521,7 @@ func (p *parser) stmt(s int, id string) *ir.Node {
 		return p.parseWhile()
 	case p.kw("return"):
 		return p.parseReturn()
-	case p.peekKw("store8") || p.peekKw("store64"):
+	case p.peekKw("store8") || p.peekKw("store16") || p.peekKw("store32") || p.peekKw("store64"):
 		op := p.ident()
 		p.expect('(')
 		addr := p.parseExpr()
@@ -575,7 +575,7 @@ func (p *parser) parseReturn() *ir.Node {
 	if p.i >= len(p.src) || p.nl || p.src[p.i] == '}' {
 		return n
 	}
-	if p.peekKw("var") || p.peekKw("if") || p.peekKw("while") || p.peekKw("return") || p.peekKw("store8") || p.peekKw("store64") {
+	if p.peekKw("var") || p.peekKw("if") || p.peekKw("while") || p.peekKw("return") || p.peekKw("store8") || p.peekKw("store16") || p.peekKw("store32") || p.peekKw("store64") {
 		return n
 	}
 	n.Val = p.parseExpr()
@@ -779,7 +779,16 @@ func (p *parser) primary0() *ir.Node {
 	case p.peekKw("syscall"):
 		p.ident()
 		return p.callArgs("syscall", "", "", ir.Span{})
-	case p.peekKw("load8"), p.peekKw("load32"), p.peekKw("load64"):
+	case p.peekKw("ushr"), p.peekKw("umulhi"), p.peekKw("ult"), p.peekKw("udiv"), p.peekKw("urem"):
+		// The unsigned operations are binary operators spelled as calls.
+		op := p.ident()
+		p.expect('(')
+		l := p.parseExpr()
+		p.expect(',')
+		r := p.parseExpr()
+		p.expect(')')
+		return &ir.Node{ID: p.eid(), Op: op, Left: l, Right: r}
+	case p.peekKw("load8"), p.peekKw("load16"), p.peekKw("load32"), p.peekKw("load64"), p.peekKw("bswap16"), p.peekKw("bswap32"), p.peekKw("bswap64"):
 		op := p.ident()
 		p.expect('(')
 		a := p.parseExpr()

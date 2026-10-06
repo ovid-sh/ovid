@@ -92,18 +92,24 @@ No struct values, slices, arrays, strings, generics, methods, globals, or
 closures. At most 6 params; exactly one result type.
 
 Statements: var x T = e | var x T (zero: 0, false, or a null pointer) | x = e | p.f = e | if c { } else if c { } else { }
-| while c { } | return e | store8(addr, v) | store64(addr, v) | call(...).
+| while c { } | return e | store8/16/32/64(addr, v) (the low bits of v) | call(...).
 Every path through a func must return.
 
 Expressions: integers (decimal, 0x hex), true/false, names, calls f(a),
 other packages' funcs and consts by import path: ovid/mem.Copy(d, s, n),
 ovid/io.O_RDONLY (a one-segment import may also be written util.F()),
 field reads p.f, casts e as *T (i64 address to pointer and back),
-load8/load32/load64(addr), strptr("lit") / strlen("lit"), sizeof(T).
+load8/16/32/64(addr) (zero-extended), bswap16/32/64(x) (reverses the low
+bytes, zero-extended: a big-endian field is store32(p, bswap32(v)) and
+bswap32(load32(p))), strptr("lit") / strlen("lit"), sizeof(T).
 Binary operators, Go precedence: || && == != < <= > >= + - | ^ * / % << >> &
 (>> is arithmetic). Unary: ! (bool), - and ^ (i64). Comparisons give bool;
 if/while conditions must be bool. && and || short-circuit and are ordinary
 values: var sp bool = c == 32 || c == 9 || c == 10.
+The operators are signed. The unsigned ones are spelled as calls:
+ushr(x, n) (logical shift, count masked to 0..63 like >>), umulhi(a, b)
+(the high 64 bits of the 128-bit product), udiv(a, b), urem(a, b) (both
+trap on 0 like / and %), ult(a, b) bool.
 
 Strings: there is no string type. strptr("hi\n") is the address of an
 interned NUL-terminated literal and strlen("hi\n") is its length (3),
@@ -117,8 +123,13 @@ printing one needs only its address:
   ovid/io.Stdout(p, n)                 // n bytes at p, for non-literals
 
 Memory: no implicit allocation. ovid/io.Alloc(io, nbytes) returns an i64
-address of zeroed bytes from the heap, which grows as needed and is never
-freed; it does not return 0 (out of memory ends the program, exit 71).
+address of zeroed bytes from the heap, which grows as needed; it does not
+return 0 (out of memory ends the program, exit 71). Nothing is freed one
+block at a time: var m *ovid/io.HeapMark = ovid/io.MarkHeap(io) records
+the heap, and ovid/io.ResetHeap(io, m) gives back and zeroes everything
+allocated since, for a host between requests; an address allocated after
+the mark must not be used after the reset. It returns 0, or the kernel's
+error if it refused to unmap; the next reset tries those mappings again.
 Cast the address: var p *Pair = raw as *Pair.
 Each struct field takes 8 bytes, so a struct is 8 * fields bytes; never
 count them by hand, write sizeof(T) (T a struct; path.T for another
@@ -154,21 +165,35 @@ are handles: outside ovid/io a pointer to one cannot be made by a cast, cast
 to anything, or have its fields read or written (opaque_type).
 
 Serving HTTP: write a handler in the entry package and no main; build
-makes the program the stdio host around it, which reads one request from
-stdin and writes the response to stdout (ovid help std, ovid/http), so a
-platform that spawns the binary per request can run it:
+makes the program the stdio host around it, which reads the requests on
+stdin one after another, HTTP/1.1 framed (a body is Content-Length bytes,
+none without it), and writes each response to stdout (ovid help std,
+ovid/http), so a platform can spawn the binary per request or keep it
+running. A request that cannot be read is answered (400, 413, 501) and is
+the last. Between two requests the heap is reset: nothing a request
+allocated is there for the next.
   func handle(io *ovid/io.Cap, req *ovid/http.Request, res *ovid/http.Response) i64 {
     ovid/http.Write(io, res, strptr("hi"), strlen("hi"))
     return 0                        // anything else answers 500
   }
 A main, if there is one, is the entry instead; the host it replaces is
   func main(io *ovid/io.Cap) i64 {
-    var req *ovid/http.Request = ovid/http.ReadStdio(io)
-    var res *ovid/http.Response = ovid/http.NewResponse(io)
-    if ovid/http.Err(req) != 0 {
-      return ovid/http.WriteStdio(io, req, res, 0)
+    var s *ovid/http.Stdio = ovid/http.NewStdio(io)
+    var m *ovid/io.HeapMark = ovid/io.MarkHeap(io)
+    var req *ovid/http.Request = ovid/http.NextStdio(io, s)
+    while req != 0 as *ovid/http.Request {
+      var res *ovid/http.Response = ovid/http.NewResponse(io)
+      var result i64 = 0
+      if ovid/http.Err(req) == 0 {
+        result = handle(io, req, res)
+      }
+      if ovid/http.WriteStdio(io, req, res, result) != 0 {
+        return 1
+      }
+      ovid/io.ResetHeap(io, m)
+      req = ovid/http.NextStdio(io, s)
     }
-    return ovid/http.WriteStdio(io, req, res, handle(io, req, res))
+    return 0
   }
 A test calls handle with ovid/http.NewRequest and reads ovid/http.Sent.
 

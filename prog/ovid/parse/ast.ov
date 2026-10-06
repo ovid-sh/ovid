@@ -3,50 +3,96 @@ package ovid/parse
 import ovid/io
 import ovid/mem
 
-// Op codes. Statements are 1..9; everything else is an expression.
+// Op codes. Statements are 1..11; everything else is an expression, and
+// the binary operators (OP_LOR and up) come after every other expression,
+// so EvalConst can tell them apart by number.
 const OP_VAR i64 = 1
 const OP_ASSIGN i64 = 2
 const OP_SETFIELD i64 = 3
 const OP_STORE8 i64 = 4
-const OP_STORE64 i64 = 5
-const OP_RETURN i64 = 6
-const OP_IF i64 = 7
-const OP_WHILE i64 = 8
-const OP_EXPR i64 = 9
-const OP_INT i64 = 10
-const OP_BOOL i64 = 11
-const OP_NAME i64 = 12
-const OP_CALL i64 = 13
-const OP_SYSCALL i64 = 14
-const OP_FIELD i64 = 15
-const OP_CAST i64 = 16
-const OP_NOT i64 = 17
-const OP_NEG i64 = 18
-const OP_BNOT i64 = 19
-const OP_LOAD8 i64 = 20
-const OP_LOAD32 i64 = 21
-const OP_LOAD64 i64 = 22
-const OP_STRPTR i64 = 23
-const OP_STRLEN i64 = 24
-const OP_SIZEOF i64 = 25
-const OP_LOR i64 = 30
-const OP_LAND i64 = 31
-const OP_EQ i64 = 32
-const OP_NE i64 = 33
-const OP_LT i64 = 34
-const OP_LE i64 = 35
-const OP_GT i64 = 36
-const OP_GE i64 = 37
-const OP_ADD i64 = 38
-const OP_SUB i64 = 39
-const OP_OR i64 = 40
-const OP_XOR i64 = 41
-const OP_MUL i64 = 42
-const OP_DIV i64 = 43
-const OP_MOD i64 = 44
-const OP_AND i64 = 45
-const OP_SHL i64 = 46
-const OP_SHR i64 = 47
+const OP_STORE16 i64 = 5
+const OP_STORE32 i64 = 6
+const OP_STORE64 i64 = 7
+const OP_RETURN i64 = 8
+const OP_IF i64 = 9
+const OP_WHILE i64 = 10
+const OP_EXPR i64 = 11
+const OP_INT i64 = 12
+const OP_BOOL i64 = 13
+const OP_NAME i64 = 14
+const OP_CALL i64 = 15
+const OP_SYSCALL i64 = 16
+const OP_FIELD i64 = 17
+const OP_CAST i64 = 18
+const OP_NOT i64 = 19
+const OP_NEG i64 = 20
+const OP_BNOT i64 = 21
+const OP_LOAD8 i64 = 22
+const OP_LOAD16 i64 = 23
+const OP_LOAD32 i64 = 24
+const OP_LOAD64 i64 = 25
+const OP_STRPTR i64 = 26
+const OP_STRLEN i64 = 27
+const OP_SIZEOF i64 = 28
+const OP_BSWAP16 i64 = 29
+const OP_BSWAP32 i64 = 30
+const OP_BSWAP64 i64 = 31
+const OP_USHR i64 = 32
+const OP_UMULHI i64 = 33
+const OP_UDIV i64 = 34
+const OP_UREM i64 = 35
+const OP_ULT i64 = 36
+const OP_LOR i64 = 40
+const OP_LAND i64 = 41
+const OP_EQ i64 = 42
+const OP_NE i64 = 43
+const OP_LT i64 = 44
+const OP_LE i64 = 45
+const OP_GT i64 = 46
+const OP_GE i64 = 47
+const OP_ADD i64 = 48
+const OP_SUB i64 = 49
+const OP_OR i64 = 50
+const OP_XOR i64 = 51
+const OP_MUL i64 = 52
+const OP_DIV i64 = 53
+const OP_MOD i64 = 54
+const OP_AND i64 = 55
+const OP_SHL i64 = 56
+const OP_SHR i64 = 57
+
+// LoadOp, StoreOp, and BswapOp group the memory and byte-order builtins;
+// OpWidth is the width in bits of one of them.
+func LoadOp(op i64) bool {
+  return op >= OP_LOAD8 && op <= OP_LOAD64
+}
+
+func StoreOp(op i64) bool {
+  return op >= OP_STORE8 && op <= OP_STORE64
+}
+
+func BswapOp(op i64) bool {
+  return op >= OP_BSWAP16 && op <= OP_BSWAP64
+}
+
+// UnsignedOp groups the unsigned operations: binary operators spelled as
+// calls, with left and right like the operators. ult gives a bool.
+func UnsignedOp(op i64) bool {
+  return op >= OP_USHR && op <= OP_ULT
+}
+
+func OpWidth(op i64) i64 {
+  if op == OP_LOAD8 || op == OP_STORE8 {
+    return 8
+  }
+  if op == OP_LOAD16 || op == OP_STORE16 || op == OP_BSWAP16 {
+    return 16
+  }
+  if op == OP_LOAD32 || op == OP_STORE32 || op == OP_BSWAP32 {
+    return 32
+  }
+  return 64
+}
 
 // Node is a statement or expression. num is its per-func id number; lists
 // (args, then, els, body) are chained through next. valk selects the JSON
@@ -619,11 +665,19 @@ func Stmt(p *P, s i64, id i64) *Node {
   if Kw(p, strptr("return"), 6) {
     return ParseReturn(p)
   }
-  if PeekKw(p, strptr("store8"), 6) || PeekKw(p, strptr("store64"), 7) {
+  if PeekKw(p, strptr("store8"), 6) || PeekKw(p, strptr("store16"), 7) || PeekKw(p, strptr("store32"), 7) || PeekKw(p, strptr("store64"), 7) {
     Ident(p)
     var op i64 = OP_STORE8
     if p.tn == 7 {
-      op = OP_STORE64
+      // The digit after "store": 1, 3, or 6.
+      var sd i64 = load8(p.tp + 5)
+      if sd == 49 {
+        op = OP_STORE16
+      } else if sd == 51 {
+        op = OP_STORE32
+      } else {
+        op = OP_STORE64
+      }
     }
     Expect(p, 40)
     var addr *Node = ParseExpr(p)
@@ -682,7 +736,7 @@ func ParseReturn(p *P) *Node {
   if p.i >= p.n || p.nl || At(p, p.i) == 125 {
     return n
   }
-  if PeekKw(p, strptr("var"), 3) || PeekKw(p, strptr("if"), 2) || PeekKw(p, strptr("while"), 5) || PeekKw(p, strptr("return"), 6) || PeekKw(p, strptr("store8"), 6) || PeekKw(p, strptr("store64"), 7) {
+  if PeekKw(p, strptr("var"), 3) || PeekKw(p, strptr("if"), 2) || PeekKw(p, strptr("while"), 5) || PeekKw(p, strptr("return"), 6) || PeekKw(p, strptr("store8"), 6) || PeekKw(p, strptr("store16"), 7) || PeekKw(p, strptr("store32"), 7) || PeekKw(p, strptr("store64"), 7) {
     return n
   }
   n.val = ParseExpr(p)
@@ -947,14 +1001,54 @@ func Primary0(p *P) *Node {
     Ident(p)
     return CallArgs(p, OP_SYSCALL, 0, 0, 0, 0)
   }
-  if PeekKw(p, strptr("load8"), 5) || PeekKw(p, strptr("load32"), 6) || PeekKw(p, strptr("load64"), 6) {
+  var uop i64 = 0
+  if PeekKw(p, strptr("ushr"), 4) {
+    uop = OP_USHR
+  } else if PeekKw(p, strptr("umulhi"), 6) {
+    uop = OP_UMULHI
+  } else if PeekKw(p, strptr("udiv"), 4) {
+    uop = OP_UDIV
+  } else if PeekKw(p, strptr("urem"), 4) {
+    uop = OP_UREM
+  } else if PeekKw(p, strptr("ult"), 3) {
+    uop = OP_ULT
+  }
+  if uop != 0 {
     Ident(p)
+    Expect(p, 40)
+    var ul *Node = ParseExpr(p)
+    Expect(p, 44)
+    var ur *Node = ParseExpr(p)
+    Expect(p, 41)
+    var un *Node = NewNode(p, uop)
+    un.num = Eid(p)
+    un.left = ul
+    un.right = ur
+    return un
+  }
+  var isLoad bool = PeekKw(p, strptr("load8"), 5) || PeekKw(p, strptr("load16"), 6) || PeekKw(p, strptr("load32"), 6) || PeekKw(p, strptr("load64"), 6)
+  var isBswap bool = PeekKw(p, strptr("bswap16"), 7) || PeekKw(p, strptr("bswap32"), 7) || PeekKw(p, strptr("bswap64"), 7)
+  if isLoad || isBswap {
+    Ident(p)
+    // The digit after "load" or "bswap": 1, 3, or 6, or none for load8.
+    var wd i64 = At(p, p.tp - p.src + 4)
+    if isBswap {
+      wd = At(p, p.tp - p.src + 5)
+    }
     var lop i64 = OP_LOAD8
-    if p.tn == 6 {
-      if At(p, p.tp - p.src + 4) == 51 {
+    if isBswap {
+      lop = OP_BSWAP64
+      if wd == 49 {
+        lop = OP_BSWAP16
+      } else if wd == 51 {
+        lop = OP_BSWAP32
+      }
+    } else if p.tn == 6 {
+      lop = OP_LOAD64
+      if wd == 49 {
+        lop = OP_LOAD16
+      } else if wd == 51 {
         lop = OP_LOAD32
-      } else {
-        lop = OP_LOAD64
       }
     }
     Expect(p, 40)

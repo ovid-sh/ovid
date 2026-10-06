@@ -525,10 +525,10 @@ func (c *checker) checkEntry(p *ir.Program) {
 			c.err(io.ID, "bad_abi", "ovid/io has no type Cap")
 			return
 		}
-		need := []string{"argc", "argv", "heap", "used", "size"}
+		need := []string{"argc", "argv", "heap", "used", "size", "maps"}
 		for i, n := range need {
 			if i >= len(capTy.Fields) || capTy.Fields[i].Name != n || capTy.Fields[i].Type != "i64" {
-				c.issue(Issue{Code: "bad_abi", ID: capTy.ID, Message: "the runtime fills Cap's first five fields", Expected: "argc, argv, heap, used, size (all i64, in order)"})
+				c.issue(Issue{Code: "bad_abi", ID: capTy.ID, Message: "the runtime fills Cap's first six fields", Expected: "argc, argv, heap, used, size, maps (all i64, in order)"})
 				return
 			}
 		}
@@ -738,7 +738,7 @@ func (c *checker) stmt(e *env, s *ir.Node) {
 		if vt != ft && vt != "invalid" && ft != "invalid" {
 			c.mismatch(s.Val.ID, "field "+s.Name, vt, ft)
 		}
-	case "store8", "store64":
+	case "store8", "store16", "store32", "store64":
 		at := c.expr(e, s.Addr)
 		vt := c.expr(e, s.Val)
 		if at != "i64" && at != "invalid" {
@@ -880,6 +880,13 @@ func (c *checker) expr0(e *env, n *ir.Node) string {
 		c.want(e, n.Left, "i64", "left of "+opText[n.Op])
 		c.want(e, n.Right, "i64", "right of "+opText[n.Op])
 		return "i64"
+	case "ushr", "umulhi", "udiv", "urem", "ult":
+		c.want(e, n.Left, "i64", "argument 1 of "+n.Op)
+		c.want(e, n.Right, "i64", "argument 2 of "+n.Op)
+		if n.Op == "ult" {
+			return "bool"
+		}
+		return "i64"
 	case "lt", "le", "gt", "ge":
 		c.want(e, n.Left, "i64", "left of "+opText[n.Op])
 		c.want(e, n.Right, "i64", "right of "+opText[n.Op])
@@ -947,8 +954,11 @@ func (c *checker) expr0(e *env, n *ir.Node) string {
 			c.want(e, a, "i64", fmt.Sprintf("syscall argument %d", i+1))
 		}
 		return "i64"
-	case "load8", "load32", "load64":
+	case "load8", "load16", "load32", "load64":
 		c.want(e, n.Arg, "i64", n.Op+" address")
+		return "i64"
+	case "bswap16", "bswap32", "bswap64":
+		c.want(e, n.Arg, "i64", "operand of "+n.Op)
 		return "i64"
 	}
 	c.err(n.ID, "bad_op", "unknown expression op "+n.Op)
