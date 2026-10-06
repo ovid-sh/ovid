@@ -12,11 +12,13 @@ import (
 	"testing"
 )
 
-// sysCall is one system call a traced program made: its number and its
-// first four arguments.
+// sysCall is one system call a traced program made: its number, its
+// first four arguments, and its result (0 for a call that never returns,
+// like exit).
 type sysCall struct {
 	nr   uint64
 	args [4]uint64
+	ret  int64
 }
 
 // traceSyscalls runs bin under ptrace and returns every system call it
@@ -61,12 +63,14 @@ func traceSyscalls(t *testing.T, bin string, args ...string) ([]sysCall, int) {
 			t.Fatalf("%s was killed by %v after %d calls", filepath.Base(bin), ws.Signal(), len(calls))
 		case ws.Stopped() && ws.StopSignal() == syscall.SIGTRAP|0x80:
 			sig = 0
+			var r syscall.PtraceRegs
+			if err := syscall.PtraceGetRegs(pid, &r); err != nil {
+				t.Fatal(err)
+			}
 			if entering {
-				var r syscall.PtraceRegs
-				if err := syscall.PtraceGetRegs(pid, &r); err != nil {
-					t.Fatal(err)
-				}
-				calls = append(calls, sysCall{r.Orig_rax, [4]uint64{r.Rdi, r.Rsi, r.Rdx, r.R10}})
+				calls = append(calls, sysCall{nr: r.Orig_rax, args: [4]uint64{r.Rdi, r.Rsi, r.Rdx, r.R10}})
+			} else {
+				calls[len(calls)-1].ret = int64(r.Rax)
 			}
 			entering = !entering
 		case ws.Stopped():
@@ -156,25 +160,42 @@ func main(io *ovid/io.Cap) i64 {
 	if code != 3 {
 		t.Fatalf("exit %d, want 3", code)
 	}
-	var mapped, unmapped []uint64
+	// live is every mapping not yet given back, by address: its length.
+	live := map[uint64]uint64{}
+	var sizes []uint64
+	unmaps := 0
 	for _, c := range calls {
 		switch c.nr {
 		case sysMmap:
-			mapped = append(mapped, c.args[1])
+			if c.ret < 0 {
+				t.Fatalf("mmap of %d bytes failed: %d", c.args[1], c.ret)
+			}
+			live[uint64(c.ret)] = c.args[1]
+			sizes = append(sizes, c.args[1])
 		case sysMunmap:
-			unmapped = append(unmapped, c.args[1])
+			if c.ret != 0 {
+				t.Fatalf("munmap(%#x, %d) failed: %d", c.args[0], c.args[1], c.ret)
+			}
+			if n, ok := live[c.args[0]]; !ok || n != c.args[1] {
+				t.Fatalf("munmap(%#x, %d) is not a whole mapping the program took", c.args[0], c.args[1])
+			}
+			delete(live, c.args[0])
+			unmaps++
 		}
 	}
-	// The startup region stays; every later mapping, three requests' worth
-	// of a large block and a second region, is given back.
-	want := []uint64{100<<20 + 16, 128 << 20, 100<<20 + 16, 128 << 20, 100<<20 + 16, 128 << 20}
-	if len(mapped) == 0 || mapped[0] != 128<<20 || !slices.Equal(mapped[1:], want) {
-		t.Fatalf("mmap sizes %v, want the startup region and then %v", mapped, want)
+	// Three requests' worth of a large block and a second region.
+	want := []uint64{128 << 20, 100<<20 + 16, 128 << 20, 100<<20 + 16, 128 << 20, 100<<20 + 16, 128 << 20}
+	if !slices.Equal(sizes, want) {
+		t.Fatalf("mmap sizes %v, want the startup region and then %v", sizes, want[1:])
 	}
-	slices.Sort(unmapped)
-	slices.Sort(want)
-	if !slices.Equal(unmapped, want) {
-		t.Fatalf("munmap sizes %v, want %v", unmapped, want)
+	// Every mapping but the startup region is given back.
+	if unmaps != len(want)-1 || len(live) != 1 {
+		t.Fatalf("%d munmaps, %d mappings left, want %d and only the startup region", unmaps, len(live), len(want)-1)
+	}
+	for _, n := range live {
+		if n != 128<<20 {
+			t.Fatalf("the mapping left is %d bytes, want the startup region", n)
+		}
 	}
 }
 
