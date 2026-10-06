@@ -316,7 +316,7 @@ func editJSON(t *testing.T, dir string, req any, flags ...string) (map[string]an
 func TestGrepPages(t *testing.T) {
 	dir := mkmod(t, demo("package demo\n\nimport ovid/io\n\nfunc main(io *ovid/io.Cap) i64 {\n  var x i64 = 1\n  x = x + 1\n  return x\n}\n"))
 	var b bytes.Buffer
-	Grep(dir, `\bx\b`, "", false, 1, 2, &b)
+	Grep(dir, `\bx\b`, "", false, true, 1, 2, &b)
 	lines := strings.Split(strings.TrimSpace(b.String()), "\n")
 	end := last(t, b.String())
 	if len(lines) != 3 || end["total"] != 4.0 || end["count"] != 2.0 || end["has_more"] != true || end["next_offset"] != 3.0 {
@@ -326,7 +326,7 @@ func TestGrepPages(t *testing.T) {
 		t.Fatalf("enclosing nodes: %s", lines[0])
 	}
 	b.Reset()
-	Grep(dir, `\bx\b`, "", false, 3, 0, &b)
+	Grep(dir, `\bx\b`, "", false, true, 3, 0, &b)
 	if end := last(t, b.String()); end["count"] != 1.0 || end["has_more"] != false {
 		t.Fatalf("last page: %s", b.String())
 	}
@@ -1277,13 +1277,13 @@ func TestNil(io *ovid/io.Cap) i64 {
 func TestRefsAndOutline(t *testing.T) {
 	dir := mkmod(t, demo(addSrc))
 	var b bytes.Buffer
-	Refs(dir, "Add", Page{}, &b)
+	Refs(dir, "Add", true, Page{}, &b)
 	rs := lines(t, b.String())
 	if len(rs) != 2 || rs[0]["kind"] != "call" || rs[0]["line"] != float64(10) {
 		t.Fatalf("refs %v", rs)
 	}
 	b.Reset()
-	Outline(dir, "demo", false, false, Page{}, &b)
+	Outline(dir, "demo", false, false, false, true, Page{}, &b)
 	if rs := lines(t, b.String()); len(rs) != 3 || rs[0]["sig"] != "func Add(a i64, b i64) i64" {
 		t.Fatalf("outline %v", rs)
 	}
@@ -1291,7 +1291,7 @@ func TestRefsAndOutline(t *testing.T) {
 		t.Fatalf("refs summary %v", s)
 	}
 	b.Reset()
-	Outline(dir, "demo", false, true, Page{}, &b)
+	Outline(dir, "demo", false, true, false, true, Page{}, &b)
 	if rs := lines(t, b.String()); rs[0]["used_by"].(map[string]any)["demo"] != float64(1) {
 		t.Fatalf("outline --uses %v", rs)
 	}
@@ -1344,7 +1344,7 @@ func TestProgTests(t *testing.T) {
 func TestOutlineTable(t *testing.T) {
 	dir := mkmod(t, demo("package demo\nimport ovid/io\nconst Pow [3]i64 = {1, 10, 100}\nconst K i64 = 7\nfunc main(io *ovid/io.Cap) i64 {\n  return Pow[0] + K\n}\n"))
 	var b bytes.Buffer
-	Outline(dir, "demo", false, false, Page{}, &b)
+	Outline(dir, "demo", false, false, false, true, Page{}, &b)
 	sigs := map[string]any{}
 	for _, r := range lines(t, b.String()) {
 		if r["id"] != nil {
