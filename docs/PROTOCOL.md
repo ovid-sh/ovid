@@ -256,6 +256,23 @@ not a constant, the receipt would add `"syscalls_unknown":N`, the count of
 such calls, and the list would be incomplete. Both compilers report the
 same list for the same source.
 
+## Memory
+
+What a command needs grows with the module. Measured on Linux x86-64 at
+dc1f0aa plus the changes of #105, peak resident memory on a generated
+module of 40,000 lines, and on `prog/` (7,600 lines):
+
+| command | 40,000 lines | `prog/` | about |
+|---|---|---|---|
+| `check`, `build`, `test` | 60 MB | 27 MB | 25 MB + 0.9 KB a line |
+| `show`, `outline`, `refs` | | 33 to 41 MB | `check` + the id index |
+| `edit`, `rename`, `move` | 141 MB | 35 to 47 MB | about twice `check`: the module is loaded again with the change |
+| `dump` | | 29 MB | `check` + 4 MB |
+
+A sandbox of 96 MiB runs every command on a module of `prog/`'s size; 72
+MiB runs `check`, `build`, and `test`. The self-hosted compiler checks the
+same module in 5.5 MB. #105 tracks what is left: the tree's own size.
+
 ## Paging
 
 `outline`, `refs`, and `grep` print one page of their records: at most 200
