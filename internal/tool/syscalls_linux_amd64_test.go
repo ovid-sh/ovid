@@ -240,10 +240,10 @@ func main(io *ovid/io.Cap) i64 {
   var m *ovid/io.HeapMark = ovid/io.MarkHeap(io)
   ovid/io.Alloc(io, 100 << 20)
   ovid/io.Alloc(io, 100 << 20)
-  if ovid/io.ResetHeap(io, m) == 0 {
+  if ovid/io.ResetHeap(io, m) != ovid/io.E_PERM {
     return 10
   }
-  if ovid/io.ResetHeap(io, m) == 0 {
+  if ovid/io.ResetHeap(io, m) != ovid/io.E_PERM {
     return 11
   }
   return 3
@@ -251,7 +251,7 @@ func main(io *ovid/io.Cap) i64 {
 `))
 	calls, code := traceRefusing(t, sysMunmap, mustBuild(t, dir))
 	if code != 3 {
-		t.Fatalf("exit %d, want 3 (10 or 11: a reset returned 0 for a refused munmap)", code)
+		t.Fatalf("exit %d, want 3 (10 or 11: a reset did not return E_PERM for a refused munmap)", code)
 	}
 	var tried []uint64
 	for _, c := range calls {
