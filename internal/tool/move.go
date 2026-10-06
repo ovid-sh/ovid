@@ -86,6 +86,8 @@ func planMove(dir, q, to, file string, base map[string][]byte, w io.Writer) (*pl
 		return nil, fail(w, "bad_name", fmt.Sprintf("%q is not a package path", to), "")
 	case t.Kind == "func" && from == m.Entry && name == "main":
 		return nil, fail(w, "bad_move", "main must stay in the entry package", "")
+	case servedHandle(m, t):
+		return nil, fail(w, "bad_move", "handle must stay in the entry package, which has no main", "")
 	}
 	dest := findPkg(m, to)
 	if dest != nil {

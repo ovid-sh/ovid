@@ -91,6 +91,9 @@ func Rename(dir, q, to string, dryRun bool, w io.Writer) int {
 	if t.Kind == "func" && t.Pkg == m.Entry && old == "main" {
 		return fail(w, "bad_name", "main is the entry point and cannot be renamed", "")
 	}
+	if servedHandle(m, t) {
+		return fail(w, "bad_name", "handle is the entry point (the package has no main) and cannot be renamed", "")
+	}
 	res := check.Run(m.Prog)
 	rs, err := findRefs(m, res, t)
 	if err != nil {

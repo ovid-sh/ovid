@@ -1,0 +1,61 @@
+package ovid/parse
+
+import ovid/io
+import ovid/mem
+
+// ServeHost makes the stdio host the entry when the entry package has
+// handle and no main: it parses a package ovid/servemain whose main reads
+// one request from stdin, calls handle, and writes the response, puts it
+// in path order among the packages, and indexes the funcs again. The Go
+// toolchain does the same (internal/tool/serve.go).
+func ServeHost(m *Mod) i64 {
+  var e *Pkg = m.pkgs
+  while e != 0 as *Pkg && !ovid/mem.Eq(e.pathp, e.pathn, m.entryp, m.entryn) {
+    e = e.next
+  }
+  if e == 0 as *Pkg {
+    return 0
+  }
+  if FindDecl(e.fs, strptr("main"), 4) != 0 as *Decl || FindDecl(e.fs, strptr("handle"), 6) == 0 as *Decl {
+    return 0
+  }
+  var io *ovid/io.Cap = m.io
+  var b *ovid/mem.Buf = ovid/mem.New(io, 1024)
+  ovid/mem.WBytes(io, b, strptr("package ovid/servemain\n\nimport ovid/io\nimport ovid/http\nimport "), strlen("package ovid/servemain\n\nimport ovid/io\nimport ovid/http\nimport "))
+  ovid/mem.WBytes(io, b, m.entryp, m.entryn)
+  ovid/mem.WBytes(io, b, strptr("\n\nfunc main(io *ovid/io.Cap) i64 {\n  var req *ovid/http.Request = ovid/http.ReadStdio(io)\n  var res *ovid/http.Response = ovid/http.NewResponse(io)\n  if ovid/http.Err(req) != 0 {\n    return ovid/http.WriteStdio(io, req, res, 0)\n  }\n  return ovid/http.WriteStdio(io, req, res, "), strlen("\n\nfunc main(io *ovid/io.Cap) i64 {\n  var req *ovid/http.Request = ovid/http.ReadStdio(io)\n  var res *ovid/http.Response = ovid/http.NewResponse(io)\n  if ovid/http.Err(req) != 0 {\n    return ovid/http.WriteStdio(io, req, res, 0)\n  }\n  return ovid/http.WriteStdio(io, req, res, "))
+  ovid/mem.WBytes(io, b, m.entryp, m.entryn)
+  ovid/mem.WBytes(io, b, strptr(".handle(io, req, res))\n}\n"), strlen(".handle(io, req, res))\n}\n"))
+  var f *File = ovid/io.Alloc(io, sizeof(File)) as *File
+  f.relp = strptr("std:ovid/servemain/main.ov")
+  f.reln = strlen("std:ovid/servemain/main.ov")
+  f.dispp = f.relp
+  f.dispn = f.reln
+  f.src = b.data
+  f.n = b.len
+  f.std = 1
+  var p *P = NewP(io, f)
+  var k *Pkg = ParseFile(p)
+  if p.err != 0 {
+    return 1
+  }
+  k.files = f
+  k.std = 1
+  k.ok = 1
+  var prev *Pkg = 0 as *Pkg
+  var at *Pkg = m.pkgs
+  while at != 0 as *Pkg && Cmp(at.pathp, at.pathn, k.pathp, k.pathn) < 0 {
+    prev = at
+    at = at.next
+  }
+  k.next = at
+  if prev == 0 as *Pkg {
+    m.pkgs = k
+  } else {
+    prev.next = k
+  }
+  m.npkg = m.npkg + 1
+  m.entryp = k.pathp
+  m.entryn = k.pathn
+  return IndexFuncs(m)
+}

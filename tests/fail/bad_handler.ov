@@ -1,0 +1,9 @@
+package demo
+
+import ovid/io
+import ovid/http
+
+// With no main, handle is the entry, and it must take the response too.
+func handle(io *ovid/io.Cap, req *ovid/http.Request) i64 { // error: bad_handler 1 expected="func handle(io *ovid/io.Cap, req *ovid/http.Request, res *ovid/http.Response) i64" got="func handle(io *ovid/io.Cap, req *ovid/http.Request) i64"
+  return 0
+}
