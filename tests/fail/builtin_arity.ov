@@ -1,0 +1,19 @@
+package demo
+import ovid/io
+// A builtin with the wrong number of arguments is an arity error naming
+// the builtin's form, not a syntax error at the comma; the arguments are
+// still checked, and the call still has the builtin's type.
+func main(io *ovid/io.Cap) i64 {
+  var p i64 = ovid/io.Alloc(io, 16)
+  var a i64 = load64(p, 0) // error: arity 15 expected="1" got="2" hint="load64(addr) i64"
+  var b i64 = load8() // error: arity 15 expected="1" got="0" hint="load8(addr) i64"
+  var c i64 = bswap32(a, b, p) // error: arity 15 expected="1" got="3" hint="bswap32(x) i64"
+  var d i64 = ushr(a) // error: arity 15 expected="2" got="1" hint="ushr(x, n) i64"
+  var e bool = ult(a, b, c) // error: arity 16 expected="2" got="3" hint="ult(a, b) bool"
+  store64(p, a, b) // error: arity 3 expected="2" got="3" hint="store64(addr, v)"
+  store8(p) // error: arity 3 expected="2" got="1" hint="store8(addr, v)"
+  if e {
+    return d
+  }
+  return 0
+}

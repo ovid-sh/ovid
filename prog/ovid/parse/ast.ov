@@ -823,14 +823,15 @@ func Stmt(p *P, s i64, id i64) *Node {
         op = OP_STORE64
       }
     }
-    Expect(p, 40)
-    var addr *Node = ParseExpr(p)
-    Expect(p, 44)
-    var val *Node = ParseExpr(p)
-    Expect(p, 41)
+    var sa *Node = ArgList(p)
     var sn *Node = NewNode(p, op)
-    sn.addr = addr
-    sn.val = val
+    if CountNodes(sa) != 2 {
+      sn.args = sa
+      return sn
+    }
+    sn.addr = sa
+    sn.val = sa.next
+    sa.next = 0 as *Node
     return sn
   }
   var e *Node = ParseExpr(p)
@@ -1263,15 +1264,8 @@ func Primary0(p *P) *Node {
   }
   if uop != 0 {
     Ident(p)
-    Expect(p, 40)
-    var ul *Node = ParseExpr(p)
-    Expect(p, 44)
-    var ur *Node = ParseExpr(p)
-    Expect(p, 41)
-    var un *Node = NewNode(p, uop)
+    var un *Node = Builtin(p, uop, ArgList(p), 2)
     un.num = Eid(p)
-    un.left = ul
-    un.right = ur
     return un
   }
   var isLoad bool = PeekKw(p, strptr("load8"), 5) || PeekKw(p, strptr("load16"), 6) || PeekKw(p, strptr("load32"), 6) || PeekKw(p, strptr("load64"), 6)
@@ -1299,12 +1293,8 @@ func Primary0(p *P) *Node {
         lop = OP_LOAD32
       }
     }
-    Expect(p, 40)
-    var a *Node = ParseExpr(p)
-    Expect(p, 41)
-    var l *Node = NewNode(p, lop)
+    var l *Node = Builtin(p, lop, ArgList(p), 1)
     l.num = Eid(p)
-    l.arg = a
     return l
   }
   if PeekKw(p, strptr("sizeof"), 6) {
@@ -1455,7 +1445,9 @@ func TryPkgCall(p *P, fp i64, fn i64) bool {
   return true
 }
 
-func CallArgs(p *P, op i64, pkgp i64, pkgn i64, fnp i64, fnn i64) *Node {
+// ArgList reads a parenthesised, comma-separated list of expressions,
+// chained through next.
+func ArgList(p *P) *Node {
   Expect(p, 40)
   var head *Node = 0 as *Node
   var tail *Node = 0 as *Node
@@ -1477,6 +1469,32 @@ func CallArgs(p *P, op i64, pkgp i64, pkgn i64, fnp i64, fnn i64) *Node {
     }
   }
   Expect(p, 41)
+  return head
+}
+
+// Builtin makes the node of a builtin expression called with the
+// arguments a, of which it takes want: one in arg, two in left and
+// right, unchained. Any other number stays in args, for the checker to
+// report as an arity error that names the builtin, which the parser
+// cannot. A store statement does the same in ParseStmt.
+func Builtin(p *P, op i64, a *Node, want i64) *Node {
+  var n *Node = NewNode(p, op)
+  if CountNodes(a) != want {
+    n.args = a
+    return n
+  }
+  if want == 1 {
+    n.arg = a
+    return n
+  }
+  n.left = a
+  n.right = a.next
+  a.next = 0 as *Node
+  return n
+}
+
+func CallArgs(p *P, op i64, pkgp i64, pkgn i64, fnp i64, fnn i64) *Node {
+  var head *Node = ArgList(p)
   var n *Node = NewNode(p, op)
   n.num = Eid(p)
   n.pkgp = pkgp

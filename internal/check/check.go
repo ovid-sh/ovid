@@ -821,6 +821,10 @@ func (c *checker) stmt(e *env, s *ir.Node) {
 			c.mismatch(s.Val.ID, "field "+s.Name, vt, ft)
 		}
 	case "store8", "store16", "store32", "store64":
+		if s.Addr == nil {
+			c.builtinArity(e, s, 2)
+			return
+		}
 		at := c.expr(e, s.Addr)
 		vt := c.expr(e, s.Val)
 		if at != "i64" && at != "invalid" {
@@ -1004,6 +1008,9 @@ func (c *checker) expr0(e *env, n *ir.Node) string {
 		c.want(e, n.Right, "i64", "right of "+opText[n.Op])
 		return "i64"
 	case "ushr", "umulhi", "udiv", "urem", "ult":
+		if n.Left == nil {
+			return c.builtinArity(e, n, 2)
+		}
 		c.want(e, n.Left, "i64", "argument 1 of "+n.Op)
 		c.want(e, n.Right, "i64", "argument 2 of "+n.Op)
 		if n.Op == "ult" {
@@ -1078,14 +1085,48 @@ func (c *checker) expr0(e *env, n *ir.Node) string {
 		}
 		return "i64"
 	case "load8", "load16", "load32", "load64":
+		if n.Arg == nil {
+			return c.builtinArity(e, n, 1)
+		}
 		c.want(e, n.Arg, "i64", n.Op+" address")
 		return "i64"
 	case "bswap16", "bswap32", "bswap64":
+		if n.Arg == nil {
+			return c.builtinArity(e, n, 1)
+		}
 		c.want(e, n.Arg, "i64", "operand of "+n.Op)
 		return "i64"
 	}
 	c.err(n.ID, "bad_op", "unknown expression op "+n.Op)
 	return "invalid"
+}
+
+// builtinForm is each builtin's form, the hint when it is called with
+// the wrong number of arguments.
+var builtinForm = map[string]string{
+	"load8": "load8(addr) i64", "load16": "load16(addr) i64", "load32": "load32(addr) i64", "load64": "load64(addr) i64",
+	"store8": "store8(addr, v)", "store16": "store16(addr, v)", "store32": "store32(addr, v)", "store64": "store64(addr, v)",
+	"bswap16": "bswap16(x) i64", "bswap32": "bswap32(x) i64", "bswap64": "bswap64(x) i64",
+	"ushr": "ushr(x, n) i64", "umulhi": "umulhi(a, b) i64", "udiv": "udiv(a, b) i64", "urem": "urem(a, b) i64", "ult": "ult(a, b) bool",
+}
+
+// builtinArity reports builtin n called with other than want arguments,
+// which the parser left under Args, checks those, and returns the
+// builtin's result type so nothing else is reported for the call.
+func (c *checker) builtinArity(e *env, n *ir.Node, want int) string {
+	s := "s"
+	if want == 1 {
+		s = ""
+	}
+	c.issue(Issue{Code: "arity", ID: n.ID, Message: fmt.Sprintf("%s takes %d argument%s, got %d", n.Op, want, s, len(n.Args)),
+		Expected: fmt.Sprint(want), Got: fmt.Sprint(len(n.Args)), Hint: builtinForm[n.Op]})
+	for _, a := range n.Args {
+		c.expr(e, a)
+	}
+	if n.Op == "ult" {
+		return "bool"
+	}
+	return "i64"
 }
 
 // pkgConst checks a reference to another package's const, path.Name.
