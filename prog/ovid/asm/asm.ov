@@ -338,7 +338,7 @@ func RexMem(c *Code, w bool, reg i64, base i64, index i64, force bool) i64 {
   if reg >= 8 {
     v = v + 4
   }
-  if index >= 8 {
+  if index >= 0 && (index & 8) != 0 {
     v = v + 2
   }
   if base >= 8 {
@@ -680,7 +680,8 @@ func MemReg(c *Code, op i64, reg i64, base i64, disp i64) i64 {
 }
 
 // MemOperand encodes the ModRM, SIB, and displacement bytes for reg,
-// [base+index+disp]; index is -1 for none and is never rsp.
+// [base+index+disp]; index is -1 for none and is never rsp. Bits 4 and 5
+// of index scale it: index | s<<4 is the register times 2^s.
 func MemOperand(c *Code, reg i64, base i64, index i64, disp i64) i64 {
   var rb i64 = base & 7
   var rg i64 = reg & 7
@@ -701,7 +702,7 @@ func MemOperand(c *Code, reg i64, base i64, index i64, disp i64) i64 {
   if sib {
     var x i64 = 4
     if index >= 0 {
-      x = index & 7
+      x = (index & 7) + (((index >> 4) & 3) * 8)
     }
     E(c, (x * 8) + rb)
   }

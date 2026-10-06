@@ -1261,23 +1261,69 @@ func (c *cg) emitAddr(n *ir.Node, lv int) (int, int, int32, error) {
 	if base, index, ok := c.addrMode(n); ok {
 		return base, index, d, nil
 	}
+	// Any other base plus an index: the base is evaluated into rax.
+	if n != nil && n.Op == "add" {
+		if index, ok := c.indexOf(n.Right); ok {
+			return asm.RAX, index, d, c.emitExpr(n.Left, lv)
+		}
+		if index, ok := c.indexOf(n.Left); ok {
+			return asm.RAX, index, d, c.emitExpr(n.Right, lv)
+		}
+	}
 	return asm.RAX, -1, d, c.emitExpr(n, lv)
 }
 
 // addrMode reports whether n, an address with its constant terms taken
-// off, is a local in a register or the sum of two.
+// off, is a local in a register, or one plus an index (see indexOf).
 func (c *cg) addrMode(n *ir.Node) (int, int, bool) {
 	if k, v := c.operand(n); k == kReg {
 		return int(v), -1, true
 	}
 	if n != nil && n.Op == "add" {
-		kl, vl := c.operand(n.Left)
-		kr, vr := c.operand(n.Right)
-		if kl == kReg && kr == kReg {
-			return int(vl), int(vr), true
+		if k, v := c.operand(n.Left); k == kReg {
+			if index, ok := c.indexOf(n.Right); ok {
+				return int(v), index, true
+			}
+		}
+		if k, v := c.operand(n.Right); k == kReg {
+			if index, ok := c.indexOf(n.Left); ok {
+				return int(v), index, true
+			}
 		}
 	}
 	return 0, -1, false
+}
+
+// indexOf reports whether n can be an address's index: a local in a
+// register, or one times 2, 4, or 8 or shifted left by 1 to 3. The
+// result is the register, with the shift in bits 4 and 5 for asm.
+func (c *cg) indexOf(n *ir.Node) (int, bool) {
+	if k, v := c.operand(n); k == kReg {
+		return int(v), true
+	}
+	n = uncast(n)
+	if n == nil || (n.Op != "mul" && n.Op != "shl") {
+		return 0, false
+	}
+	r, s := n.Left, n.Right
+	if k, _ := c.operand(r); k != kReg && n.Op == "mul" {
+		r, s = s, r
+	}
+	kr, vr := c.operand(r)
+	ks, vs := c.operand(s)
+	if kr != kReg || ks != kImm {
+		return 0, false
+	}
+	sh := int64(0)
+	if n.Op == "shl" {
+		sh = vs
+	} else if vs == 2 || vs == 4 || vs == 8 {
+		sh = int64(bits.TrailingZeros64(uint64(vs)))
+	}
+	if sh < 1 || sh > 3 {
+		return 0, false
+	}
+	return int(vr) | int(sh)<<4, true
 }
 
 // splitAddr peels the constant terms off an address expression.

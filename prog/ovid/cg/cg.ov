@@ -1291,8 +1291,8 @@ func SplitAddr(c *C, n *ovid/parse.Node) *ovid/parse.Node {
 }
 
 // AddrMode reports whether n, an address with its constant terms taken
-// off, is a local in a register or the sum of two; c.amBase and c.amIndex
-// (-1 for none) then name them.
+// off, is a local in a register, or one plus an index (see IndexOf);
+// c.amBase and c.amIndex (-1 for none) then name them.
 func AddrMode(c *C, n *ovid/parse.Node) bool {
   c.amIndex = -1
   if Operand(c, n) == KREG {
@@ -1300,11 +1300,22 @@ func AddrMode(c *C, n *ovid/parse.Node) bool {
     return true
   }
   if n != 0 as *ovid/parse.Node && n.op == ovid/parse.OP_ADD {
+    var index i64 = 0
     if Operand(c, n.left) == KREG {
       var l i64 = c.opv
-      if Operand(c, n.right) == KREG {
+      index = IndexOf(c, n.right)
+      if index >= 0 {
         c.amBase = l
-        c.amIndex = c.opv
+        c.amIndex = index
+        return true
+      }
+    }
+    if Operand(c, n.right) == KREG {
+      var r i64 = c.opv
+      index = IndexOf(c, n.left)
+      if index >= 0 {
+        c.amBase = r
+        c.amIndex = index
         return true
       }
     }
@@ -1312,22 +1323,76 @@ func AddrMode(c *C, n *ovid/parse.Node) bool {
   return false
 }
 
+// IndexOf returns n as an address's index, or -1 if it cannot be one: a
+// local in a register, or one times 2, 4, or 8 or shifted left by 1 to
+// 3. The result is the register, with the shift in bits 4 and 5 for asm.
+func IndexOf(c *C, n *ovid/parse.Node) i64 {
+  if Operand(c, n) == KREG {
+    return c.opv
+  }
+  n = Uncast(n)
+  if n == 0 as *ovid/parse.Node || (n.op != ovid/parse.OP_MUL && n.op != ovid/parse.OP_SHL) {
+    return -1
+  }
+  var r *ovid/parse.Node = n.left
+  var s *ovid/parse.Node = n.right
+  if Operand(c, r) != KREG && n.op == ovid/parse.OP_MUL {
+    r = n.right
+    s = n.left
+  }
+  if Operand(c, r) != KREG {
+    return -1
+  }
+  var reg i64 = c.opv
+  if Operand(c, s) != KIMM {
+    return -1
+  }
+  var sh i64 = 0
+  if n.op == ovid/parse.OP_SHL {
+    sh = c.opv
+  } else if c.opv == 2 {
+    sh = 1
+  } else if c.opv == 4 {
+    sh = 2
+  } else if c.opv == 8 {
+    sh = 3
+  }
+  if sh < 1 || sh > 3 {
+    return -1
+  }
+  return reg + (sh * 16)
+}
+
 // EmitAddr makes an address usable as a memory operand: c.amBase is its
 // base register, c.amIndex its index register (-1 for none), and the
 // result its displacement, or ADDRERR. Locals in registers serve as they
-// are; anything else is evaluated into rax. Read the three before emitting
-// anything else.
+// are; anything else, or else the base of a sum with an index, is
+// evaluated into rax. Read the three before emitting anything else.
 func EmitAddr(c *C, n *ovid/parse.Node, lv i64) i64 {
   n = SplitAddr(c, n)
   var d i64 = c.addrd
   if AddrMode(c, n) {
     return d
   }
-  if EmitExpr(c, n, lv) != 0 {
+  // Any other base plus an index: the base is evaluated into rax.
+  var index i64 = -1
+  var base *ovid/parse.Node = n
+  if n != 0 as *ovid/parse.Node && n.op == ovid/parse.OP_ADD {
+    index = IndexOf(c, n.right)
+    base = n.left
+    if index < 0 {
+      index = IndexOf(c, n.left)
+      base = n.right
+    }
+    if index < 0 {
+      base = n
+    }
+  }
+  if EmitExpr(c, base, lv) != 0 {
     return ADDRERR
   }
   c.amBase = 0
-  c.amIndex = -1
+  c.amIndex = index
   return d
 }
 
