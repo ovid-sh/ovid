@@ -5,7 +5,7 @@ Results of the agent exercise in `tests/agent/` (how to run it:
 command's output or defaults change, and add the run here, newest first.
 Each run's raw records are in `docs/agent-runs/`.
 
-## Current state (verified 2026-10-05)
+## Current state (verified 2026-10-06)
 
 The four harder tasks (12–15) separate the models where the first eleven
 did not. `claude-haiku-4-5` passes 9 of 20: it accepts integers that do
@@ -23,16 +23,21 @@ or `grep`, one called `ovid show`, and none edited through ovid. They
 navigated with `grep`, `sed -n`, and `cat` and edited with python, `sed`,
 or Edit, reading 29–93 KB of the 180 KB.
 
-That is the cheaper choice, not a habit to correct. Told to navigate and
-edit through ovid (`preamble.guided.md`), sonnet did navigate with it
-(`show` 39 times, `grep` 24, `outline` 10 in five runs) and the task cost
-more: a median of $0.20 against $0.15, 52 KB read against 30 KB, twice
-the input tokens. ovid's read commands print more than the shell tools
-they stand in for: on prog/, `show` of one func is 1.7 times its text,
-`grep` 3.7 times `grep -rn`, and `outline` of a package 6.2 times
-`grep -n '^func\|^type\|^const'`. Even when told to, the agents did not edit through
-ovid: one run of five used `ovid insert`, the rest python and `sed`
-(611c7e2, below; #125).
+That was the cheaper choice, not a habit to correct: told to navigate
+through ovid (`preamble.guided.md`), sonnet did, and the task cost a third
+more, because `show`, `grep`, and `outline` printed 1.7 to 6.2 times what
+the shell tools print (611c7e2, below). With the read commands printing
+text by default (#125 at 68194b7, below), the guided runs cost no more
+than the plain ones ($0.14 against $0.15 median, 28 KB read against
+30 KB), while using `show` 38 times, `grep` 23, and `outline` 13 in five
+runs. Whether agents reach for them unprompted, and whether that beats
+the shell on a task that needs the ids, is not yet measured.
+
+Editing through ovid is a separate matter: in both rounds the guided
+agents changed code with python and `sed` (`ovid insert` in one run of
+ten; no `replace` or `edit`), even when told to. The hashes `show` prints
+are paid for and not used on this task, where the edits are a dozen
+message strings in one file.
 
 In the small modules ovid's guard still does its job: in `14-rename-vs-call`
 an edit that named the function the other agent had just renamed was
@@ -44,6 +49,50 @@ told to retry a lost `ovid edit` first, every agent in `07-replay` got
 `stale`, confirmed the change was already in, and made it no second time
 (d8c0be0, below). The two problems the b4c231f run found are fixed by #100
 (#98, #99), not yet re-run with a model.
+
+## 2026-10-06, 68194b7: the same two preambles, with the read commands printing text
+
+The round of 611c7e2 (below) repeated on the branch of #125, where
+`outline`, `refs`, `grep`, and `show` print text by default: `show` of a
+230-line func is 1.01 times its text, `grep` 1.18 times `grep -rn`,
+`outline` of a package 1.23 times `grep -n '^func\|^type\|^const'`. The
+guided preamble is the corrected one (it says `show --ids` for statement
+ids and that the declaration's hash is the guard). Same task, model,
+budget, and host; $1.57 in all. Records:
+`2026-10-06-68194b7-nav-{plain,guided}-sonnet.jsonl`.
+
+Medians over the five runs of each:
+
+| preamble | passed | calls | ovid calls | failed calls | bytes read | bytes written | tokens in | tokens out | cost | seconds |
+|---|---|---|---|---|---|---|---|---|---|---|
+| plain | 5/5 | 17 | 9 | 1 | 30312 | 6977 | 216090 | 5728 | $0.15 | 52 |
+| guided | 5/5 | 16 | 14 | 0 | 28062 | 6131 | 188282 | 5525 | $0.14 | 51 |
+
+ovid calls by subcommand and shell tools, summed over the five runs:
+
+| | check | build | test | help | outline | show | grep | refs | insert | shell grep | sed | cat | python3 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| plain | 34 | 7 | 8 | 10 | 2 | 0 | 1 | 0 | 0 | 47 | 32 | 28 | 16 |
+| guided | 28 | 5 | 6 | 9 | 13 | 38 | 23 | 0 | 0 | 15 | 17 | 31 | 5 |
+
+What it shows:
+
+- **The cost gap is gone.** Guided runs now read slightly less and cost
+  slightly less than plain ones (the difference is within the spread of
+  five runs; the previous round's third more is not). The guided agents
+  used ovid's read commands as much as before (`show` 38 against 39,
+  `grep` 23 against 24) and shell `grep` as little (15 against 16).
+- **Reading is where the commands can compete; editing is not, yet.** No
+  guided run used `replace`, `insert`, `append`, `delete`, or `edit`;
+  python fell from 13 uses to 5 and `sed` from 23 to 17, so the agents
+  edited less by hand but not through ovid. The task's edits are string
+  literals inside one file's functions; an id-addressed edit has nothing
+  to offer over `sed` there, so this task cannot show whether the edit
+  commands pay. A task whose edits are spread across files, or race
+  another writer, can (14-rename-vs-call does, in the small).
+- **Plain runs did not change.** $0.15 against $0.15, 30 KB against
+  30 KB: the agents that read with `grep` and `sed` were not affected,
+  as expected.
 
 ## 2026-10-05, 611c7e2: does telling agents to use ovid's read commands pay?
 
