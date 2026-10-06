@@ -527,6 +527,10 @@ func EPkg(e *E, k *Pkg) i64 {
       }
       WL(e, strptr(",\"result\":"), 10)
       WS(e, d.typp, d.typn)
+      if d.typ2n != 0 {
+        WL(e, strptr(",\"result2\":"), strlen(",\"result2\":"))
+        WS(e, d.typ2p, d.typ2n)
+      }
       e.fnp = d.namep
       e.fnn = d.namen
       EList(e, strptr(",\"body\":["), 9, d.body)
