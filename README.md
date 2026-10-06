@@ -155,7 +155,7 @@ results in `docs/AGENT_FEEDBACK.md`. See
 ```sh
 nix run github:ovid-sh/ovid -- check   # the toolchain, nothing installed
 nix develop                            # go, gopls, jq, and ovid
-nix flake check                        # go test, prog/, the self-hosting fixed point, a NixOS VM
+nix flake check                        # go test; on x86_64-linux also prog/, self-hosting, a NixOS VM
 ```
 
 Ovid's output is static and has no libc, so it runs on NixOS as built: no
