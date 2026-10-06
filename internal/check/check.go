@@ -787,10 +787,13 @@ func (c *checker) stmt(e *env, s *ir.Node) {
 				ts[i] = t
 			}
 		}
-		c.recv = true
+		// Only a call that is the whole value is received; a two-result
+		// call nested in an expression is used as one value.
+		sg, direct := c.callSig(s.Val)
+		c.recv = direct && sg.two
 		vt := c.expr(e, s.Val)
 		c.recv = false
-		if sg, ok := c.callSig(s.Val); !ok || !sg.two {
+		if !direct || !sg.two {
 			if vt != "invalid" {
 				c.issue(Issue{Code: "arity", ID: s.Val.ID, Message: "two names receive one value",
 					Expected: "a call to a func with two results", Got: "one value",

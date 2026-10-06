@@ -921,7 +921,9 @@ func CheckStmt(c *Ch, s *ovid/parse.Node) i64 {
       t2p = RecvTy(c, s, s.name2p, s.name2n, s.typ2p, s.typ2n)
       t2n = c.tyn
     }
-    c.recv = true
+    // Only a call that is the whole value is received; a two-result call
+    // nested in an expression is used as one value.
+    c.recv = CallTwo(c, s.val) != 0 as *ovid/parse.Decl
     CheckExpr(c, s.val)
     c.recv = false
     var callee *ovid/parse.Decl = CallTwo(c, s.val)
