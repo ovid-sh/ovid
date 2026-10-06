@@ -75,9 +75,25 @@ func decodeConfine(s string) (*confineSpec, error) {
 // call outside its list.
 const confineHint = "the program made a system call that its build receipt does not list, and --confine kills it for that; the list is in `ovid build`'s syscalls"
 
+// The launcher runs before main or any test does, in every binary that
+// links this package: ovid, and the test binaries. A process started with
+// confineEnv set is a launcher and nothing else. Were the variable left to
+// main to notice, a test binary would ignore it and run its tests again,
+// and those tests start launchers: that forked without bound once (#134).
+func init() {
+	if os.Getenv(confineEnv) != "" {
+		ConfineMain()
+		// ConfineMain does not return with the variable set; this is the
+		// last line of defence should that ever change.
+		fmt.Fprintln(os.Stderr, "ovid: "+confineEnv+" is set but the launcher returned")
+		os.Exit(111)
+	}
+}
+
 // ConfineMain is the launcher: when ovid is started with confineEnv set, it
 // confines this process and replaces it with the program named after "--",
-// and never returns. Otherwise it returns false at once.
+// and never returns. Otherwise it returns false at once. The package's init
+// calls it; a main need not.
 func ConfineMain() bool {
 	spec := os.Getenv(confineEnv)
 	if spec == "" {

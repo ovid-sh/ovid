@@ -3,7 +3,9 @@ package tool
 import (
 	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -128,5 +130,49 @@ func TestWrite(io *ovid/io.Cap) i64 {
 	defer os.RemoveAll(writable)
 	if _, err := os.Stat(filepath.Join(writable, "t.txt")); err != nil {
 		t.Fatalf("the test's file is not in the writable directory: %v", err)
+	}
+}
+
+// TestLauncherNeverRunsTests: a test binary started with the launcher's
+// variable set is a launcher and nothing else. It must not run its tests,
+// which would start launchers of their own without end (#134).
+func TestLauncherNeverRunsTests(t *testing.T) {
+	start := func(env string, args ...string) (string, int, time.Duration) {
+		t.Helper()
+		cmd := exec.Command(os.Args[0], args...)
+		cmd.Env = []string{confineEnv + "=" + env}
+		t0 := time.Now()
+		out, err := cmd.CombinedOutput()
+		code := 0
+		if ee, ok := err.(*exec.ExitError); ok {
+			code = ee.ExitCode()
+		} else if err != nil {
+			t.Fatal(err)
+		}
+		return string(out), code, time.Since(t0)
+	}
+	// A program of ours, with the list from its receipt: the launcher
+	// becomes it, and the test binary is nothing but that launcher.
+	dir := mkmod(t, demo("package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  ovid/io.Print(strptr(\"launched\\n\"))\n  return 3\n}\n"))
+	bin, calls := buildSyscalls(t, dir)
+	var nums []string
+	for _, n := range calls {
+		nums = append(nums, strconv.Itoa(n))
+	}
+	spec := strings.Join(nums, ",") + ";0;demo;" + t.TempDir()
+	for _, c := range []struct {
+		env  string
+		args []string
+		code int
+		out  string
+	}{
+		{"not a spec", []string{"-test.run=TestLauncherNeverRunsTests"}, 111, ""}, // a bad spec
+		{spec, nil, 111, ""}, // a spec and no program
+		{spec, []string{"--", bin}, 3, "launched\n"},
+	} {
+		out, code, took := start(c.env, c.args...)
+		if code != c.code || out != c.out || took > 5*time.Second {
+			t.Fatalf("%q %v: exit %d in %v with %q, want %d and %q, and no tests run", c.env, c.args, code, took, out, c.code, c.out)
+		}
 	}
 }

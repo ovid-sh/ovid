@@ -95,9 +95,8 @@ func pageArg(cmd string, a args) tool.Page {
 }
 
 func main() {
-	if tool.ConfineMain() {
-		return
-	}
+	// With OVID_CONFINE set this process is a launcher for a confined
+	// program, and tool's init has already replaced it; see tool.ConfineMain.
 	argv := os.Args[1:]
 	dir := ""
 	// A leading -C dir applies to every command.
