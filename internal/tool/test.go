@@ -115,6 +115,9 @@ func TestWith(dir string, o TestOpts, w io.Writer) int {
 		confine = newConfine(out.Syscalls, writableDir(), "test")
 		// Whatever happens next, an empty writable directory is not left.
 		defer confine.keepWritable()
+		if err := confine.unenforceable(); err != nil {
+			return fail(w, "run", err.Error(), tmpHint+"; or --no-confine")
+		}
 	}
 	// A missing temporary directory is not fatal yet: stage may still hold
 	// the program in memory.

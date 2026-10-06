@@ -290,6 +290,10 @@ func RunWith(dir string, args []string, o RunOpts, w io.Writer) int {
 		pio.confine = newConfine(out.Syscalls, writableDir(), name)
 		// Whatever happens next, an empty writable directory is not left.
 		defer pio.confine.keepWritable()
+		if err := pio.confine.unenforceable(); err != nil {
+			fail(w, "run", err.Error(), tmpHint+"; or --no-confine")
+			return ExitBuild
+		}
 	}
 	var outc, errc *pipeCapture
 	if o.JSON {

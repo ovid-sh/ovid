@@ -71,7 +71,10 @@ only in one fresh directory, its working directory. The record adds
 `"confined"`, the list of what was applied (`["seccomp"]`, or
 `["seccomp","landlock"]`), and `"writable"`, that directory, when the
 program left anything in it; an empty one is removed. Where no temporary
-directory can be made, the program runs with nowhere to write. `test`'s
+directory can be made, the program runs with nowhere to write if the kernel
+has Landlock; without it there is no way to make the file system read-only,
+and the request fails (`"error":"run"`) rather than run the program with
+the caller's write rights: set `TMPDIR`, or pass `--no-confine`. `test`'s
 summary carries the same fields. Reads are not restricted: a confined
 program can still read any file the caller can. A program that must write
 elsewhere, by an absolute path, needs `--no-confine`.

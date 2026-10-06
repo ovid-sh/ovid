@@ -92,12 +92,33 @@ func decodeConfine(s string) (*confineSpec, error) {
 // openStatus makes the pipe the launcher reports a failure on. The write
 // end is the extra file at index i of the command (fd 3+i in the child).
 func (c *confineSpec) openStatus(i int) (*os.File, error) {
+	// A pipe from an attempt that did not start (ptrace refused, and the
+	// plain path tries again) would leak.
+	c.closeStatus()
 	r, w, err := os.Pipe()
 	if err != nil {
 		return nil, err
 	}
 	c.status, c.statusW, c.StatusFD = r, w, 3+i
 	return w, nil
+}
+
+func (c *confineSpec) closeStatus() {
+	if c.status != nil {
+		c.status.Close()
+		c.statusW.Close()
+		c.status, c.statusW = nil, nil
+	}
+}
+
+// unenforceable is why c cannot do what the record would claim, or nil.
+// Without Landlock the file system is not made read-only, so "nowhere to
+// write" needs a directory to point the program at.
+func (c *confineSpec) unenforceable() error {
+	if c.Writable == "" && !c.Landlock {
+		return fmt.Errorf("no temporary directory for the program's writable directory, and this kernel has no Landlock to make the file system read-only instead")
+	}
+	return nil
 }
 
 // setupError, once the launcher has exited or become the program, is what

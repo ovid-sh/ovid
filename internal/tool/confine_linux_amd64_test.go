@@ -181,8 +181,12 @@ func TestLauncherNeverRunsTests(t *testing.T) {
 // program still runs, with nowhere to write.
 func TestConfineWritableDir(t *testing.T) {
 	needExec(t)
+	// A temporary directory of this test's own: other packages' tests run
+	// programs at the same time and make writable directories too.
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
 	count := func() int {
-		n, _ := filepath.Glob(filepath.Join(os.TempDir(), "ovid-writable-*"))
+		n, _ := filepath.Glob(filepath.Join(tmp, "ovid-writable-*"))
 		return len(n)
 	}
 	quiet := mkmod(t, demo("package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  return 0\n}\n"))
@@ -259,5 +263,45 @@ func TestConfineSetupFailureIsReported(t *testing.T) {
 	pr = runProc(bin, nil, procIO{confine: &confineSpec{Syscalls: nums, Writable: t.TempDir(), Landlock: landlockAvailable()}}, 10*time.Second)
 	if pr.err != nil || !pr.exited || pr.code != 0 {
 		t.Fatalf("a program that runs: exited %v code %d err %v", pr.exited, pr.code, pr.err)
+	}
+}
+
+// TestConfineUnenforceable: with no writable directory and no Landlock,
+// nothing would make the file system read-only, and the record must not
+// say otherwise: the run is refused. With either, it is not.
+func TestConfineUnenforceable(t *testing.T) {
+	if err := (&confineSpec{Writable: "", Landlock: false}).unenforceable(); err == nil || !strings.Contains(err.Error(), "Landlock") {
+		t.Fatalf("no directory and no Landlock: %v", err)
+	}
+	if err := (&confineSpec{Writable: "", Landlock: true}).unenforceable(); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&confineSpec{Writable: t.TempDir(), Landlock: false}).unenforceable(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestConfineStatusPipeIsNotLeaked: a status pipe from an attempt that did
+// not start is closed when the next attempt opens its own.
+func TestConfineStatusPipeIsNotLeaked(t *testing.T) {
+	c := &confineSpec{}
+	w1, err := c.openStatus(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r1 := c.status
+	w2, err := c.openStatus(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.closeStatus()
+	if _, err := w1.Write([]byte("x")); err == nil {
+		t.Fatal("the first pipe's write end is still open")
+	}
+	if _, err := r1.Read(make([]byte, 1)); err == nil {
+		t.Fatal("the first pipe's read end is still open")
+	}
+	if _, err := w2.Write([]byte("x")); err != nil {
+		t.Fatalf("the second pipe is not usable: %v", err)
 	}
 }
