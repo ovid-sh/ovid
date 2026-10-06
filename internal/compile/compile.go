@@ -1590,6 +1590,9 @@ func (c *cg) emitAssign(i int, val *ir.Node) error {
 			}
 		}
 	}
+	if inReg && isLoad(val) {
+		return c.emitLoad(val, 0, reg)
+	}
 	if err := c.emitExpr(val, 0); err != nil {
 		return err
 	}
@@ -1618,15 +1621,22 @@ func (c *cg) emitArgs(args []*ir.Node, regs []int, lv int) error {
 		if kinds[i] != kNone {
 			continue
 		}
+		// The last of them, if it reads memory, goes straight into its
+		// register: no other argument's register is set yet.
+		if i == last && regs[i] != asm.RAX && isLoad(a) {
+			if err := c.emitLoad(a, lv+i, regs[i]); err != nil {
+				return err
+			}
+			continue
+		}
 		if err := c.emitExpr(a, lv+i); err != nil {
 			return err
 		}
 		if i != last {
 			c.storeTemp(lv + i)
+		} else if regs[i] != asm.RAX {
+			c.b.MovRegReg(regs[i], asm.RAX)
 		}
-	}
-	if last >= 0 && regs[last] != asm.RAX {
-		c.b.MovRegReg(regs[last], asm.RAX)
 	}
 	for i := range args {
 		if kinds[i] == kNone && i != last {
@@ -1753,24 +1763,8 @@ func (c *cg) emitExpr(n *ir.Node, lv int) error {
 		return nil
 	case "cast":
 		return c.emitExpr(n.Arg, lv)
-	case "field":
-		off, err := c.fieldOff(n.Base, n.Name)
-		if err != nil {
-			return err
-		}
-		base, index, d, err := c.emitAddr(n.Base, lv)
-		if err != nil {
-			return err
-		}
-		c.b.LoadMem(64, base, index, off+d)
-		return nil
-	case "load8", "load16", "load32", "load64":
-		base, index, d, err := c.emitAddr(n.Arg, lv)
-		if err != nil {
-			return err
-		}
-		c.b.LoadMem(loadWidth[n.Op], base, index, d)
-		return nil
+	case "field", "load8", "load16", "load32", "load64":
+		return c.emitLoad(n, lv, asm.RAX)
 	case "bswap16", "bswap32", "bswap64":
 		if err := c.emitExpr(n.Arg, lv); err != nil {
 			return err
@@ -1818,6 +1812,37 @@ func (c *cg) emitExpr(n *ir.Node, lv int) error {
 	default:
 		return fmt.Errorf("expr %s", n.Op)
 	}
+}
+
+// isLoad reports whether n reads memory and nothing else: a field or a
+// load, which emitLoad can put in any register.
+func isLoad(n *ir.Node) bool {
+	n = uncast(n)
+	return n != nil && (n.Op == "field" || loadWidth[n.Op] != 0)
+}
+
+// emitLoad evaluates n, a field or a load, into dst. Its address may be
+// evaluated into rax first.
+func (c *cg) emitLoad(n *ir.Node, lv int, dst int) error {
+	n = uncast(n)
+	if n.Op == "field" {
+		off, err := c.fieldOff(n.Base, n.Name)
+		if err != nil {
+			return err
+		}
+		base, index, d, err := c.emitAddr(n.Base, lv)
+		if err != nil {
+			return err
+		}
+		c.b.LoadMemReg(64, dst, base, index, off+d)
+		return nil
+	}
+	base, index, d, err := c.emitAddr(n.Arg, lv)
+	if err != nil {
+		return err
+	}
+	c.b.LoadMemReg(loadWidth[n.Op], dst, base, index, d)
+	return nil
 }
 
 // sizeOf is the byte size of struct type t (pkg.T): 8 per field.

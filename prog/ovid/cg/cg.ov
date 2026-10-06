@@ -1654,6 +1654,9 @@ func EmitAssign(c *C, s *ovid/parse.Node, loc i64) i64 {
       }
     }
   }
+  if reg >= 0 && IsLoad(s.val) {
+    return EmitLoad(c, s.val, 0, reg)
+  }
   if EmitExpr(c, s.val, 0) != 0 {
     return c.err
   }
@@ -1688,18 +1691,25 @@ func EmitArgs(c *C, args *ovid/parse.Node, sys bool, lv i64) i64 {
   a = args
   while a != 0 as *ovid/parse.Node {
     if Operand(c, a) == KNONE {
-      if EmitExpr(c, a, lv + i) != 0 {
-        return c.err
-      }
-      if i != last {
-        StoreTemp(c, lv + i)
+      // The last of them, if it reads memory, goes straight into its
+      // register: no other argument's register is set yet.
+      if i == last && RegOf(sys, i) != 0 && IsLoad(a) {
+        if EmitLoad(c, a, lv + i, RegOf(sys, i)) != 0 {
+          return c.err
+        }
+      } else {
+        if EmitExpr(c, a, lv + i) != 0 {
+          return c.err
+        }
+        if i != last {
+          StoreTemp(c, lv + i)
+        } else if RegOf(sys, i) != 0 {
+          ovid/asm.MovRegReg(c.code, RegOf(sys, i), 0)
+        }
       }
     }
     i = i + 1
     a = a.next
-  }
-  if last >= 0 && RegOf(sys, last) != 0 {
-    ovid/asm.MovRegReg(c.code, RegOf(sys, last), 0)
   }
   i = 0
   a = args
@@ -1759,6 +1769,41 @@ func EmitSys(c *C, n *ovid/parse.Node, lv i64) i64 {
   if c.qcall {
     c.qmark = -1
   }
+  return 0
+}
+
+// IsLoad reports whether n reads memory and nothing else: a field or a
+// load, which EmitLoad can put in any register.
+func IsLoad(n *ovid/parse.Node) bool {
+  n = Uncast(n)
+  if n == 0 as *ovid/parse.Node {
+    return false
+  }
+  var op i64 = n.op
+  return op == ovid/parse.OP_FIELD || ovid/parse.LoadOp(op)
+}
+
+// EmitLoad evaluates n, a field or a load, into dst. Its address may be
+// evaluated into rax first.
+func EmitLoad(c *C, n *ovid/parse.Node, lv i64, dst i64) i64 {
+  n = Uncast(n)
+  if n.op == ovid/parse.OP_FIELD {
+    var foff i64 = FieldOff(c, n.base, n.namep, n.namen)
+    if foff < 0 {
+      return c.err
+    }
+    var fd i64 = EmitAddr(c, n.base, lv)
+    if fd == ADDRERR {
+      return c.err
+    }
+    ovid/asm.LoadMemReg(c.code, 64, dst, c.amBase, c.amIndex, foff + fd)
+    return 0
+  }
+  var ld i64 = EmitAddr(c, n.arg, lv)
+  if ld == ADDRERR {
+    return c.err
+  }
+  ovid/asm.LoadMemReg(c.code, ovid/parse.OpWidth(n.op), dst, c.amBase, c.amIndex, ld)
   return 0
 }
 
@@ -1870,31 +1915,14 @@ func EmitExpr(c *C, n *ovid/parse.Node, lv i64) i64 {
   if op == ovid/parse.OP_CAST {
     return EmitExpr(c, n.arg, lv)
   }
-  if op == ovid/parse.OP_FIELD {
-    var foff i64 = FieldOff(c, n.base, n.namep, n.namen)
-    if foff < 0 {
-      return c.err
-    }
-    var fd i64 = EmitAddr(c, n.base, lv)
-    if fd == ADDRERR {
-      return c.err
-    }
-    ovid/asm.LoadMem(c.code, 64, c.amBase, c.amIndex, foff + fd)
-    return 0
+  if IsLoad(n) {
+    return EmitLoad(c, n, lv, 0)
   }
   if op == ovid/parse.OP_CALL {
     return EmitCall(c, n, lv)
   }
   if op == ovid/parse.OP_SYSCALL {
     return EmitSys(c, n, lv)
-  }
-  if ovid/parse.LoadOp(op) {
-    var ld i64 = EmitAddr(c, n.arg, lv)
-    if ld == ADDRERR {
-      return c.err
-    }
-    ovid/asm.LoadMem(c.code, ovid/parse.OpWidth(op), c.amBase, c.amIndex, ld)
-    return 0
   }
   if !UnaryOp(op) {
     return FailIn(c, strptr("bad expr op in "), strlen("bad expr op in "))

@@ -1,0 +1,108 @@
+// stdout: "six 123456\nwide 123456\nhalf 123455\nfield 700000\nmixed 171234\ndeep 300001\ncast 7\nleaf 28\nsaved 28\nbytes 21\n"
+package demo
+import ovid/io
+
+// A field or a load that is the last computed argument of a call, or the
+// value assigned to a local in a register, is loaded straight into that
+// register. Each func here takes or keeps such loads in a different
+// register.
+
+type Node struct {
+  next *Node
+  val i64
+}
+
+// Six reads its arguments as decimal digits, a first.
+func Six(a i64, b i64, c i64, d i64, e i64, f i64) i64 {
+  return (((((((((a * 10) + b) * 10) + c) * 10) + d) * 10) + e) * 10) + f
+}
+
+// Leaf calls nothing: n lives in rdi, and n = n.next loads it from itself.
+func Leaf(n *Node) i64 {
+  var s i64 = 0
+  while n != 0 as *Node {
+    s = s + n.val
+    n = n.next
+  }
+  return s
+}
+
+func Id(v i64) i64 {
+  return v
+}
+
+// Saved calls Id, so n and s live in callee-saved registers.
+func Saved(n *Node) i64 {
+  var s i64 = 0
+  while n != 0 as *Node {
+    s = Id(s) + n.val
+    n = n.next
+    s = Id(s)
+  }
+  return s
+}
+
+// Bytes is a leaf, so c lives in one of r8 to r11, past p, n, and i.
+func Bytes(p i64, n i64) i64 {
+  var i i64 = 0
+  var c i64 = 0
+  var s i64 = 0
+  while i < n {
+    c = load8(p + i)
+    s = s + c
+    i = i + 1
+  }
+  return s
+}
+
+func Put(io *ovid/io.Cap, name i64, v i64) i64 {
+  ovid/io.Print(name)
+  ovid/io.PrintInt(io, v)
+  ovid/io.Print(strptr("\n"))
+  return 0
+}
+
+func main(io *ovid/io.Cap) i64 {
+  var p i64 = ovid/io.Alloc(io, 64)
+  var i i64 = 0
+  while i < 8 {
+    store8(p + i, i + 1)
+    i = i + 1
+  }
+  store64(p + 16, 0x5040302)
+  store64(p + 24, 0x700000005)
+  // All six are loads; the last goes straight into r9.
+  Put(io, strptr("six "), Six(load8(p), load8(p + 1), load8(p + 2), load8(p + 3), load8(p + 4), load8(p + 5)))
+  // A 32-bit load into r8, which needs a prefix without W. The high half
+  // of the word is not read.
+  Put(io, strptr("wide "), Six(1, 2, 3, 4, load32(p + 24), 6))
+  // A 16-bit load into r9.
+  Put(io, strptr("half "), Six(1, 2, 3, 4, 5, load16(p + 24)))
+  var r *Node = ovid/io.Alloc(io, sizeof(Node)) as *Node
+  r.val = 7
+  Put(io, strptr("field "), Six(r.val, 0, 0, 0, 0, 0))
+  // The first is computed into a temp, then r.val goes straight into rsi.
+  Put(io, strptr("mixed "), Six(load64(p + 16) - 0x5040301, r.val, 1, 2, 3, 4))
+  // The first waits in a temp in the frame while the last's address needs
+  // one of its own, past it: a call follows, so no register can hold it.
+  var deep i64 = Six(load8(p + 1) + 1, 0, 0, 0, 0, load8(p + ((i - i) + Id(0))))
+  Put(io, strptr("deep "), deep)
+  var q i64 = ovid/io.Alloc(io, 8)
+  store64(q, r as i64)
+  Put(io, strptr("cast "), Leaf(load64(q) as *Node))
+  // A list of 1 to 7.
+  i = 2
+  var h *Node = r
+  r.val = 1
+  while i < 8 {
+    var m *Node = ovid/io.Alloc(io, sizeof(Node)) as *Node
+    m.val = i
+    m.next = h
+    h = m
+    i = i + 1
+  }
+  Put(io, strptr("leaf "), Leaf(h))
+  Put(io, strptr("saved "), Saved(h))
+  Put(io, strptr("bytes "), Bytes(p, 6))
+  return 0
+}

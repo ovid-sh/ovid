@@ -357,22 +357,27 @@ func RexMem(c *Code, w bool, reg i64, base i64, index i64, force bool) i64 {
 // LoadMem loads rax from width bits (8, 16, 32, or 64) at
 // [base+index+disp], zero-extended. index is -1 for none.
 func LoadMem(c *Code, width i64, base i64, index i64, disp i64) i64 {
+  return LoadMemReg(c, width, 0, base, index, disp)
+}
+
+// LoadMemReg is LoadMem into dst.
+func LoadMemReg(c *Code, width i64, dst i64, base i64, index i64, disp i64) i64 {
   if width == 8 {
-    RexMem(c, true, 0, base, index, false)
+    RexMem(c, true, dst, base, index, false)
     E(c, 0x0F)
     E(c, 0xB6)
   } else if width == 16 {
-    RexMem(c, true, 0, base, index, false)
+    RexMem(c, true, dst, base, index, false)
     E(c, 0x0F)
     E(c, 0xB7)
   } else if width == 32 {
-    RexMem(c, false, 0, base, index, false)
+    RexMem(c, false, dst, base, index, false)
     E(c, 0x8B)
   } else {
-    RexMem(c, true, 0, base, index, false)
+    RexMem(c, true, dst, base, index, false)
     E(c, 0x8B)
   }
-  return MemOperand(c, 0, base, index, disp)
+  return MemOperand(c, dst, base, index, disp)
 }
 
 // StoreMemReg stores the low width bits (8, 16, 32, or 64) of src at
