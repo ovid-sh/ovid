@@ -240,10 +240,10 @@ func main(io *ovid/io.Cap) i64 {
   var m *ovid/io.HeapMark = ovid/io.MarkHeap(io)
   ovid/io.Alloc(io, 100 << 20)
   ovid/io.Alloc(io, 100 << 20)
-  if ovid/io.ResetHeap(io, m) == 0 {
+  if ovid/io.ResetHeap(io, m) != ovid/io.E_PERM {
     return 10
   }
-  if ovid/io.ResetHeap(io, m) == 0 {
+  if ovid/io.ResetHeap(io, m) != ovid/io.E_PERM {
     return 11
   }
   return 3
@@ -251,7 +251,7 @@ func main(io *ovid/io.Cap) i64 {
 `))
 	calls, code := traceRefusing(t, sysMunmap, mustBuild(t, dir))
 	if code != 3 {
-		t.Fatalf("exit %d, want 3 (10 or 11: a reset returned 0 for a refused munmap)", code)
+		t.Fatalf("exit %d, want 3 (10 or 11: a reset did not return E_PERM for a refused munmap)", code)
 	}
 	var tried []uint64
 	for _, c := range calls {
@@ -261,6 +261,41 @@ func main(io *ovid/io.Cap) i64 {
 	}
 	if len(tried) != 2 || tried[0] != tried[1] {
 		t.Fatalf("munmap of %#x, want the same mapping tried by both resets", tried)
+	}
+}
+
+// TestReadFileRefusedClose: ReadFile's contract is data and 0, or 0 and an
+// error code, so a close the kernel refuses after a complete read is an
+// error, as it is for WriteFile, not a success.
+func TestReadFileRefusedClose(t *testing.T) {
+	const sysClose = 3
+	dir := mkmod(t, demo(`package demo
+import ovid/io
+func main(io *ovid/io.Cap) i64 {
+  var nn i64 = ovid/io.Alloc(io, 8)
+  var p i64 = ovid/io.Arg(io, 1)
+  var data i64, e i64 = ovid/io.ReadFile(io, p, ovid/io.CLen(p), nn)
+  if e != ovid/io.E_PERM {
+    return 10
+  }
+  if data != 0 || load64(nn) != 0 {
+    return 11
+  }
+  return 3
+}
+`))
+	calls, code := traceRefusing(t, sysClose, mustBuild(t, dir), filepath.Join(dir, "ovid.mod"))
+	if code != 3 {
+		t.Fatalf("exit %d, want 3 (10: ReadFile did not return E_PERM for a refused close; 11: it published its result anyway)", code)
+	}
+	closes := 0
+	for _, c := range calls {
+		if c.nr == sysClose {
+			closes++
+		}
+	}
+	if closes != 1 {
+		t.Fatalf("%d close calls, want 1", closes)
 	}
 }
 

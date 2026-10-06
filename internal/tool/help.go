@@ -173,13 +173,14 @@ package's), a compile-time i64:
   var p *Pair = ovid/io.Alloc(io, sizeof(Pair)) as *Pair
 There is no address-of (&x): locals live in registers or the stack and
 cannot be pointed at. When a callee must write a value back, allocate a
-cell and pass its address (the out-param pattern ovid/io.ReadFile uses):
-  var pp i64 = ovid/io.Alloc(io, 8)       // receives the data address
+cell and pass its address (the out-param ovid/io.ReadFile uses for the
+length, beside its two results):
   var nn i64 = ovid/io.Alloc(io, 8)       // receives the length
-  if ovid/io.ReadFile(io, path, ovid/io.CLen(path), pp, nn) != 0 {
+  var data i64, e i64 = ovid/io.ReadFile(io, path, ovid/io.CLen(path), nn)
+  if e != 0 {
+    ovid/io.Eprint(ovid/io.ErrText(e))
     return 1
   }
-  var data i64 = load64(pp)
   var n i64 = load64(nn)
 Or return a struct: func Read(...) *Result, with the fields you need.
 

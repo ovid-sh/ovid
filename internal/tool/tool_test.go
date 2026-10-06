@@ -260,9 +260,9 @@ func main(io *ovid/io.Cap) i64 {
 import ovid/io
 func main(io *ovid/io.Cap) i64 {
   var path i64 = ovid/io.Arg(io, 1)
-  var pp i64 = ovid/io.Alloc(io, 8)
   var nn i64 = ovid/io.Alloc(io, 8)
-  if ovid/io.ReadFile(io, path, ovid/io.CLen(path), pp, nn) != 0 {
+  var _, e i64 = ovid/io.ReadFile(io, path, ovid/io.CLen(path), nn)
+  if e != 0 {
     return 9
   }
   return load64(nn)
@@ -1031,7 +1031,7 @@ import ovid/io
 
 func main(io *ovid/io.Cap) i64 {
   var buf i64 = ovid/io.Alloc(io, 64)
-  var n i64 = ovid/io.Read(0, buf, 64)
+  var n i64, _ = ovid/io.Read(0, buf, 64)
   ovid/io.Stdout(buf, n)
   ovid/io.Stderr(strptr("to stderr\n"), 10)
   return 3
