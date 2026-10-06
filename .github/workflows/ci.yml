@@ -56,6 +56,10 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    # It takes under 2 minutes. A VM that hangs at start (seen once: QEMU
+    # never came up) would otherwise hold the runner for the test driver's
+    # hour, or the job's six.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v31
