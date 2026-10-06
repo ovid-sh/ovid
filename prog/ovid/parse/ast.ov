@@ -572,6 +572,29 @@ func EvalConst(p *P, n *Node) i64 {
     p.cok = false
     return 0
   }
+  if op == OP_LEN {
+    // len(Table) of a table in this package, declared above.
+    if n.pkgn > 0 && !ovid/mem.Eq(n.pkgp, n.pkgn, p.pkg.pathp, p.pkg.pathn) {
+      if ErrBegin(p) {
+        EW(p, strptr("a const's value cannot name another package's table ("), strlen("a const's value cannot name another package's table ("))
+        EW(p, n.pkgp, n.pkgn)
+        EW(p, strptr("."), 1)
+        EW(p, n.namep, n.namen)
+        EW(p, strptr("); write the number"), strlen("); write the number"))
+        ErrEnd(p)
+      }
+      return 0
+    }
+    var lc *Decl = p.pkg.cs
+    while lc != 0 as *Decl {
+      if lc.istab != 0 && ovid/mem.Eq(lc.namep, lc.namen, n.namep, n.namen) {
+        return lc.tabn
+      }
+      lc = lc.next
+    }
+    p.cok = false
+    return 0
+  }
   if op == OP_SIZEOF {
     Errorf(p, strptr("a const's value cannot use sizeof; write sizeof(T) where the size is used"), strlen("a const's value cannot use sizeof; write sizeof(T) where the size is used"))
     return 0

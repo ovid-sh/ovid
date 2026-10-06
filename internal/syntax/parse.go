@@ -385,6 +385,17 @@ func (p *parser) evalConst(n *ir.Node) (int64, bool) {
 			}
 		}
 		return 0, false
+	case "len":
+		// len(Table) of a table in this package, declared above.
+		if n.Pkg != "" && n.Pkg != p.pkg.Path {
+			p.errorf("a const's value cannot name another package's table (%s.%s); write the number", n.Pkg, n.Name)
+		}
+		for _, c := range p.pkg.Consts {
+			if c.Name == n.Name && c.Table {
+				return int64(len(c.Values)), true
+			}
+		}
+		return 0, false
 	case "sizeof":
 		p.errorf("a const's value cannot use sizeof; write sizeof(T) where the size is used")
 	case "neg":

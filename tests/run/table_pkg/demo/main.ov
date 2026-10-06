@@ -9,6 +9,8 @@ const Pow10 [5]i64 = {1, 10, 100,
   10000}
 const One i64 = 1
 const Signs [3]i64 = {-1, 0 - 2, One + One - 1}
+const N i64 = len(Pow10)
+const Lens [2]i64 = {len(Pow10), len(Signs) + N}
 func Sum(n i64) i64 {
   var s i64 = 0
   var i i64 = 0
@@ -19,7 +21,7 @@ func Sum(n i64) i64 {
   return s
 }
 func main(io *ovid/io.Cap) i64 {
-  if len(Pow10) != 5 || len(Signs) != 3 || len(util.Primes) != 4 {
+  if len(Pow10) != 5 || len(Signs) != 3 || len(util.Primes) != 4 || N != 5 || Lens[0] != 5 || Lens[1] != 8 {
     return 1
   }
   if Pow10[0] != 1 || Pow10[4] != 10000 || Sum(len(Pow10)) != 11111 {
