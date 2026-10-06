@@ -22,7 +22,19 @@ func Half(io *ovid/io.Cap, x i64) (i64, i64) {
   }
   return util.Div(p.x, 2)
 }
+// OnlyHere is called from nowhere but the error slot of a return: it must
+// still be emitted, and Slot is not a leaf, so its params survive the call.
+func OnlyHere(b i64) i64 {
+  return b + 40
+}
+func Slot(a i64, b i64) (i64, i64) {
+  return a, OnlyHere(b)
+}
 func main(io *ovid/io.Cap) i64 {
+  var sv i64, se i64 = Slot(1, 2)
+  if sv != 1 || se != 42 {
+    return 6
+  }
   var q i64, e i64 = util.Div(10, 2)
   if q != 5 || e != 0 {
     return 1

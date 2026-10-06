@@ -650,6 +650,7 @@ func WeighStmts(c *C, s *ovid/parse.Node, depth i64) i64 {
   while s != 0 as *ovid/parse.Node {
     Weigh(c, LocOf(c, s), depth)
     WeighExpr(c, s.val, depth)
+    WeighExpr(c, s.val2, depth)
     WeighExpr(c, s.base, depth)
     WeighExpr(c, s.addr, depth)
     WeighStmts(c, s.then, depth)
@@ -699,7 +700,7 @@ func WeighExpr(c *C, n *ovid/parse.Node, depth i64) i64 {
 // syscall.
 func StmtsCall(s *ovid/parse.Node) bool {
   while s != 0 as *ovid/parse.Node {
-    if ExprCalls(s.val) || ExprCalls(s.base) || ExprCalls(s.addr) || ExprCalls(s.cond) {
+    if ExprCalls(s.val) || ExprCalls(s.val2) || ExprCalls(s.base) || ExprCalls(s.addr) || ExprCalls(s.cond) {
       return true
     }
     if StmtsCall(s.then) || StmtsCall(s.els) || StmtsCall(s.body) {
@@ -871,7 +872,7 @@ func QuotOf(c *C, n *ovid/parse.Node) i64 {
 func QuotStmts(c *C, s *ovid/parse.Node) i64 {
   var m i64 = 0
   while s != 0 as *ovid/parse.Node {
-    m = ((m + QuotExpr(c, s.val)) + (QuotExpr(c, s.base) + QuotExpr(c, s.addr))) + QuotExpr(c, s.cond)
+    m = (((m + QuotExpr(c, s.val)) + QuotExpr(c, s.val2)) + (QuotExpr(c, s.base) + QuotExpr(c, s.addr))) + QuotExpr(c, s.cond)
     m = ((m + QuotStmts(c, s.then)) + QuotStmts(c, s.els)) + QuotStmts(c, s.body)
     s = s.next
   }
@@ -2313,6 +2314,7 @@ func WalkLive(c *C, n *ovid/parse.Node, pp i64, pn i64) i64 {
     WalkLive(c, n.base, pp, pn)
     WalkLive(c, n.addr, pp, pn)
     WalkLive(c, n.val, pp, pn)
+    WalkLive(c, n.val2, pp, pn)
     WalkLive(c, n.cond, pp, pn)
     WalkLive(c, n.args, pp, pn)
     WalkLive(c, n.then, pp, pn)

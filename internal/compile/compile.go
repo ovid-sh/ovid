@@ -638,7 +638,7 @@ func (c *cg) quotStmts(stmts []*ir.Node) int {
 		if s == nil {
 			continue
 		}
-		m += c.quotExpr(s.Val) + c.quotExpr(s.Base) + c.quotExpr(s.Addr) + c.quotExpr(s.Cond)
+		m += c.quotExpr(s.Val) + c.quotExpr(s.Val2) + c.quotExpr(s.Base) + c.quotExpr(s.Addr) + c.quotExpr(s.Cond)
 		m += c.quotStmts(s.Then) + c.quotStmts(s.Else) + c.quotStmts(s.Body)
 	}
 	return m
@@ -669,6 +669,7 @@ func (c *cg) weighStmts(stmts []*ir.Node, depth int, w []int) {
 			w[i] += 1 << (2 * depth)
 		}
 		c.weighExpr(s.Val, depth, w)
+		c.weighExpr(s.Val2, depth, w)
 		c.weighExpr(s.Base, depth, w)
 		c.weighExpr(s.Addr, depth, w)
 		c.weighStmts(s.Then, depth, w)
@@ -708,7 +709,7 @@ func stmtsCall(stmts []*ir.Node) bool {
 		if s == nil {
 			continue
 		}
-		if exprCalls(s.Val) || exprCalls(s.Base) || exprCalls(s.Addr) || exprCalls(s.Cond) {
+		if exprCalls(s.Val) || exprCalls(s.Val2) || exprCalls(s.Base) || exprCalls(s.Addr) || exprCalls(s.Cond) {
 			return true
 		}
 		if stmtsCall(s.Then) || stmtsCall(s.Else) || stmtsCall(s.Body) {
