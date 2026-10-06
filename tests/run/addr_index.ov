@@ -1,4 +1,4 @@
-// stdout: "leaf 0\nsaved 0\nfield 0\nstore 0\n"
+// stdout: "leaf 0\nsaved 0\nfield 0\nfieldcall 0\nstore 0\n"
 package demo
 import ovid/io
 
@@ -136,6 +136,37 @@ func Field(r *Arr) i64 {
     if load64(p) != ((v * 3) - 1) {
       bad = bad + 1
     }
+    // The base waits in a temp register while a value that needs temps
+    // of its own is evaluated.
+    store64(r.data + (i * 8), (v * 3) + ((v * 5) * (i + 7)))
+    if load64(p) != ((v * 3) + ((v * 5) * (i + 7))) {
+      bad = bad + 1
+    }
+    i = i + 1
+  }
+  return bad
+}
+
+// Twice keeps a temp in the first temp register, r11.
+func Twice(x i64) i64 {
+  return (x * 3) - (x * 1)
+}
+
+// FieldCall stores values that call, which a temp register would not
+// survive.
+func FieldCall(r *Arr) i64 {
+  var bad i64 = 0
+  var i i64 = 0
+  while i < r.n {
+    var p i64 = r.data + (i * 8)
+    store64(r.data + (i * 8), Twice(i) + 1)
+    if load64(p) != ((i * 2) + 1) {
+      bad = bad + 1
+    }
+    store8(r.data + (i * 2), Twice(i) + 3)
+    if load8(r.data + (i * 2)) != (((i * 2) + 3) & 255) {
+      bad = bad + 1
+    }
     i = i + 1
   }
   return bad
@@ -203,6 +234,7 @@ func main(io *ovid/io.Cap) i64 {
   r.data = a
   r.n = n
   Put(io, strptr("field "), Field(r))
+  Put(io, strptr("fieldcall "), FieldCall(r))
   Put(io, strptr("store "), Store(a, n))
   return 0
 }

@@ -160,7 +160,8 @@ type cg struct {
 	qreg       int
 	qloc       int
 	qdiv       int64
-	qmark      int // b.Marks when it was kept; -1 for none
+	qmark      int  // b.Marks when it was kept; -1 for none
+	qcall      bool // qreg is a temp register, which calls clobber
 	pkg        *ir.Package
 	fn         *ir.Func
 	marks      []Mark
@@ -534,15 +535,24 @@ func (c *cg) allocTemps() {
 
 // allocQuot gives a func that divides locals by constants more than once
 // a callee-saved register no local uses, to keep a quotient in; calls
-// leave it alone.
+// leave it alone. With none left, it takes the last temp register
+// instead, and a call drops the quotient.
 func (c *cg) allocQuot(fn *ir.Func) {
 	c.qreg = -1
 	c.qloc = -1
 	c.qmark = -1
+	c.qcall = false
 	callee := []int{asm.RBX, asm.R12, asm.R13, asm.R14, asm.R15}
-	if len(c.saved) < len(callee) && c.quotStmts(fn.Body) >= 2 {
+	if c.quotStmts(fn.Body) < 2 {
+		return
+	}
+	if len(c.saved) < len(callee) {
 		c.qreg = callee[len(c.saved)]
 		c.saved = append(c.saved, c.qreg)
+	} else if len(c.tregs) > 0 {
+		c.qreg = c.tregs[len(c.tregs)-1]
+		c.tregs = c.tregs[:len(c.tregs)-1]
+		c.qcall = true
 	}
 }
 
@@ -1502,6 +1512,14 @@ func (c *cg) emitStore(addr, val *ir.Node, width int, off int32) error {
 	if err := c.emitExpr(n, 0); err != nil {
 		return err
 	}
+	if r, ok := c.tempReg(0, val); ok {
+		c.b.MovRegReg(r, asm.RAX)
+		if err := c.emitExpr(val, 1); err != nil {
+			return err
+		}
+		c.b.StoreMemReg(width, asm.RAX, r, index, off+d)
+		return nil
+	}
 	c.storeTemp(0)
 	if err := c.emitExpr(val, 1); err != nil {
 		return err
@@ -1744,6 +1762,9 @@ func (c *cg) emitExpr(n *ir.Node, lv int) error {
 			return err
 		}
 		c.b.Call(lab)
+		if c.qcall {
+			c.qmark = -1
+		}
 		return nil
 	case "syscall":
 		if len(n.Args) != 7 {
@@ -1759,6 +1780,9 @@ func (c *cg) emitExpr(n *ir.Node, lv int) error {
 			return err
 		}
 		c.b.Syscall()
+		if c.qcall {
+			c.qmark = -1
+		}
 		return nil
 	default:
 		return fmt.Errorf("expr %s", n.Op)
