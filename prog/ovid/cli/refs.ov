@@ -364,6 +364,35 @@ func ByName(m *ovid/parse.Mod, t *Target, qp i64, qn i64) i64 {
   return 0
 }
 
+// CountNamed counts the decls in the list d named np[0:nn].
+func CountNamed(d *ovid/parse.Decl, np i64, nn i64) i64 {
+  var n i64 = 0
+  while d != 0 as *ovid/parse.Decl {
+    if Eq2(d.namep, d.namen, np, nn) {
+      n = n + 1
+    }
+    d = d.next
+  }
+  return n
+}
+
+// Copies counts the decls that share t's id: more than one when check
+// reports a duplicate, and refs then refuses to pick, as the Go refs does.
+func Copies(t *Target) i64 {
+  if t.kind == T_VAR {
+    return 1
+  }
+  var list *ovid/parse.Decl = t.pkg.fs
+  if t.kind == T_TYPE {
+    list = t.pkg.ts
+  } else if t.kind == T_CONST {
+    list = t.pkg.cs
+  } else if t.kind == T_FIELD || t.kind == T_PARAM {
+    list = t.own.sub
+  }
+  return CountNamed(list, t.d.namep, t.d.namen)
+}
+
 // Hits reports whether use u is of target t.
 func Hits(t *Target, u *ovid/parse.Use) bool {
   if t.kind == T_VAR {
@@ -541,6 +570,15 @@ func CmdRefs(io *ovid/io.Cap) i64 {
   }
   if t.bad != 0 as *ovid/mem.Buf {
     return Fail(io, strptr("unsupported"), 11, t.bad.data, t.bad.len)
+  }
+  var copies i64 = Copies(t)
+  if copies > 1 {
+    var ab *ovid/mem.Buf = ovid/mem.New(io, 256)
+    WTarget(io, ab, t)
+    ovid/mem.WBytes(io, ab, strptr(" names "), 7)
+    ovid/parse.WInt(io, ab, copies)
+    ovid/mem.WBytes(io, ab, strptr(" nodes (check reports the duplicate)"), strlen(" nodes (check reports the duplicate)"))
+    return Fail(io, strptr("ambiguous_id"), 12, ab.data, ab.len)
   }
   // The uses of t as (key, use) pairs, sorted by file and position.
   NumberFiles(m)
