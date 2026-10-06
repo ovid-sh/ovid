@@ -146,6 +146,7 @@ type cg struct {
 	sigs       map[string]sig
 	pkgs       map[string]*ir.Package
 	locals     []local          // the func's params and vars, one per declaration
+	ref2       map[*ir.Node]int // the second local of a var2 or assign2
 	ref        map[*ir.Node]int // a var, an assign, or a local's name: its local
 	scope      []int            // the locals in scope while binding, innermost last
 	live       int              // the most locals in scope at once
@@ -432,6 +433,7 @@ type local struct {
 func (c *cg) bindFunc(fn *ir.Func) {
 	c.locals = nil
 	c.ref = map[*ir.Node]int{}
+	c.ref2 = map[*ir.Node]int{}
 	c.scope = nil
 	c.live = 0
 	for _, pa := range fn.Params {
@@ -469,14 +471,32 @@ func (c *cg) bindStmts(stmts []*ir.Node) {
 			continue
 		}
 		c.bindExpr(s.Val)
+		c.bindExpr(s.Val2)
 		c.bindExpr(s.Base)
 		c.bindExpr(s.Addr)
 		c.bindExpr(s.Cond)
 		switch s.Op {
 		case "var":
 			c.declare(s, s.Name, s.Type)
+		case "var2":
+			// The second name's local is in ref2; _ declares nothing.
+			if s.Name != "_" {
+				c.declare(s, s.Name, s.Type)
+			}
+			if s.Two.Name != "_" {
+				c.declare(nil, s.Two.Name, s.Two.Type)
+				c.ref2[s] = len(c.locals) - 1
+			}
 		case "assign":
 			c.bindName(s, s.Name)
+		case "assign2":
+			c.bindName(s, s.Name)
+			for j := len(c.scope) - 1; j >= 0; j-- {
+				if c.locals[c.scope[j]].name == s.Two.Name {
+					c.ref2[s] = c.scope[j]
+					break
+				}
+			}
 		}
 		c.bindStmts(s.Then)
 		c.bindStmts(s.Else)
@@ -723,7 +743,13 @@ func stmtsMax(stmts []*ir.Node) int {
 
 func stmtMax(s *ir.Node) int {
 	switch s.Op {
-	case "var", "assign", "expr", "return":
+	case "var", "assign", "expr", "var2", "assign2":
+		return exprMax(s.Val, 0)
+	case "return":
+		if s.Val2 != nil {
+			// The error code waits in temp 0 while the value is evaluated.
+			return max2(exprMax(s.Val2, 0), exprMax(s.Val, 1), 0)
+		}
 		return exprMax(s.Val, 0)
 	case "setfield":
 		return max2(exprMax(s.Base, 0), exprMax(s.Val, 1), 1)
@@ -836,6 +862,19 @@ func (c *cg) emitStmt(s *ir.Node) error {
 			c.qmark = -1
 		}
 		return nil
+	case "var2", "assign2":
+		// The call leaves its results in rax and rdx. rdx goes first:
+		// a local may live in rdx, and none lives in rax.
+		if err := c.emitExpr(s.Val, 0); err != nil {
+			return err
+		}
+		if j, ok := c.ref2[s]; ok {
+			c.setLocal(j, asm.RDX)
+		}
+		if i, ok := c.ref[s]; ok {
+			c.setLocal(i, asm.RAX)
+		}
+		return nil
 	case "setfield":
 		off, err := c.fieldOff(s.Base, s.Name)
 		if err != nil {
@@ -847,7 +886,17 @@ func (c *cg) emitStmt(s *ir.Node) error {
 	case "expr":
 		return c.emitExpr(s.Val, 0)
 	case "return":
-		if s.Val != nil {
+		if s.Val2 != nil {
+			// return v, e: e into rdx by way of temp 0, then v into rax.
+			if err := c.emitExpr(s.Val2, 0); err != nil {
+				return err
+			}
+			c.storeTemp(0)
+			if err := c.emitExpr(s.Val, 1); err != nil {
+				return err
+			}
+			c.loadTempReg(asm.RDX, 0)
+		} else if s.Val != nil {
 			if err := c.emitExpr(s.Val, 0); err != nil {
 				return err
 			}
@@ -1593,6 +1642,20 @@ func (c *cg) emitStore(addr, val *ir.Node, width int, off int32) error {
 }
 
 // emitAssign sets local i to val.
+// setLocal writes register src to local i, and forgets its cached quotient.
+func (c *cg) setLocal(i, src int) {
+	if r, ok := c.regs[i]; ok {
+		if r != src {
+			c.b.MovRegReg(r, src)
+		}
+	} else {
+		c.b.MovMemRbpReg(src, c.locals[i].disp)
+	}
+	if c.qloc == i {
+		c.qmark = -1
+	}
+}
+
 func (c *cg) emitAssign(i int, val *ir.Node) error {
 	reg, inReg := c.regs[i]
 	disp := c.locals[i].disp

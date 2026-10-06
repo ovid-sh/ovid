@@ -84,6 +84,7 @@ type Func struct {
 	Name       string  `json:"name"`
 	Params     []Param `json:"params,omitempty"`
 	Result     string  `json:"result"`
+	Result2    string  `json:"result2,omitempty"` // the error code of a func with two results
 	Body       []*Node `json:"body,omitempty"`
 	Span       Span    `json:"-"`
 	NameSpan   Span    `json:"-"`
@@ -100,13 +101,16 @@ type Param struct {
 }
 
 // Node is a statement or expression. ValK selects the JSON "value" payload:
-// 1 int, 2 bool, 3 string. For a call, NameSpan is the token of Func. Spans
+// 1 int, 2 bool, 3 string. For a call, NameSpan is the token of Func. A var2
+// or assign2 receives a call's two results into Name and Two.Name (Type and
+// Two.Type for a var2; "_" discards); a return with Val2 returns two. Spans
 // are not part of the JSON form.
 type Node struct {
 	ID    string
 	Op    string
 	Name  string
 	Type  string
+	Two   *Second
 	Pkg   string
 	Func  string
 	Str   string
@@ -119,6 +123,7 @@ type Node struct {
 	Base  *Node
 	Addr  *Node
 	Val   *Node
+	Val2  *Node
 	Cond  *Node
 	Args  []*Node
 	Then  []*Node
@@ -126,6 +131,15 @@ type Node struct {
 	Body  []*Node
 	Span  Span
 
+	NameSpan Span
+	TypeSpan Span
+}
+
+// Second is the second name of a var2 or assign2, kept off Node so that
+// every other node does not carry it.
+type Second struct {
+	Name     string
+	Type     string // "" for an assign2 or for _
 	NameSpan Span
 	TypeSpan Span
 }
@@ -152,6 +166,14 @@ func (n *Node) appendJSON(b *bytes.Buffer) {
 	if n.Type != "" {
 		b.WriteString(`,"type":`)
 		writeJSONString(b, n.Type)
+	}
+	if n.Two != nil {
+		b.WriteString(`,"name2":`)
+		writeJSONString(b, n.Two.Name)
+		if n.Two.Type != "" {
+			b.WriteString(`,"type2":`)
+			writeJSONString(b, n.Two.Type)
+		}
 	}
 	if n.Pkg != "" {
 		b.WriteString(`,"pkg":`)
@@ -187,6 +209,7 @@ func (n *Node) appendJSON(b *bytes.Buffer) {
 	writeNode(b, "base", n.Base)
 	writeNode(b, "addr", n.Addr)
 	writeNode(b, "val", n.Val)
+	writeNode(b, "val2", n.Val2)
 	writeNode(b, "cond", n.Cond)
 	writeNodes(b, "args", n.Args)
 	writeNodes(b, "then", n.Then)
@@ -291,7 +314,7 @@ func Marshal(p *Program) ([]byte, error) {
 // Children returns the direct child nodes of n in source order.
 func (n *Node) Children() []*Node {
 	var out []*Node
-	for _, c := range []*Node{n.Left, n.Right, n.Arg, n.Base, n.Addr, n.Val, n.Cond} {
+	for _, c := range []*Node{n.Left, n.Right, n.Arg, n.Base, n.Addr, n.Val, n.Val2, n.Cond} {
 		if c != nil {
 			out = append(out, c)
 		}
@@ -306,7 +329,7 @@ func (n *Node) Children() []*Node {
 // IsStmt reports whether op names a statement.
 func IsStmt(op string) bool {
 	switch op {
-	case "var", "assign", "setfield", "store8", "store16", "store32", "store64", "return", "if", "while", "expr":
+	case "var", "var2", "assign", "assign2", "setfield", "store8", "store16", "store32", "store64", "return", "if", "while", "expr":
 		return true
 	}
 	return false
