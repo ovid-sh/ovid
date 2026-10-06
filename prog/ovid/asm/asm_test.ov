@@ -57,3 +57,16 @@ func TestJmpPatch(io *ovid/io.Cap) i64 {
   }
   return 0
 }
+
+// The encodings a division by a constant uses, and the padding.
+func TestDivConstOps(io *ovid/io.Cap) i64 {
+  var c *Code = New(io)
+  SarRegImm(c, 1, 63)
+  ShrRegImm(c, 2, 5)
+  ImulRcx(c)
+  Int3(c)
+  if !BytesAre(io, c, strptr("\x48\xc1\xf9\x3f\x48\xc1\xea\x05\x48\xf7\xe9\xcc"), 12) {
+    return 1
+  }
+  return 0
+}

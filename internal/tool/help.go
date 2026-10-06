@@ -84,6 +84,9 @@ File:
     return t
   }
 
+Imports may not form a cycle, directly or through other packages
+(import_cycle): the packages are a DAG.
+
 Types: i64, bool, *T (T a struct in this package or path.T from an import).
 No struct values, slices, arrays, strings, generics, methods, globals, or
 closures. At most 6 params; exactly one result type.

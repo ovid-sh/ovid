@@ -1,0 +1,5 @@
+package app/right
+import app/base
+func R() i64 {
+  return app/base.Ten + 2
+}

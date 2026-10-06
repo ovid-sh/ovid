@@ -47,6 +47,14 @@ type Ch struct {
   hd *ovid/parse.Decl
   ho *ovid/parse.Decl
   hn *ovid/parse.Node
+  croot *ovid/parse.Pkg
+  cpath i64
+  cn i64
+  cep i64
+  cscc i64
+  csize i64
+  ptab i64
+  pmask i64
 }
 
 func WLit(c *Ch, p i64, n i64) i64 {
@@ -330,15 +338,51 @@ func TyEq(p i64, n i64, q i64, m i64) bool {
   return ovid/mem.Eq(p, n, q, m)
 }
 
+// FindPkg returns the package of path pp[0:pn], the first loaded if two
+// share it, or 0. It looks in c.ptab, the open-addressed table IndexPkgs
+// fills.
 func FindPkg(c *Ch, pp i64, pn i64) *ovid/parse.Pkg {
-  var k *ovid/parse.Pkg = c.mod.pkgs
-  while k != 0 as *ovid/parse.Pkg {
+  var idx i64 = HashStr(pp, pn) & c.pmask
+  while true {
+    var k *ovid/parse.Pkg = load64(c.ptab + (idx * 8)) as *ovid/parse.Pkg
+    if k == 0 as *ovid/parse.Pkg {
+      return k
+    }
     if ovid/mem.Eq(k.pathp, k.pathn, pp, pn) {
       return k
     }
+    idx = (idx + 1) & c.pmask
+  }
+  return 0 as *ovid/parse.Pkg
+}
+
+// IndexPkgs fills c.ptab with the module's packages and returns how many
+// there are.
+func IndexPkgs(c *Ch) i64 {
+  var n i64 = 0
+  var k *ovid/parse.Pkg = c.mod.pkgs
+  while k != 0 as *ovid/parse.Pkg {
+    n = n + 1
     k = k.next
   }
-  return k
+  var sz i64 = 16
+  while sz < (n * 2) {
+    sz = sz * 2
+  }
+  c.pmask = sz - 1
+  c.ptab = ovid/io.Alloc(c.io, sz * 8)
+  k = c.mod.pkgs
+  while k != 0 as *ovid/parse.Pkg {
+    if FindPkg(c, k.pathp, k.pathn) == 0 as *ovid/parse.Pkg {
+      var idx i64 = HashStr(k.pathp, k.pathn) & c.pmask
+      while load64(c.ptab + (idx * 8)) != 0 {
+        idx = (idx + 1) & c.pmask
+      }
+      store64(c.ptab + (idx * 8), k as i64)
+    }
+    k = k.next
+  }
+  return n
 }
 
 // CheckPkgConst types a reference pkg.NAME to another package's const.
@@ -1072,6 +1116,204 @@ func Funcs(c *Ch, k *ovid/parse.Pkg) i64 {
   return 0
 }
 
+// Less reports whether the bytes at a sort before those at b, as Go
+// compares strings.
+func Less(ap i64, an i64, bp i64, bn i64) bool {
+  var i i64 = 0
+  while i < an && i < bn {
+    var x i64 = load8(ap + i)
+    var y i64 = load8(bp + i)
+    if x != y {
+      return x < y
+    }
+    i = i + 1
+  }
+  return an < bn
+}
+
+// Walk carries CheckCycle's search into package k, pushing it on c.cpath:
+// true when an import of k leads back to c.croot through packages whose
+// paths sort after the root's, with c.cpath then holding the cycle.
+func Walk(c *Ch, k *ovid/parse.Pkg) bool {
+  if k.mark == c.cep {
+    return false
+  }
+  k.mark = c.cep
+  store64(c.cpath + (c.cn * 8), k as i64)
+  c.cn = c.cn + 1
+  var r *ovid/parse.Pkg = c.croot
+  var im *ovid/parse.Decl = k.ims
+  while im != 0 as *ovid/parse.Decl {
+    if ovid/mem.Eq(im.namep, im.namen, r.pathp, r.pathn) {
+      store64(c.cpath + (c.cn * 8), r as i64)
+      c.cn = c.cn + 1
+      return true
+    }
+    if Less(r.pathp, r.pathn, im.namep, im.namen) {
+      var t *ovid/parse.Pkg = FindPkg(c, im.namep, im.namen)
+      if Keep(c, t) {
+        if Walk(c, t) {
+          return true
+        }
+      }
+    }
+    im = im.next
+  }
+  c.cn = c.cn - 1
+  return false
+}
+
+// Keep says whether CheckCycle's walk may enter package t: one that
+// exists and, unless the root is a repeated package's later copy, is in
+// the root's component.
+func Keep(c *Ch, t *ovid/parse.Pkg) bool {
+  if t == 0 as *ovid/parse.Pkg {
+    return false
+  }
+  return c.cscc == 0 || t.scc == c.cscc
+}
+
+// Sccs numbers the strongly connected components of the import graph
+// (imports of unknown packages dropped) in k.scc, from 1, with Tarjan's
+// algorithm, iteratively so a long import chain cannot exhaust the stack.
+// It stores each component's size in c.csize. A package is on Tarjan's
+// stack while it is visited (ord != 0) and has no component yet.
+func Sccs(c *Ch, npkg i64) i64 {
+  var io *ovid/io.Cap = c.io
+  c.csize = ovid/io.Alloc(io, (npkg + 1) * 8)
+  var stack i64 = ovid/io.Alloc(io, (npkg + 1) * 8)
+  var sn i64 = 0
+  // A call frame is the package and the next of its imports to follow.
+  var call i64 = ovid/io.Alloc(io, (npkg + 1) * 16)
+  var cn i64 = 0
+  var visited i64 = 0
+  var ncomp i64 = 0
+  var s *ovid/parse.Pkg = c.mod.pkgs
+  while s != 0 as *ovid/parse.Pkg {
+    var v *ovid/parse.Pkg = s
+    if v.ord == 0 {
+      visited = visited + 1
+      v.ord = visited
+      v.low = visited
+      store64(stack + (sn * 8), v as i64)
+      sn = sn + 1
+      store64(call, v as i64)
+      store64(call + 8, v.ims as i64)
+      cn = 1
+    }
+    while cn > 0 {
+      var f i64 = call + ((cn - 1) * 16)
+      v = load64(f) as *ovid/parse.Pkg
+      var im *ovid/parse.Decl = load64(f + 8) as *ovid/parse.Decl
+      if im != 0 as *ovid/parse.Decl {
+        store64(f + 8, im.next as i64)
+        var w *ovid/parse.Pkg = FindPkg(c, im.namep, im.namen)
+        if w != 0 as *ovid/parse.Pkg {
+          if w.ord == 0 {
+            visited = visited + 1
+            w.ord = visited
+            w.low = visited
+            store64(stack + (sn * 8), w as i64)
+            sn = sn + 1
+            store64(call + (cn * 16), w as i64)
+            store64(call + (cn * 16) + 8, w.ims as i64)
+            cn = cn + 1
+          } else if w.scc == 0 && w.ord < v.low {
+            v.low = w.ord
+          }
+        }
+      } else {
+        cn = cn - 1
+        if cn > 0 {
+          var u *ovid/parse.Pkg = load64(call + ((cn - 1) * 16)) as *ovid/parse.Pkg
+          if v.low < u.low {
+            u.low = v.low
+          }
+        }
+        if v.low == v.ord {
+          ncomp = ncomp + 1
+          var cnt i64 = 0
+          var more bool = true
+          while more {
+            sn = sn - 1
+            var x *ovid/parse.Pkg = load64(stack + (sn * 8)) as *ovid/parse.Pkg
+            x.scc = ncomp
+            cnt = cnt + 1
+            more = x != v
+          }
+          store64(c.csize + (ncomp * 8), cnt)
+        }
+      }
+    }
+    s = s.next
+  }
+  return ncomp
+}
+
+// CheckCycle reports import_cycle once for each cycle whose lexically
+// least package is r: at the first import of r, in source order, that
+// leads back to r through packages whose paths sort after it. The search
+// walks imports in source order, so it finds the same cycle path whatever
+// order the packages were loaded in. Packages must form a DAG, so that
+// each can be checked and compiled once its imports are.
+//
+// The walk costs up to the whole graph per root, so it runs only where it
+// can report: a cycle lies entirely within one strongly connected
+// component of the import graph (Sccs), so a root alone in its component
+// (a self-import is import_self's, not a cycle) reports nothing, and the
+// walk never needs a package outside the root's component. A package the
+// walk could enter from the root that is outside the component cannot
+// reach the root, nor, since everything that reaches the root's component
+// reaches the root, any package in it: walking into it only marks
+// packages the walk never needs, so skipping it changes neither whether
+// the walk returns true nor the path it finds. A valid module so costs
+// time linear in its packages and imports. The graph's nodes are the
+// packages FindPkg returns; a repeated package's later copies are roots
+// only, walked unpruned.
+func CheckCycle(c *Ch, r *ovid/parse.Pkg) i64 {
+  c.cscc = 0
+  if FindPkg(c, r.pathp, r.pathn) == r {
+    if load64(c.csize + (r.scc * 8)) == 1 {
+      return 0
+    }
+    c.cscc = r.scc
+  }
+  c.croot = r
+  c.cep = c.cep + 1
+  var im *ovid/parse.Decl = r.ims
+  while im != 0 as *ovid/parse.Decl {
+    var t *ovid/parse.Pkg = 0 as *ovid/parse.Pkg
+    if Less(r.pathp, r.pathn, im.namep, im.namen) {
+      t = FindPkg(c, im.namep, im.namen)
+    }
+    if Keep(c, t) {
+      store64(c.cpath, r as i64)
+      c.cn = 1
+      if Walk(c, t) {
+        var mb *ovid/mem.Buf = ovid/mem.New(c.io, 64)
+        ovid/mem.WBytes(c.io, mb, strptr("import cycle: "), strlen("import cycle: "))
+        var i i64 = 0
+        while i < c.cn {
+          var k *ovid/parse.Pkg = load64(c.cpath + (i * 8)) as *ovid/parse.Pkg
+          if i != 0 {
+            ovid/mem.WBytes(c.io, mb, strptr(" -> "), 4)
+          }
+          ovid/mem.WBytes(c.io, mb, k.pathp, k.pathn)
+          i = i + 1
+        }
+        HereDecl(c, H_IMPORT, r, im, im)
+        c.pathp = r.pathp
+        c.pathn = r.pathn
+        Err(c, strptr("import_cycle"), strlen("import_cycle"), mb.data, mb.len)
+        c.pathn = 0
+        return 1
+      }
+    }
+    im = im.next
+  }
+  return 0
+}
+
 // Run type-checks the loaded module m, prints its error lines, and returns
 // the error count. For check (build false) it then prints the summary; for
 // build it prints {"ok":false,"errors":N} only when there are errors, since
@@ -1090,6 +1332,7 @@ func Run(io *ovid/io.Cap, m *ovid/parse.Mod, build bool) i64 {
   }
   c.tabmask = sz - 1
   c.tab = ovid/io.Alloc(io, sz * 16)
+  IndexPkgs(c)
   if m.namen == 0 {
     Err(c, strptr("bad_module"), strlen("bad_module"), strptr("ovid.mod has no module line"), strlen("ovid.mod has no module line"))
   }
@@ -1121,6 +1364,13 @@ func Run(io *ovid/io.Cap, m *ovid/parse.Mod, build bool) i64 {
     Types(c, k)
     Funcs(c, k)
     c.pathn = 0
+    k = k.next
+  }
+  c.cpath = ovid/io.Alloc(io, (npkg + 1) * 8)
+  Sccs(c, npkg)
+  k = m.pkgs
+  while k != 0 as *ovid/parse.Pkg {
+    CheckCycle(c, k)
     k = k.next
   }
   CheckMain(c)

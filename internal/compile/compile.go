@@ -4,6 +4,7 @@ package compile
 
 import (
 	"fmt"
+	"math/bits"
 	"sort"
 	"strings"
 
@@ -152,6 +153,7 @@ type cg struct {
 	regs       map[int]int // locals that live in a register
 	saved      []int       // callee-saved registers the func uses
 	saveBase   int32       // their save slots lie below this displacement
+	tregs      []int       // registers for temps at levels 0, 1, ...
 	pkg        *ir.Package
 	fn         *ir.Func
 	marks      []Mark
@@ -311,6 +313,7 @@ func (c *cg) emitFunc(pkg *ir.Package, fn *ir.Func) error {
 		tempBytes = int32((peak + 1) * 8)
 	}
 	c.allocRegs(fn)
+	c.allocTemps()
 	c.saveBase = -(c.localBytes + tempBytes)
 	frame := c.localBytes + tempBytes + int32(8*len(c.saved))
 	if frame%16 != 0 {
@@ -501,6 +504,22 @@ func (c *cg) allocRegs(fn *ir.Func) {
 			callee = callee[1:]
 		} else {
 			return
+		}
+	}
+}
+
+// allocTemps gives the first temp levels the registers a call would
+// clobber that no local uses, r11 first. A temp still keeps its slot in
+// the frame, for the expressions that cannot use the register.
+func (c *cg) allocTemps() {
+	used := map[int]bool{}
+	for _, r := range c.regs {
+		used[r] = true
+	}
+	c.tregs = nil
+	for _, r := range []int{asm.R11, asm.R10, asm.R9, asm.R8, asm.RSI, asm.RDI} {
+		if !used[r] {
+			c.tregs = append(c.tregs, r)
 		}
 	}
 }
@@ -744,6 +763,12 @@ func (c *cg) emitStmt(s *ir.Node) error {
 		body := c.b.NewLabel()
 		test := c.b.NewLabel()
 		c.b.Jmp(test)
+		// The body starts on a 32-byte boundary, so where the loop falls
+		// does not decide how fast it runs. The padding follows a jmp and
+		// never runs.
+		for (elf.CodeVAddr()+uint64(c.b.Pos()))%32 != 0 {
+			c.b.Int3()
+		}
 		c.b.Mark(body)
 		if err := c.emitStmts(s.Body); err != nil {
 			return err
@@ -902,9 +927,102 @@ func (c *cg) arithOpnd(op string, k int, v int64) {
 		}
 		c.loadOpnd(asm.RCX, k, v)
 		c.arithRcx(op)
+	case "div", "mod":
+		// Dividing by 0 or -1 keeps idiv, which traps where it should.
+		if k == kImm && (v >= 2 || v <= -2) {
+			c.divConst(op == "mod", v)
+			return
+		}
+		c.loadOpnd(asm.RCX, k, v)
+		c.arithRcx(op)
 	default:
 		c.loadOpnd(asm.RCX, k, v)
 		c.arithRcx(op)
+	}
+}
+
+// divConst emits rax = rax / d, or rax % d, truncating, for a constant d
+// with |d| >= 2, without idiv. A power of two is a shift, after adding
+// d-1 to a negative dividend; any other d is a multiply by a magic
+// reciprocal (Hacker's Delight 10-1). x % d is x - (x/d)*d. Uses rcx and
+// rdx.
+func (c *cg) divConst(mod bool, d int64) {
+	if d > 0 && d&(d-1) == 0 {
+		k := byte(bits.TrailingZeros64(uint64(d)))
+		// rcx = x + (x < 0 ? d-1 : 0)
+		c.b.MovRegReg(asm.RCX, asm.RAX)
+		c.b.SarRegImm(asm.RCX, 63)
+		c.b.ShrRegImm(asm.RCX, 64-k)
+		c.b.AluRegReg(aluAdd, asm.RCX, asm.RAX)
+		if mod {
+			c.b.AluRegImm(aluAnd, asm.RCX, int32(-d))
+			c.b.AluRegReg(aluSub, asm.RAX, asm.RCX)
+			return
+		}
+		c.b.MovRegReg(asm.RAX, asm.RCX)
+		c.b.SarRegImm(asm.RAX, k)
+		return
+	}
+	m, s := magic(d)
+	c.b.MovRegReg(asm.RCX, asm.RAX)
+	c.b.MovRegImm(asm.RAX, m)
+	c.b.ImulRcx()
+	if d > 0 && m < 0 {
+		c.b.AluRegReg(aluAdd, asm.RDX, asm.RCX)
+	} else if d < 0 && m > 0 {
+		c.b.AluRegReg(aluSub, asm.RDX, asm.RCX)
+	}
+	if s > 0 {
+		c.b.SarRegImm(asm.RDX, s)
+	}
+	// The quotient rounds toward zero: add one when it is negative.
+	c.b.MovRegReg(asm.RAX, asm.RDX)
+	c.b.ShrRegImm(asm.RAX, 63)
+	c.b.AluRegReg(aluAdd, asm.RAX, asm.RDX)
+	if mod {
+		c.b.ImulRaxImm(int32(d))
+		c.b.AluRegReg(aluSub, asm.RCX, asm.RAX)
+		c.b.MovRegReg(asm.RAX, asm.RCX)
+	}
+}
+
+// magic is the multiplier m and the shift s for signed division by d,
+// 2 <= |d| <= 2^31 and d not a positive power of two: x/d is the high
+// half of x*m, plus x when d > 0 > m or minus x when d < 0 < m, shifted
+// right by s, plus one if negative (Hacker's Delight 10-1). m is
+// 2^p/|d| + 1 for the least p >= 64 with 2^p > nc*e, where e is
+// |d| - 2^p mod |d|, and nc is 2^63 - 1 - 2^63 mod |d| for d > 0 and
+// 2^63 - (2^63+1) mod |d| for d < 0. As e < 2^31, that is 2^(p-63) > e,
+// or 2^(p-63) = e with nc < 2^63, so the arithmetic fits in signed 64
+// bits, the only kind the self-hosted compiler has.
+func magic(d int64) (int64, byte) {
+	ad := d
+	if d < 0 {
+		ad = -d
+	}
+	// 2^p = q*ad + r, with q modulo 2^64.
+	q, r := int64(0), int64(1)
+	exact := false
+	for p := 1; ; p++ {
+		q, r = 2*q, 2*r
+		if r >= ad {
+			q, r = q+1, r-ad
+		}
+		if p == 63 {
+			// nc is 2^63 when d < 0 and |d| divides 2^63+1.
+			exact = d < 0 && (r+1)%ad == 0
+		}
+		if p < 64 {
+			continue
+		}
+		e, j := ad-r, int64(1)<<(p-63)
+		if j > e || (j == e && !exact) {
+			m := q + 1
+			if d < 0 {
+				m = -m
+			}
+			return m, byte(p - 64)
+		}
 	}
 }
 
@@ -939,7 +1057,9 @@ func (c *cg) arithRcx(op string) {
 
 // emitArith evaluates a binary arithmetic node into rax. A side that is an
 // operand costs no temp; evaluating the other side first is safe because
-// nothing an expression does can change a local or a constant.
+// nothing an expression does can change a local or a constant. Otherwise
+// the left side waits in a temp: a register when tempReg has one, else a
+// slot in the frame.
 func (c *cg) emitArith(n *ir.Node, lv int) error {
 	if k, v := c.operand(n.Right); k != kNone {
 		if err := c.emitExpr(n.Left, lv); err != nil {
@@ -958,6 +1078,23 @@ func (c *cg) emitArith(n *ir.Node, lv int) error {
 		}
 		c.b.MovRegReg(asm.RCX, asm.RAX)
 		c.loadOpnd(asm.RAX, k, v)
+		c.arithRcx(n.Op)
+		return nil
+	}
+	if r, ok := c.tempReg(lv, n.Right); ok {
+		if err := c.emitExpr(n.Left, lv); err != nil {
+			return err
+		}
+		c.b.MovRegReg(r, asm.RAX)
+		if err := c.emitExpr(n.Right, lv+1); err != nil {
+			return err
+		}
+		if commutes(n.Op) {
+			c.arithOpnd(n.Op, kReg, int64(r))
+			return nil
+		}
+		c.b.MovRegReg(asm.RCX, asm.RAX)
+		c.b.MovRegReg(asm.RAX, r)
 		c.arithRcx(n.Op)
 		return nil
 	}
@@ -1022,6 +1159,17 @@ func (c *cg) emitCmp(n *ir.Node, lv int) (byte, error) {
 		c.aluOpnd(aluCmp, asm.RAX, k, v)
 		return ccSwap(cc), nil
 	}
+	if r, ok := c.tempReg(lv, n.Right); ok {
+		if err := c.emitExpr(n.Left, lv); err != nil {
+			return 0, err
+		}
+		c.b.MovRegReg(r, asm.RAX)
+		if err := c.emitExpr(n.Right, lv+1); err != nil {
+			return 0, err
+		}
+		c.b.AluRegReg(aluCmp, r, asm.RAX)
+		return cc, nil
+	}
 	if err := c.emitExpr(n.Left, lv); err != nil {
 		return 0, err
 	}
@@ -1031,6 +1179,15 @@ func (c *cg) emitCmp(n *ir.Node, lv int) (byte, error) {
 	}
 	c.b.AluMemReg(aluCmp, c.tempDisp(lv), asm.RAX)
 	return cc, nil
+}
+
+// tempReg is the register temp level lv may use while right is evaluated:
+// none when right calls something, which may clobber it.
+func (c *cg) tempReg(lv int, right *ir.Node) (int, bool) {
+	if lv >= len(c.tregs) || exprCalls(right) {
+		return 0, false
+	}
+	return c.tregs[lv], true
 }
 
 func isCmp(op string) bool {

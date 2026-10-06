@@ -1321,10 +1321,20 @@ func main(io *ovid/io.Cap) i64 {
 		t.Fatal(err)
 	}
 	defer f.Close()
+	stack := 0
 	for _, p := range f.Progs {
 		if p.Flags&elf.PF_W != 0 && p.Flags&elf.PF_X != 0 {
 			t.Fatalf("segment at %#x is writable and executable", p.Vaddr)
 		}
+		if p.Type == elf.PT_GNU_STACK {
+			stack++
+			if p.Flags != elf.PF_R|elf.PF_W || p.Off|p.Vaddr|p.Paddr|p.Filesz|p.Memsz|p.Align != 0 {
+				t.Fatalf("PT_GNU_STACK is %+v, want flags RW and the rest 0", p.ProgHeader)
+			}
+		}
+	}
+	if stack != 1 {
+		t.Fatalf("%d PT_GNU_STACK headers, want 1", stack)
 	}
 	raw, _ := os.ReadFile(bin)
 	if bytes.Contains(raw, []byte("never printed")) {

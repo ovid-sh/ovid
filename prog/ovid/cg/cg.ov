@@ -20,7 +20,8 @@ const LOC_REG i64 = 48
 // emitted; locs holds its params and vars, nloc of them. While they are
 // bound, scope holds the numbers of the nscope in scope, innermost last;
 // live is the most that were in scope at once. err is set by the first
-// failure, and msg says what it was.
+// failure, and msg says what it was. tregs holds the ntregs registers
+// for temps at levels 0, 1, ...; mshift is the shift Magic computed.
 type C struct {
   io *ovid/io.Cap
   code *ovid/asm.Code
@@ -52,6 +53,9 @@ type C struct {
   nsaved i64
   saveBase i64
   free i64
+  tregs i64
+  ntregs i64
+  mshift i64
   msg *ovid/mem.Buf
   adding bool
 }
@@ -169,6 +173,7 @@ func IndexProg(c *C) i64 {
   c.scope = ovid/io.Alloc(c.io, MAXLOC * 8)
   c.saved = ovid/io.Alloc(c.io, 64)
   c.free = ovid/io.Alloc(c.io, 64)
+  c.tregs = ovid/io.Alloc(c.io, 64)
   while k != 0 as *ovid/parse.Pkg {
     var f *ovid/parse.Decl = k.fs
     while f != 0 as *ovid/parse.Decl {
@@ -719,6 +724,52 @@ func AllocRegs(c *C, body *ovid/parse.Node, nparams i64) i64 {
   return 0
 }
 
+// TempCand is the j-th register a temp may take: r11, r10, r9, r8, rsi,
+// rdi.
+func TempCand(j i64) i64 {
+  if j < 4 {
+    return 11 - j
+  }
+  if j == 4 {
+    return 6
+  }
+  return 7
+}
+
+// AllocTemps gives the first temp levels the registers a call would
+// clobber that no local uses, r11 first. A temp still keeps its slot in
+// the frame, for the expressions that cannot use the register.
+func AllocTemps(c *C) i64 {
+  c.ntregs = 0
+  var j i64 = 0
+  while j < 6 {
+    var r i64 = TempCand(j)
+    var used bool = false
+    var i i64 = 0
+    while i < c.nloc {
+      if load64((c.locs + (i * LOCSIZE)) + LOC_REG) == r {
+        used = true
+      }
+      i = i + 1
+    }
+    if !used {
+      store64(c.tregs + (c.ntregs * 8), r)
+      c.ntregs = c.ntregs + 1
+    }
+    j = j + 1
+  }
+  return 0
+}
+
+// TempReg is the register temp level lv may use while right is evaluated,
+// or -1: none when right calls something, which may clobber it.
+func TempReg(c *C, lv i64, right *ovid/parse.Node) i64 {
+  if lv >= c.ntregs || ExprCalls(right) {
+    return -1
+  }
+  return load64(c.tregs + (lv * 8))
+}
+
 // The x86 group-1 operations, by their /digit.
 const ALU_ADD i64 = 0
 const ALU_OR i64 = 1
@@ -855,8 +906,104 @@ func ArithOpnd(c *C, op i64, k i64, v i64) i64 {
     // The same count the cl form would use: the low six bits.
     return ovid/asm.ShiftRaxImm(c.code, op == ovid/parse.OP_SHR, v & 63)
   }
+  // Dividing by 0 or -1 keeps idiv, which traps where it should.
+  if k == KIMM && (op == ovid/parse.OP_DIV || op == ovid/parse.OP_MOD) && (v >= 2 || v <= (0 - 2)) {
+    return DivConst(c, op == ovid/parse.OP_MOD, v)
+  }
   LoadOpnd(c, 1, k, v)
   return ArithRcx(c, op)
+}
+
+// DivConst emits rax = rax / d, or rax % d, truncating, for a constant d
+// with |d| >= 2, without idiv. A power of two is a shift, after adding
+// d-1 to a negative dividend; any other d is a multiply by a magic
+// reciprocal (Hacker's Delight 10-1). x % d is x - (x/d)*d. Uses rcx and
+// rdx.
+func DivConst(c *C, mod bool, d i64) i64 {
+  if d > 0 && (d & (d - 1)) == 0 {
+    var k i64 = 0
+    while (1 << k) != d {
+      k = k + 1
+    }
+    // rcx = x + (x < 0 ? d-1 : 0)
+    ovid/asm.MovRegReg(c.code, 1, 0)
+    ovid/asm.SarRegImm(c.code, 1, 63)
+    ovid/asm.ShrRegImm(c.code, 1, 64 - k)
+    ovid/asm.AluRegReg(c.code, ALU_ADD, 1, 0)
+    if mod {
+      ovid/asm.AluRegImm(c.code, ALU_AND, 1, 0 - d)
+      return ovid/asm.AluRegReg(c.code, ALU_SUB, 0, 1)
+    }
+    ovid/asm.MovRegReg(c.code, 0, 1)
+    return ovid/asm.SarRegImm(c.code, 0, k)
+  }
+  var m i64 = Magic(c, d)
+  ovid/asm.MovRegReg(c.code, 1, 0)
+  ovid/asm.MovRegImm(c.code, 0, m)
+  ovid/asm.ImulRcx(c.code)
+  if d > 0 && m < 0 {
+    ovid/asm.AluRegReg(c.code, ALU_ADD, 2, 1)
+  } else if d < 0 && m > 0 {
+    ovid/asm.AluRegReg(c.code, ALU_SUB, 2, 1)
+  }
+  if c.mshift > 0 {
+    ovid/asm.SarRegImm(c.code, 2, c.mshift)
+  }
+  // The quotient rounds toward zero: add one when it is negative.
+  ovid/asm.MovRegReg(c.code, 0, 2)
+  ovid/asm.ShrRegImm(c.code, 0, 63)
+  ovid/asm.AluRegReg(c.code, ALU_ADD, 0, 2)
+  if mod {
+    ovid/asm.ImulRaxImm(c.code, d)
+    ovid/asm.AluRegReg(c.code, ALU_SUB, 1, 0)
+    ovid/asm.MovRegReg(c.code, 0, 1)
+  }
+  return 0
+}
+
+// Magic is the multiplier m for signed division by d, 2 <= |d| <= 2^31
+// and d not a positive power of two, and sets c.mshift to the shift s:
+// x/d is the high half of x*m, plus x when d > 0 > m or minus x when d <
+// 0 < m, shifted right by s, plus one if negative (Hacker's Delight 10-1).
+// m is 2^p/|d| + 1 for the least p >= 64 with 2^p > nc*e, where e is
+// |d| - 2^p mod |d|, and nc is 2^63 - 1 - 2^63 mod |d| for d > 0 and
+// 2^63 - (2^63+1) mod |d| for d < 0. As e < 2^31, that is 2^(p-63) > e,
+// or 2^(p-63) = e with nc < 2^63, so the arithmetic fits in signed 64
+// bits.
+func Magic(c *C, d i64) i64 {
+  var ad i64 = d
+  if d < 0 {
+    ad = 0 - d
+  }
+  // 2^p = q*ad + r, with q modulo 2^64.
+  var q i64 = 0
+  var r i64 = 1
+  var p i64 = 0
+  var exact bool = false
+  var e i64 = 1
+  var j i64 = 0
+  while p < 64 || j < e || (j == e && exact) {
+    p = p + 1
+    q = q * 2
+    r = r * 2
+    if r >= ad {
+      q = q + 1
+      r = r - ad
+    }
+    if p == 63 {
+      // nc is 2^63 when d < 0 and |d| divides 2^63+1.
+      exact = d < 0 && ((r + 1) % ad) == 0
+    }
+    if p >= 64 {
+      e = ad - r
+      j = 1 << (p - 63)
+    }
+  }
+  c.mshift = p - 64
+  if d < 0 {
+    return 0 - (q + 1)
+  }
+  return q + 1
 }
 
 // ArithRcx emits rax = rax op rcx.
@@ -909,7 +1056,9 @@ func ArithRcx(c *C, op i64) i64 {
 
 // EmitArith evaluates a binary arithmetic node into rax. A side that is an
 // operand costs no temp; evaluating the other side first is safe because
-// nothing an expression does can change a local or a constant.
+// nothing an expression does can change a local or a constant. Otherwise
+// the left side waits in a temp: a register when TempReg has one, else a
+// slot in the frame.
 func EmitArith(c *C, n *ovid/parse.Node, lv i64) i64 {
   var op i64 = n.op
   var k i64 = Operand(c, n.right)
@@ -931,6 +1080,22 @@ func EmitArith(c *C, n *ovid/parse.Node, lv i64) i64 {
     }
     ovid/asm.MovRegReg(c.code, 1, 0)
     LoadOpnd(c, 0, k, v)
+    return ArithRcx(c, op)
+  }
+  var r i64 = TempReg(c, lv, n.right)
+  if r >= 0 {
+    if EmitExpr(c, n.left, lv) != 0 {
+      return c.err
+    }
+    ovid/asm.MovRegReg(c.code, r, 0)
+    if EmitExpr(c, n.right, lv + 1) != 0 {
+      return c.err
+    }
+    if Commutes(op) {
+      return ArithOpnd(c, op, KREG, r)
+    }
+    ovid/asm.MovRegReg(c.code, 1, 0)
+    ovid/asm.MovRegReg(c.code, 0, r)
     return ArithRcx(c, op)
   }
   if EmitExpr(c, n.left, lv) != 0 {
@@ -1012,6 +1177,18 @@ func EmitCmp(c *C, n *ovid/parse.Node, lv i64) i64 {
     }
     AluOpnd(c, ALU_CMP, 0, k, v)
     return CcSwap(cc)
+  }
+  var r i64 = TempReg(c, lv, n.right)
+  if r >= 0 {
+    if EmitExpr(c, n.left, lv) != 0 {
+      return -1
+    }
+    ovid/asm.MovRegReg(c.code, r, 0)
+    if EmitExpr(c, n.right, lv + 1) != 0 {
+      return -1
+    }
+    ovid/asm.AluRegReg(c.code, ALU_CMP, r, 0)
+    return cc
   }
   if EmitExpr(c, n.left, lv) != 0 {
     return -1
@@ -1596,6 +1773,12 @@ func EmitStmt(c *C, s *ovid/parse.Node) i64 {
     var top i64 = ovid/asm.NewLabel(c.code)
     var test i64 = ovid/asm.NewLabel(c.code)
     ovid/asm.Jmp(c.code, test)
+    // The body starts on a 32-byte boundary, so where the loop falls does
+    // not decide how fast it runs. The padding follows a jmp and never
+    // runs.
+    while (((ovid/asm.LOADADDR + ovid/asm.HEADERSIZE) + c.code.len) % 32) != 0 {
+      ovid/asm.Int3(c.code)
+    }
     ovid/asm.Mark(c.code, top)
     if EmitStmts(c, s.body) != 0 {
       return c.err
@@ -1632,6 +1815,7 @@ func EmitFunc(c *C, fn *ovid/parse.Decl) i64 {
     tempBytes = (c.peak + 1) * 8
   }
   AllocRegs(c, body, ovid/parse.CountDecls(c.fn.sub))
+  AllocTemps(c)
   c.saveBase = 0 - (c.localBytes + tempBytes)
   var frame i64 = (c.localBytes + tempBytes) + (c.nsaved * 8)
   if (frame % 16) != 0 {

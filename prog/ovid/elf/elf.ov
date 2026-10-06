@@ -32,7 +32,8 @@ func Phdr(b *ovid/mem.Buf, io *ovid/io.Cap, flags i64, off i64, vaddr i64, size 
 }
 
 // Link writes a static ET_EXEC with two segments: headers and code
-// read+execute, rodata read-only. Nothing is writable and executable.
+// read+execute, rodata read-only. A third header, PT_GNU_STACK, asks for
+// a read+write, non-executable stack. Nothing is writable and executable.
 func Link(io *ovid/io.Cap, c *ovid/asm.Code) *ovid/mem.Buf {
   var textsz i64 = ovid/asm.HEADERSIZE + c.len
   var b *ovid/mem.Buf = ovid/mem.New(io, (textsz + c.ron) + 16)
@@ -61,7 +62,7 @@ func Link(io *ovid/io.Cap, c *ovid/asm.Code) *ovid/mem.Buf {
   ovid/mem.WByte(io, b, 0)
   ovid/mem.WByte(io, b, 56)
   ovid/mem.WByte(io, b, 0)
-  ovid/mem.WByte(io, b, 2)
+  ovid/mem.WByte(io, b, 3)
   i = 0
   while i < 7 {
     ovid/mem.WByte(io, b, 0)
@@ -69,6 +70,14 @@ func Link(io *ovid/io.Cap, c *ovid/asm.Code) *ovid/mem.Buf {
   }
   Phdr(b, io, 5, 0, ovid/asm.LOADADDR, textsz)
   Phdr(b, io, 4, textsz, ovid/asm.RodataVAddr(c.len), c.ron)
+  // PT_GNU_STACK (0x6474e551), flags R|W; every other field is 0.
+  W32(b, io, 1685382481)
+  W32(b, io, 6)
+  i = 0
+  while i < 6 {
+    W64(b, io, 0)
+    i = i + 1
+  }
   ovid/mem.WBytes(io, b, c.data, c.len)
   ovid/mem.WBytes(io, b, c.ro, c.ron)
   return b
