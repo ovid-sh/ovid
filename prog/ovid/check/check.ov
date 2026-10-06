@@ -22,6 +22,8 @@ const H_PARAM i64 = 8
 type Ch struct {
   io *ovid/io.Cap
   mod *ovid/parse.Mod
+  two bool
+  recv bool
   errs i64
   env i64
   nenv i64
@@ -754,6 +756,10 @@ func CheckExprIn(c *Ch, n *ovid/parse.Node) i64 {
       }
       return SetBad(c)
     }
+    if fn.typ2n != 0 && !c.recv {
+      Err(c, strptr("unused_result"), strlen("unused_result"), strptr("a value and an error code are returned; receive both"), strlen("a value and an error code are returned; receive both"))
+    }
+    c.recv = false
     if ovid/parse.CountNodes(a) != ovid/parse.CountDecls(fn.sub) {
       Err(c, strptr("arity"), strlen("arity"), n.fnp, n.fnn)
     }
@@ -787,6 +793,71 @@ func CheckExprIn(c *Ch, n *ovid/parse.Node) i64 {
   }
   Err(c, strptr("bad_op"), strlen("bad_op"), strptr("expr"), strlen("expr"))
   return SetBad(c)
+}
+
+// RecvTy is the type a var2 or assign2 gives the name np[0:nn]: the declared
+// type tp[0:tn] for a var2 (checked, and the name must be new), or the
+// local's for an assign2 (which must exist). It is left in c.typ.
+func RecvTy(c *Ch, s *ovid/parse.Node, np i64, nn i64, tp i64, tn i64) i64 {
+  if s.op == ovid/parse.OP_VAR2 {
+    var kind i64 = TyKind(c, tp, tn)
+    if kind < 0 {
+      Err(c, strptr("bad_type"), strlen("bad_type"), tp, tn)
+    } else if kind == 1 {
+      Err(c, strptr("struct_value"), strlen("struct_value"), np, nn)
+    }
+    if Lookup(c, np, nn) != 0 {
+      Err(c, strptr("duplicate_name"), strlen("duplicate_name"), np, nn)
+    }
+    if kind < 0 {
+      SetBad(c)
+    } else {
+      SetTy(c, tp, tn)
+    }
+    return c.typ
+  }
+  var loc i64 = Lookup(c, np, nn)
+  if loc == 0 {
+    Err(c, strptr("unknown_name"), strlen("unknown_name"), np, nn)
+    SetBad(c)
+    return c.typ
+  }
+  SetTy(c, load64(loc + 16), load64(loc + 24))
+  return c.typ
+}
+
+// CallTwo is the func n calls when n is a call to a func with two results,
+// else 0.
+func CallTwo(c *Ch, n *ovid/parse.Node) *ovid/parse.Decl {
+  if n == 0 as *ovid/parse.Node {
+    return 0 as *ovid/parse.Decl
+  }
+  if n.op != ovid/parse.OP_CALL {
+    return 0 as *ovid/parse.Decl
+  }
+  var pp i64 = c.pathp
+  var pn i64 = c.pathn
+  if n.pkgn != 0 {
+    pp = n.pkgp
+    pn = n.pkgn
+  }
+  var fn *ovid/parse.Decl = ovid/parse.FindFunc(c.mod, pp, pn, n.fnp, n.fnn)
+  if fn == 0 as *ovid/parse.Decl {
+    return fn
+  }
+  if fn.dup != 0 {
+    // The index holds a repeat; the call goes to the first func of the
+    // name, as the call case does, or nowhere if that repeats too.
+    var fk *ovid/parse.Pkg = FindPkg(c, pp, pn)
+    fn = ovid/parse.FindDecl(fk.fs, n.fnp, n.fnn)
+    if fn.dup != 0 {
+      return 0 as *ovid/parse.Decl
+    }
+  }
+  if fn.typ2n == 0 {
+    return 0 as *ovid/parse.Decl
+  }
+  return fn
 }
 
 // Paths reports whether every path through the statement list s returns.
@@ -839,6 +910,54 @@ func CheckStmt(c *Ch, s *ovid/parse.Node) i64 {
       NeedTy(c, tp, tn, s.namep, s.namen)
     }
     Bind(c, s.namep, s.namen, tp, tn)
+    return 0
+  }
+  if op == ovid/parse.OP_VAR2 || op == ovid/parse.OP_ASSIGN2 {
+    // Each name's type: declared (var2) or the local's (assign2); "_"
+    // takes anything (tn -1). The call's results must match them in order.
+    var t1p i64 = 0
+    var t1n i64 = -1
+    var t2p i64 = 0
+    var t2n i64 = -1
+    if !ovid/parse.IsBlank(s.namep, s.namen) {
+      t1p = RecvTy(c, s, s.namep, s.namen, s.typp, s.typn)
+      t1n = c.tyn
+    }
+    if !ovid/parse.IsBlank(s.name2p, s.name2n) {
+      if ovid/mem.Eq(s.namep, s.namen, s.name2p, s.name2n) {
+        Err(c, strptr("duplicate_name"), strlen("duplicate_name"), s.name2p, s.name2n)
+      }
+      t2p = RecvTy(c, s, s.name2p, s.name2n, s.typ2p, s.typ2n)
+      t2n = c.tyn
+    }
+    // Only a call that is the whole value is received; a two-result call
+    // nested in an expression is used as one value.
+    c.recv = CallTwo(c, s.val) != 0 as *ovid/parse.Decl
+    CheckExpr(c, s.val)
+    c.recv = false
+    var callee *ovid/parse.Decl = CallTwo(c, s.val)
+    if callee == 0 as *ovid/parse.Decl {
+      if !Bad(c) {
+        Err(c, strptr("arity"), strlen("arity"), strptr("two names receive one value"), strlen("two names receive one value"))
+      }
+    } else {
+      // A callee whose result type is unknown was reported at its decl.
+      var known bool = !TyEq(callee.typp, callee.typn, strptr("invalid"), strlen("invalid"))
+      if known && t1n >= 0 && !TyEq(t1p, t1n, strptr("invalid"), strlen("invalid")) && !TyEq(t1p, t1n, callee.typp, callee.typn) {
+        Err(c, strptr("type_mismatch"), strlen("type_mismatch"), strptr("first result"), strlen("first result"))
+      }
+      if t2n >= 0 && !TyEq(t2p, t2n, strptr("invalid"), strlen("invalid")) && !TyEq(t2p, t2n, strptr("i64"), strlen("i64")) {
+        Err(c, strptr("type_mismatch"), strlen("type_mismatch"), strptr("second result"), strlen("second result"))
+      }
+    }
+    if op == ovid/parse.OP_VAR2 {
+      if t1n >= 0 {
+        Bind(c, s.namep, s.namen, t1p, t1n)
+      }
+      if t2n >= 0 {
+        Bind(c, s.name2p, s.name2n, t2p, t2n)
+      }
+    }
     return 0
   }
   if op == ovid/parse.OP_ASSIGN {
@@ -894,8 +1013,30 @@ func CheckStmt(c *Ch, s *ovid/parse.Node) i64 {
       Err(c, strptr("type_mismatch"), strlen("type_mismatch"), strptr("missing return value"), strlen("missing return value"))
       return 0
     }
+    // return f(...) forwards both results of a two-result call.
+    var forward bool = false
+    if c.two && s.val2 == 0 as *ovid/parse.Node {
+      if CallTwo(c, s.val) != 0 as *ovid/parse.Decl {
+        c.recv = true
+        forward = true
+      }
+    }
     CheckExpr(c, s.val)
     NeedTy(c, c.resp, c.resn, strptr("return type"), strlen("return type"))
+    if forward {
+      return 0
+    }
+    if s.val2 != 0 as *ovid/parse.Node && !c.two {
+      Here(c, s)
+      Err(c, strptr("arity"), strlen("arity"), strptr("one value is returned"), strlen("one value is returned"))
+    } else if s.val2 == 0 as *ovid/parse.Node && c.two {
+      Here(c, s)
+      Err(c, strptr("arity"), strlen("arity"), strptr("a value and an error code are returned"), strlen("a value and an error code are returned"))
+    }
+    if s.val2 != 0 as *ovid/parse.Node {
+      CheckExpr(c, s.val2)
+      NeedI64(c, strptr("error code"), strlen("error code"))
+    }
     return 0
   }
   if op == ovid/parse.OP_IF {
@@ -924,6 +1065,8 @@ func CheckStmt(c *Ch, s *ovid/parse.Node) i64 {
 func CheckFunc(c *Ch, fn *ovid/parse.Decl) i64 {
   c.nenv = 0
   c.nmark = 0
+  c.two = fn.typ2n != 0
+  c.recv = false
   c.fd = fn
   c.fnp = fn.namep
   c.fnn = fn.namen
@@ -996,7 +1139,7 @@ func CheckMain(c *Ch) i64 {
   var p *ovid/parse.Decl = fn.sub
   if ovid/parse.CountDecls(p) == 1 {
     if ovid/mem.Eq(p.typp, p.typn, strptr("*ovid/io.Cap"), strlen("*ovid/io.Cap")) {
-      if ovid/mem.Eq(fn.typp, fn.typn, strptr("i64"), strlen("i64")) {
+      if ovid/mem.Eq(fn.typp, fn.typn, strptr("i64"), strlen("i64")) && fn.typ2n == 0 {
         ok = true
       }
     }
@@ -1014,7 +1157,7 @@ func CheckMain(c *Ch) i64 {
 // func handle(io *ovid/io.Cap, req *ovid/http.Request, res *ovid/http.Response) i64.
 func HandleSig(fn *ovid/parse.Decl) bool {
   var p *ovid/parse.Decl = fn.sub
-  if ovid/parse.CountDecls(p) != 3 || !ovid/mem.Eq(fn.typp, fn.typn, strptr("i64"), 3) {
+  if ovid/parse.CountDecls(p) != 3 || !ovid/mem.Eq(fn.typp, fn.typn, strptr("i64"), 3) || fn.typ2n != 0 {
     return false
   }
   if !ovid/mem.Eq(p.typp, p.typn, strptr("*ovid/io.Cap"), strlen("*ovid/io.Cap")) {

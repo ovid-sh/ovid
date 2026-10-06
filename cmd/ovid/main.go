@@ -176,27 +176,27 @@ func main() {
 		a := parse(cmd, argv, []string{"C", "pkg", "o"}, nil)
 		os.Exit(tool.Dump(dirArg(a, 0), a.vals["pkg"], a.vals["o"], w))
 	case "outline":
-		a := parse(cmd, argv, []string{"C", "pkg", "offset", "limit"}, []string{"all", "uses"})
-		os.Exit(tool.Outline(dirArg(a, 0), a.vals["pkg"], a.bools["all"], a.bools["uses"], pageArg(cmd, a), w))
+		a := parse(cmd, argv, []string{"C", "pkg", "offset", "limit"}, []string{"all", "uses", "ids", "json"})
+		os.Exit(tool.Outline(dirArg(a, 0), a.vals["pkg"], a.bools["all"], a.bools["uses"], a.bools["ids"], a.bools["json"], pageArg(cmd, a), w))
 	case "show":
 		a := parse(cmd, argv, []string{"C"}, []string{"ids", "plain", "json", "exprs"})
 		if len(a.pos) == 0 {
-			usageErr(cmd, "usage: ovid show <id|name>... [--plain] [--json] [--exprs]")
+			usageErr(cmd, "usage: ovid show <id|name>... [--ids] [--json] [--exprs]")
 		}
-		os.Exit(tool.Show(dirArg(a, 1<<30), a.pos, !a.bools["plain"], a.bools["json"], a.bools["exprs"], w))
+		os.Exit(tool.Show(dirArg(a, 1<<30), a.pos, a.bools["ids"], a.bools["json"], a.bools["exprs"], w))
 	case "refs":
-		a := parse(cmd, argv, []string{"C", "offset", "limit"}, nil)
+		a := parse(cmd, argv, []string{"C", "offset", "limit"}, []string{"json"})
 		if len(a.pos) != 1 {
-			usageErr(cmd, "usage: ovid refs <id|name> [--offset N] [--limit N]")
+			usageErr(cmd, "usage: ovid refs <id|name> [--json] [--offset N] [--limit N]")
 		}
-		os.Exit(tool.Refs(dirArg(a, 1), a.pos[0], pageArg(cmd, a), w))
+		os.Exit(tool.Refs(dirArg(a, 1), a.pos[0], a.bools["json"], pageArg(cmd, a), w))
 	case "grep":
-		a := parse(cmd, argv, []string{"C", "pkg", "offset", "limit"}, []string{"std"})
+		a := parse(cmd, argv, []string{"C", "pkg", "offset", "limit"}, []string{"std", "json"})
 		if len(a.pos) != 1 {
-			usageErr(cmd, "usage: ovid grep <regexp> [--pkg P] [--std] [--offset N] [--limit N]")
+			usageErr(cmd, "usage: ovid grep <regexp> [--pkg P] [--std] [--json] [--offset N] [--limit N]")
 		}
 		pg := pageArg(cmd, a)
-		os.Exit(tool.Grep(dirArg(a, 1), a.pos[0], a.vals["pkg"], a.bools["std"], pg.Offset, pg.Limit, w))
+		os.Exit(tool.Grep(dirArg(a, 1), a.pos[0], a.vals["pkg"], a.bools["std"], a.bools["json"], pg.Offset, pg.Limit, w))
 	case "edit":
 		a := parse(cmd, argv, []string{"C", "rev"}, []string{"dry-run", "require-clean", "allow-broken", "show", "force"})
 		if len(a.pos) != 1 {

@@ -20,8 +20,11 @@ const helpOverview = `ovid: a small compiled language and its toolchain, built f
 
 Source is plain .ov text. A module is a directory with ovid.mod; each
 subdirectory holding .ov files is one package, and its path is the package
-name. Every command prints JSON lines; the last line always has "ok".
-Exit codes: 0 ok, 1 errors, 2 stale edit, 64 usage, 124 run: timeout,
+name. Every command prints JSON lines with "ok" in the last line, except
+help, run, dump without -o (one JSON document), and the read commands
+outline, show, refs, grep, which print text (outline, refs, grep still end
+with the JSON "ok" line; show prints a header and the source, no JSON
+line; --json gives records). Exit codes: 0 ok, 1 errors, 2 stale edit, 64 usage, 124 run: timeout,
 125 run: could not build or start the program.
 Paths in records are relative to the working directory; with
 OVID_PATHS=module in the environment, to the module root.
@@ -35,12 +38,13 @@ Start here:
   ovid test [--run Name]       run Test* funcs, one process each
 
 Read without opening whole files:
-  ovid outline [--pkg P]       packages, or one package's decls with hashes
+  ovid outline [--pkg P] [--ids]  packages, or one package's decls, a line each
                                (outline, refs, grep print 200 records a page)
-  ovid show <id|name>... [--plain] [--json] [--exprs]
-                               source of a decl or node, lines tagged with ids
+  ovid show <id|name>... [--ids] [--json] [--exprs]
+                               source of a decl or node, with its id and hash
   ovid refs <id|name>          every use of a func/type/field/const/param/var
-  ovid grep <regexp>           text matches, each with its decl and stmt id
+  ovid grep <regexp>           text matches, grouped by the decl they are in
+                               (--json on any of these: one record a line)
 
 Change code (or edit the .ov files directly; both are fine):
   ovid replace <id> --expect H <<'EOF'
@@ -90,7 +94,29 @@ Imports may not form a cycle, directly or through other packages
 
 Types: i64, bool, *T (T a struct in this package or path.T from an import).
 No struct values, slices, arrays, strings, generics, methods, globals, or
-closures. At most 6 params; exactly one result type.
+closures. At most 6 params; one result type, or two: (T, i64), a value
+and an error code (0: success), see Errors below.
+
+Errors: a func declared (T, i64) returns a value and an error code, 0 for
+success. A caller must receive both, with a var of two names or an
+assignment to two locals, _ discarding one; a call used as a single value
+or as a statement is unused_result:
+  func Div(a i64, b i64) (i64, i64) {    // the quotient and 0, or 0 and a code
+    if b == 0 {
+      return 0, E_ZERO
+    }
+    return a / b, 0
+  }
+  var q i64, e i64 = Div(x, y)
+  if e != 0 {
+    return 0, e                 // pass it on; return Div(x, y) forwards both
+  }
+  q, e = Div(q, 2)              // into locals that exist
+  var r i64, _ = Div(x, 3)      // the error is ignored, visibly
+What a code means is up to the func: consts the package declares. The
+second result is always i64; main, handle, and tests have one result.
+Faults (a bad load, a division by zero, a table index out of range) are
+not errors: they kill the program, and ovid test reports where.
 
 Tables: const Name [N]i64 = {e, ...} is a read-only table of N constant
 expressions in the binary's data, which may run over several lines. It is
@@ -101,6 +127,7 @@ package. len is a keyword only before a ( (spaces or tabs may sit between);
 elsewhere a variable may be named len.
 
 Statements: var x T = e | var x T (zero: 0, false, or a null pointer) | x = e | p.f = e | if c { } else if c { } else { }
+| var v T, e i64 = f(...) | v, e = f(...) | return v, e (two results, see Errors)
 | while c { } | return e | store8/16/32/64(addr, v) (the low bits of v) | call(...).
 Every path through a func must return.
 
@@ -264,19 +291,23 @@ ovid test [--run substr] [--list] [--no-confine]
   "fault_addr"; a hung test reads "signal":"timeout".
   A test the kernel refused memory reads "error":"out_of_memory", exit 71.
   --list prints the tests without running them.
-ovid outline [--pkg P] [--all] [--uses] [--offset N] [--limit N]
-  Per decl: id, kind, sig, file, line, end_line, hash, and when present
-  doc (its doc comment: the // lines directly above it, with no blank line
-  between), size (struct bytes), test. --uses adds used_by: {package:
-  refs}, so {} is dead code and a decl used by only one other package is a
-  candidate to move there. Paged like grep: at most 200 records, and the
-  last line says where the next page starts. A name declared twice in a
-  package lists each copy where it is, with its own hash and id_copies:N
-  (see ovid help ids).
-ovid show <id|name>... [--plain] [--json] [--exprs]
-  Text: "// kind id file:a-b hash=H in=decl type=T" then the source, with
-  "  // @id" after each line where a statement starts (--plain omits them).
-  A decl's source starts at its doc comment, and a-b covers it.
+ovid outline [--pkg P] [--all] [--uses] [--ids] [--json] [--offset N] [--limit N]
+  Packages: "path  funcs=N types=N consts=N  imports ...  files", one a
+  line. --pkg P: the file's path, then "  line  sig" per decl (a struct as
+  "type T struct { N fields }"; show prints the fields); --ids adds
+  "  id hash=H" (a decl's id is its name, the hash guards an edit); --uses
+  adds "used by pkg N, ..." or "unused", so a decl used by only one other
+  package is a candidate to move there. --json: per decl id, kind, sig,
+  file, line, end_line, hash, and when present doc (its doc comment: the
+  // lines directly above it, with no blank line between), size (struct
+  bytes), test, used_by: {package: refs}. Paged like grep: at most 200
+  records, and the last line says where the next page starts. A name
+  declared twice in a package lists each copy where it is, with its own
+  hash ("one of N copies"; id_copies:N in JSON; see ovid help ids).
+ovid show <id|name>... [--ids] [--json] [--exprs]
+  Text: "// kind id file:a-b hash=H in=decl type=T" then the source. --ids
+  adds "  // @id" after each line where a statement starts, for an edit to
+  one statement. A decl's source starts at its doc comment, and a-b covers it.
   For a statement or expression (a decl with --exprs), one line per
   expression inside it follows: "//   ex:id line:col text  hash=H type=T",
   in source order, outer before inner. --json: {id,kind,file,line,end_line,
@@ -284,15 +315,18 @@ ovid show <id|name>... [--plain] [--json] [--exprs]
   line is the decl's own first line) for a decl with a doc comment, and
   "exprs":[{id,line,col,text,hash,type}]. Replace one by id to change part
   of a statement.
-ovid refs <id|name> [--offset N] [--limit N]
-  {id,kind,in,file,line,col,source} per use, in
-  source order: the names the checker resolved to it, so a field or local
-  spelled like a type, func, or const is not a use of it; last:
+ovid refs <id|name> [--json] [--offset N] [--limit N]
+  The uses in source order, grouped under "file  decl" headings, one
+  "  line: source" each: the names the checker resolved to it, so a field
+  or local spelled like a type, func, or const is not a use of it. --json:
+  {id,kind,in,file,line,col,source} per use. Last:
   {"ok":true,target,files,by_pkg:{package: n},external} for all the uses,
   and the paging fields for the ones printed.
-ovid grep <regexp> [--pkg P] [--std] [--offset N] [--limit N]
-  {file,line,col,match,source,decl,stmt} per match (RE2 syntax).
-  A match in a doc comment is in that comment's decl.
+ovid grep <regexp> [--pkg P] [--std] [--json] [--offset N] [--limit N]
+  The matching lines (RE2 syntax) grouped under "file  decl" headings, one
+  "  line: source" each, a line once however many matches it holds. --json:
+  {file,line,col,match,source,decl,stmt} per match. A match in a doc
+  comment is in that comment's decl.
   Paging, for outline, refs, and grep: at most 200 records unless --limit
   (0: all), starting after --offset; last: {"ok",count,total,offset,
   has_more,next_offset,revision}. count is what was printed, total all there

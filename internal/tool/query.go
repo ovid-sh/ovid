@@ -12,10 +12,15 @@ import (
 	"ovid/internal/module"
 )
 
-// Outline lists packages, or with pkg set, that package's declarations as
-// one line each with signature, location, and hash. It prints the records
-// of page; the last line counts them all and says where the next page starts.
-func Outline(dir, pkg string, all, uses bool, page Page, w io.Writer) int {
+// Outline lists packages, or with pkg set, that package's declarations.
+// As text it prints each file's path once and then one line per decl:
+// the line number and the signature (a struct by its field count), with
+// the id and hash after --ids
+// (ids, since a decl's id is its name, and the hash guards an edit). As
+// JSON (asJSON) it prints one record per package or decl with everything.
+// It prints the records of page; the last line counts them all and says
+// where the next page starts.
+func Outline(dir, pkg string, all, uses, ids, asJSON bool, page Page, w io.Writer) int {
 	m, err := load(dir)
 	if err != nil {
 		return fail(w, "load", err.Error(), "")
@@ -39,6 +44,19 @@ func Outline(dir, pkg string, all, uses bool, page Page, w io.Writer) int {
 			if !pg.take() {
 				continue
 			}
+			if !asJSON {
+				line := fmt.Sprintf("%s  funcs=%d types=%d consts=%d", p.Path, len(p.Funcs), len(p.Types), len(p.Consts))
+				if len(ims) > 0 {
+					line += "  imports " + strings.Join(ims, " ")
+				}
+				if m.Std[p.Path] {
+					line += "  (std)"
+				} else {
+					line += "  " + strings.Join(pkgFiles(m, p), " ")
+				}
+				fmt.Fprintln(w, line)
+				continue
+			}
 			r := map[string]any{"kind": "package", "id": p.ID, "path": p.Path, "funcs": len(p.Funcs),
 				"types": len(p.Types), "consts": len(p.Consts), "imports": ims}
 			if m.Std[p.Path] {
@@ -53,6 +71,7 @@ func Outline(dir, pkg string, all, uses bool, page Page, w io.Writer) int {
 		if uses && len(m.Errors) == 0 {
 			res = check.Run(m.Prog)
 		}
+		lastFile := ""
 		for _, l := range declLocs(m, p) {
 			if !pg.take() {
 				continue
@@ -63,7 +82,30 @@ func Outline(dir, pkg string, all, uses bool, page Page, w io.Writer) int {
 					d["used_by"] = usesByPkg(m, rs)
 				}
 			}
-			emit(w, d)
+			if asJSON {
+				emit(w, d)
+				continue
+			}
+			if file := d["file"].(string); file != lastFile {
+				fmt.Fprintln(w, file)
+				lastFile = file
+			}
+			sig := d["sig"].(string)
+			if td, ok := l.Node.(*ir.TypeDecl); ok {
+				// A struct's fields are show's to print; the outline says how many.
+				sig = fmt.Sprintf("type %s struct { %d fields }", td.Name, len(td.Fields))
+			}
+			line := fmt.Sprintf("%4d  %s", d["line"], sig)
+			if n, ok := d["id_copies"]; ok {
+				line += fmt.Sprintf("  (one of %d copies)", n)
+			}
+			if ids {
+				line += fmt.Sprintf("  %s hash=%s", d["id"], d["hash"])
+			}
+			if ub, ok := d["used_by"].(map[string]int); ok {
+				line += "  " + usedBy(ub)
+			}
+			fmt.Fprintln(w, line)
 		}
 	}
 	if !found {
@@ -80,6 +122,24 @@ func Outline(dir, pkg string, all, uses bool, page Page, w io.Writer) int {
 	}
 	emit(w, r)
 	return ExitOK
+}
+
+// usedBy renders a used_by map as text: "used by ovid/cli 3, ovid/cg 1",
+// or "unused".
+func usedBy(ub map[string]int) string {
+	if len(ub) == 0 {
+		return "unused"
+	}
+	var ps []string
+	for p := range ub {
+		ps = append(ps, p)
+	}
+	sort.Strings(ps)
+	var parts []string
+	for _, p := range ps {
+		parts = append(parts, fmt.Sprintf("%s %d", p, ub[p]))
+	}
+	return "used by " + strings.Join(parts, ", ")
 }
 
 func pkgFiles(m *module.Module, p *ir.Package) []string {
@@ -173,10 +233,11 @@ func sigOf(l *module.Loc) string {
 	return ""
 }
 
-// Show prints the source of each id. Text mode is source with a header line;
-// ids adds a trailing `// @id` on lines where a statement starts.
-// Show prints the source of each node. exprs lists the expressions inside a
-// decl with their ids; they are always listed for a statement or expression.
+// Show prints the source of each node. As text that is a header line with
+// the node's id and hash, then the source; withIDs adds `// @id` to each
+// line where a statement starts, and exprs lists the expressions inside a
+// decl with their ids (they are always listed for a statement or
+// expression). asJSON prints one record per node instead.
 func Show(dir string, ids []string, withIDs, asJSON, exprs bool, w io.Writer) int {
 	m, err := load(dir)
 	if err != nil {
@@ -251,7 +312,7 @@ func Show(dir string, ids []string, withIDs, asJSON, exprs bool, w io.Writer) in
 			text = annotate(m, l, start, text)
 		}
 		fmt.Fprintln(w, text)
-		if withIDs && (exprs || l.Kind == "stmt" || l.Kind == "expr") {
+		if exprs || l.Kind == "stmt" || l.Kind == "expr" {
 			for _, e := range exprsIn(m, l) {
 				_, ea, _, _ := m.Where(e.Span)
 				line := fmt.Sprintf("//   %s %d:%d %s  hash=%s", e.ID, ea.Line, ea.Col, oneLine(m.Text(e.Span), 72), m.LocHash(e))
@@ -373,8 +434,10 @@ type ref struct {
 	decl string
 }
 
-// Refs prints every use of the named declaration.
-func Refs(dir, q string, page Page, w io.Writer) int {
+// Refs prints every use of the named declaration: as text, grouped under
+// the decl each use is in, one line per use with its line number and
+// source; as JSON (asJSON), one record per use.
+func Refs(dir, q string, asJSON bool, page Page, w io.Writer) int {
 	m, err := load(dir)
 	if err != nil {
 		return fail(w, "load", err.Error(), "")
@@ -405,11 +468,16 @@ func Refs(dir, q string, page Page, w io.Writer) int {
 		return fail(w, "unsupported", err.Error(), "")
 	}
 	pg := pager{Page: page}
+	var grp groups
 	for _, r := range rs {
 		if !pg.take() {
 			continue
 		}
 		file, a, _, line := m.Where(r.span)
+		if !asJSON {
+			grp.line(w, file, r.decl, a.Line, strings.TrimSpace(line))
+			continue
+		}
 		emit(w, map[string]any{"id": r.id, "kind": r.kind, "in": r.decl, "file": file, "line": a.Line, "col": a.Col, "source": strings.TrimSpace(line)})
 	}
 	byPkg := usesByPkg(m, rs)
@@ -431,6 +499,22 @@ func Refs(dir, q string, page Page, w io.Writer) int {
 	return ExitOK
 }
 
+// groups prints lines of source grouped under the file and decl they are
+// in: a heading "file  decl" when either changes, then "line: source".
+type groups struct{ file, decl string }
+
+func (g *groups) line(w io.Writer, file, decl string, line int, source string) {
+	if file != g.file || decl != g.decl {
+		g.file, g.decl = file, decl
+		h := file
+		if decl != "" {
+			h += "  " + decl
+		}
+		fmt.Fprintln(w, h)
+	}
+	fmt.Fprintf(w, "%4d: %s\n", line, source)
+}
+
 // usesByPkg counts refs by the package they appear in.
 func usesByPkg(m *module.Module, rs []ref) map[string]int {
 	out := map[string]int{}
@@ -447,7 +531,9 @@ func findRefs(m *module.Module, res *check.Result, target *module.Loc) ([]ref, e
 	switch target.Kind {
 	case "func", "type", "field", "const", "param":
 	case "stmt":
-		if n := target.Node.(*ir.Node); n.Op != "var" {
+		if n := target.Node.(*ir.Node); n.Op == "var2" {
+			return nil, fmt.Errorf("%s declares two locals, %s and %s, and an id names only one; refs cannot reach either yet (ovid grep finds their uses)", target.ID, n.Name, n.Two.Name)
+		} else if n.Op != "var" {
 			return nil, fmt.Errorf("refs works on funcs, types, fields, consts, params, and var statements; %s is a %s statement", target.ID, n.Op)
 		}
 	default:
@@ -487,7 +573,10 @@ func localNamed(fn *ir.Func, name string) bool {
 	found := false
 	for _, st := range fn.Body {
 		st.Walk(func(n *ir.Node) {
-			if n.Op == "var" && n.Name == name {
+			if (n.Op == "var" || n.Op == "var2") && n.Name == name {
+				found = true
+			}
+			if n.Op == "var2" && n.Two.Name == name {
 				found = true
 			}
 		})
