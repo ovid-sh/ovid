@@ -64,8 +64,11 @@
           hello = self.lib.buildOvidProgram pkgs { pname = "hello"; src = ./nix/example; };
         in
         {
-          inherit ovid ovid-selfhost hello;
+          inherit ovid hello;
           default = ovid;
+        } // lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "x86_64-linux") {
+          # It runs s1, and Ovid's output runs only on Linux x86-64.
+          inherit ovid-selfhost;
         } // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
           # The program and nothing else: no libc, no shell, no loader.
           hello-image = pkgs.dockerTools.buildImage {
@@ -78,7 +81,7 @@
 
       checks = forAll (pkgs:
         let
-          inherit (self.packages.${pkgs.stdenv.hostPlatform.system}) ovid ovid-selfhost;
+          inherit (self.packages.${pkgs.stdenv.hostPlatform.system}) ovid;
         in
         {
           go-test = pkgs.buildGoModule {
@@ -91,15 +94,16 @@
             checkPhase = "runHook preCheck; go test -count=1 ./...; runHook postCheck";
             installPhase = "touch $out";
           };
-          prog = pkgs.runCommand "ovid-prog-check" { nativeBuildInputs = [ ovid ]; } ''
+        } // lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "x86_64-linux") {
+          # The rest run Ovid output, which runs only on Linux x86-64.
+          prog =pkgs.runCommand "ovid-prog-check" { nativeBuildInputs = [ ovid ]; } ''
             cp -r ${testSrc}/prog prog
             chmod -R u+w prog
             ovid check -C prog
             ovid test -C prog
             touch $out
           '';
-          selfhost = ovid-selfhost;
-        } // lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "x86_64-linux") {
+          selfhost = self.packages.x86_64-linux.ovid-selfhost;
           # A NixOS machine, where /lib64/ld-linux-x86-64.so.2 is stub-ld and
           # refuses every program: Ovid's static output runs as it is.
           nixos = pkgs.testers.runNixOSTest {
