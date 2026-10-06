@@ -40,7 +40,7 @@ func main(io *ovid/io.Cap) i64 {
 		t.Fatal(b.String())
 	}
 	out := b.String()
-	want := "demo/main.ov\n    4  func Twice(x i64) i64\n    7  func Thrice(x i64) i64\n   10  func main(io *ovid/io.Cap) i64\n"
+	want := "demo/main.ov\n   4  func Twice(x i64) i64\n   7  func Thrice(x i64) i64\n  10  func main(io *ovid/io.Cap) i64\n"
 	if !strings.HasPrefix(out, want) {
 		t.Fatalf("outline:\n%s", out)
 	}
@@ -49,7 +49,7 @@ func main(io *ovid/io.Cap) i64 {
 	}
 	b.Reset()
 	Outline(dir, "demo", false, true, true, false, Page{}, &b)
-	if s := b.String(); !strings.Contains(s, "    4  func Twice(x i64) i64  fn:demo.Twice hash=") || !strings.Contains(s, "  used by demo 3\n") || !strings.Contains(s, "func main(io *ovid/io.Cap) i64  fn:demo.main hash=") || !strings.Contains(s, "  unused\n") {
+	if s := b.String(); !strings.Contains(s, "   4  func Twice(x i64) i64  fn:demo.Twice hash=") || !strings.Contains(s, "  used by demo 3\n") || !strings.Contains(s, "func main(io *ovid/io.Cap) i64  fn:demo.main hash=") || !strings.Contains(s, "  unused\n") {
 		t.Fatalf("outline --ids --uses:\n%s", s)
 	}
 	b.Reset()
@@ -62,7 +62,7 @@ func main(io *ovid/io.Cap) i64 {
 	if code := Refs(dir, "Twice", false, Page{}, &b); code != 0 {
 		t.Fatal(b.String())
 	}
-	want = "demo/main.ov  fn:demo.Thrice\n    8: return Twice(x) + x\ndemo/main.ov  fn:demo.main\n   11: return Twice(Thrice(1)) + Twice(2)\n"
+	want = "demo/main.ov  fn:demo.Thrice\n   8: return Twice(x) + x\ndemo/main.ov  fn:demo.main\n  11: return Twice(Thrice(1)) + Twice(2)\n"
 	if !strings.HasPrefix(b.String(), want) {
 		t.Fatalf("refs:\n%s", b.String())
 	}
@@ -75,9 +75,13 @@ func main(io *ovid/io.Cap) i64 {
 		t.Fatal(b.String())
 	}
 	// Line 11 holds two matches and is printed once; total counts both.
-	want = "demo/main.ov  fn:demo.Twice\n    4: func Twice(x i64) i64 {\ndemo/main.ov  fn:demo.Thrice\n    8:   return Twice(x) + x\ndemo/main.ov  fn:demo.main\n   11:   return Twice(Thrice(1)) + Twice(2)\n"
+	want = "demo/main.ov  fn:demo.Twice\n   4: func Twice(x i64) i64 {\ndemo/main.ov  fn:demo.Thrice\n   8:   return Twice(x) + x\ndemo/main.ov  fn:demo.main\n  11:   return Twice(Thrice(1)) + Twice(2)\n"
 	if !strings.HasPrefix(b.String(), want) {
 		t.Fatalf("grep:\n%s", b.String())
+	}
+	// Exactly the six lines above and the last line: line 11 once.
+	if n := strings.Count(b.String(), "\n"); n != 7 {
+		t.Fatalf("grep printed %d lines, want 7:\n%s", n, b.String())
 	}
 	if l := lastLine(t, b.String()); l["total"] != 4.0 || l["count"] != 4.0 {
 		t.Fatalf("grep last line %v", l)

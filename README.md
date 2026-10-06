@@ -47,7 +47,12 @@ it under a seccomp filter that allows nothing else.
 
 ## Commands
 
-Every command prints JSON lines and the last line has `"ok"`. Exit codes:
+Every command prints JSON lines and the last line has `"ok"`, except
+`help`, `run`, `dump` without `-o` (one JSON document), and the read
+commands (`outline`, `show`, `refs`, `grep`), which print text by default:
+`outline`, `refs`, and `grep` still end with the JSON `"ok"` line, a
+successful `show` prints a header and the source with no JSON line, and
+`--json` makes any of the four print records. Exit codes:
 0 ok, 1 errors, 2 stale edit, 64 usage, 124 `run --timeout` ended the program, 125 `run` could not build or start it.
 
 | command | what |
@@ -57,7 +62,7 @@ Every command prints JSON lines and the last line has `"ok"`. Exit codes:
 | `ovid build [-o out]` / `ovid run [-- args]` | compile, leaving out `_test.ov` files; run passes stdio and the exit code through and reports a death by signal on stderr, on Linux with the statement and call stack |
 | `ovid run --json [--timeout 5s] [--max-output N]` | run with the output captured: one last line with `exit` or `signal`, `stdout`, `stderr`, and `truncated` |
 | `ovid test [--run substr] [--list]` | each `TestX(io *ovid/io.Cap) i64` in its own process; 0 passes; a failure names the `return` that produced it, a crash its signal (on Linux, the statement and call stack) |
-| `ovid outline [--pkg P] [--ids]` | packages, or a package's decls one line each: line and signature, with id and hash after `--ids` |
+| `ovid outline [--pkg P] [--ids]` | packages, or a package's decls one line each: line and signature (a struct by its field count), with id and hash after `--ids` |
 | `ovid show <id\|name>... [--ids] [--exprs]` | source of a node (a decl with its doc comment) under a header with its id and hash; `--ids` tags each statement line with its id; a statement's expressions are listed with ids and hashes |
 | `ovid refs <id\|name>` | every use the checker resolves to a func, type, field, const, param, or local, grouped by the decl it is in |
 | `ovid grep <regexp>` | matching lines grouped by file and enclosing decl |
@@ -192,8 +197,11 @@ systemd listens on `ovid-greet.socket` and starts `ovid-greet@.service`
 for each connection, with the connection as standard input and output,
 which the host `ovid build` writes for a handler already reads and writes.
 That process serves the connection's requests in turn and never gets a
-system call to open a socket of its own. An idle keep-alive connection
-holds its process; the socket's `MaxConnections` (64) bounds them.
+system call to open a socket of its own. The host waits for a request
+with no timeout, so each connection lives at most `RuntimeMaxSec` (60 s by
+default), and on a port one IP address holds at most 8 of the socket's 64
+connections. Behind a proxy every client is the proxy's address: raise
+`MaxConnectionsPerSource` there (a unix socket path has no such limit).
 
 ## Not yet
 

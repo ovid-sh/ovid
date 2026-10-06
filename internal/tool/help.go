@@ -20,8 +20,11 @@ const helpOverview = `ovid: a small compiled language and its toolchain, built f
 
 Source is plain .ov text. A module is a directory with ovid.mod; each
 subdirectory holding .ov files is one package, and its path is the package
-name. Every command prints JSON lines; the last line always has "ok".
-Exit codes: 0 ok, 1 errors, 2 stale edit, 64 usage, 124 run: timeout,
+name. Every command prints JSON lines with "ok" in the last line, except
+help, run, dump without -o (one JSON document), and the read commands
+outline, show, refs, grep, which print text (outline, refs, grep still end
+with the JSON "ok" line; show prints a header and the source, no JSON
+line; --json gives records). Exit codes: 0 ok, 1 errors, 2 stale edit, 64 usage, 124 run: timeout,
 125 run: could not build or start the program.
 Paths in records are relative to the working directory; with
 OVID_PATHS=module in the environment, to the module root.
@@ -290,7 +293,8 @@ ovid test [--run substr] [--list] [--no-confine]
   --list prints the tests without running them.
 ovid outline [--pkg P] [--all] [--uses] [--ids] [--json] [--offset N] [--limit N]
   Packages: "path  funcs=N types=N consts=N  imports ...  files", one a
-  line. --pkg P: the file's path, then "  line  sig" per decl; --ids adds
+  line. --pkg P: the file's path, then "  line  sig" per decl (a struct as
+  "type T struct { N fields }"; show prints the fields); --ids adds
   "  id hash=H" (a decl's id is its name, the hash guards an edit); --uses
   adds "used by pkg N, ..." or "unused", so a decl used by only one other
   package is a candidate to move there. --json: per decl id, kind, sig,
