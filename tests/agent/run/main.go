@@ -37,13 +37,15 @@ type Result struct {
 	Agents    []Agent  `json:"agents"`
 	Calls     int      `json:"calls"`
 	OvidCalls int      `json:"ovid_calls"`
-	Failed    int      `json:"failed"`
-	ReadB     int      `json:"bytes_read"`
-	WriteB    int      `json:"bytes_written"`
-	TokensIn  int      `json:"tokens_in"`
-	TokensOut int      `json:"tokens_out"`
-	CostUSD   float64  `json:"cost_usd"`
-	Seconds   float64  `json:"seconds"`
+	// OvidCmds counts those calls by subcommand (check, show, edit, ...).
+	OvidCmds  map[string]int `json:"ovid_cmds,omitempty"`
+	Failed    int            `json:"failed"`
+	ReadB     int            `json:"bytes_read"`
+	WriteB    int            `json:"bytes_written"`
+	TokensIn  int            `json:"tokens_in"`
+	TokensOut int            `json:"tokens_out"`
+	CostUSD   float64        `json:"cost_usd"`
+	Seconds   float64        `json:"seconds"`
 	// Outside lists tool inputs that named the repository or the exercise:
 	// a run that looked there is not a fair one.
 	Outside []string `json:"outside,omitempty"`
@@ -52,20 +54,21 @@ type Result struct {
 
 // Agent is what one Claude Code process reported.
 type Agent struct {
-	Prompt    string   `json:"prompt_sha256"` // of preamble.md and the task's prompt, before {{dir}} is filled in
-	Model     string   `json:"model"`
-	Stop      string   `json:"stop"` // the result's subtype: success, error_max_turns, ...
-	Turns     int      `json:"turns"`
-	Calls     int      `json:"calls"`
-	OvidCalls int      `json:"ovid_calls"`
-	Failed    int      `json:"failed"`
-	ReadB     int      `json:"bytes_read"`
-	WriteB    int      `json:"bytes_written"`
-	TokensIn  int      `json:"tokens_in"`
-	TokensOut int      `json:"tokens_out"`
-	CostUSD   float64  `json:"cost_usd"`
-	Seconds   float64  `json:"seconds"`
-	Outside   []string `json:"outside,omitempty"`
+	Prompt    string         `json:"prompt_sha256"` // of preamble.md and the task's prompt, before {{dir}} is filled in
+	Model     string         `json:"model"`
+	Stop      string         `json:"stop"` // the result's subtype: success, error_max_turns, ...
+	Turns     int            `json:"turns"`
+	Calls     int            `json:"calls"`
+	OvidCalls int            `json:"ovid_calls"`
+	OvidCmds  map[string]int `json:"ovid_cmds,omitempty"`
+	Failed    int            `json:"failed"`
+	ReadB     int            `json:"bytes_read"`
+	WriteB    int            `json:"bytes_written"`
+	TokensIn  int            `json:"tokens_in"`
+	TokensOut int            `json:"tokens_out"`
+	CostUSD   float64        `json:"cost_usd"`
+	Seconds   float64        `json:"seconds"`
+	Outside   []string       `json:"outside,omitempty"`
 }
 
 // Env is what the run depends on besides the task.
@@ -87,6 +90,7 @@ func main() {
 	budget := flag.Float64("budget", 2, "spending limit per agent, USD")
 	timeout := flag.Duration("timeout", 20*time.Minute, "time limit per run")
 	summary := flag.String("summary", "", "print a Markdown table of a results.jsonl and exit")
+	preamble := flag.String("preamble", "", "the preamble file (default: tests/agent/preamble.md), to compare wordings")
 	flag.Parse()
 	if *summary != "" {
 		if err := summarize(*summary); err != nil {
@@ -113,7 +117,10 @@ func main() {
 	if b, err := exec.Command("go", "build", "-o", ovid, "ovid/cmd/ovid").CombinedOutput(); err != nil {
 		fatal(fmt.Errorf("go build: %v\n%s", err, b))
 	}
-	pre, err := os.ReadFile(filepath.Join(repo, "tests", "agent", "preamble.md"))
+	if *preamble == "" {
+		*preamble = filepath.Join(repo, "tests", "agent", "preamble.md")
+	}
+	pre, err := os.ReadFile(*preamble)
 	if err != nil {
 		fatal(err)
 	}
@@ -193,6 +200,12 @@ func runTask(t agent.Task, i int, repo, bin, ovid, pre, model string, budget flo
 	for _, a := range r.Agents {
 		r.Calls += a.Calls
 		r.OvidCalls += a.OvidCalls
+		for k, n := range a.OvidCmds {
+			if r.OvidCmds == nil {
+				r.OvidCmds = map[string]int{}
+			}
+			r.OvidCmds[k] += n
+		}
 		r.Failed += a.Failed
 		r.ReadB += a.ReadB
 		r.WriteB += a.WriteB
@@ -205,6 +218,17 @@ func runTask(t agent.Task, i int, repo, bin, ovid, pre, model string, budget flo
 }
 
 var ovidCmd = regexp.MustCompile(`(^|[\s;&|(])ovid\s`)
+
+// ovidSub finds each ovid invocation's subcommand in a shell command,
+// past any leading -C DIR (ovid -C mod check), DIR quoted or not.
+var ovidSub = regexp.MustCompile(`(?:^|[\s;&|(])ovid\s+(?:-C\s+(?:"[^"]*"|'[^']*'|\S+)\s+)*([a-z]+)`)
+
+// ovidSubs counts the ovid subcommands in a shell command.
+func ovidSubs(command string, into map[string]int) {
+	for _, m := range ovidSub.FindAllStringSubmatch(command, -1) {
+		into[m[1]]++
+	}
+}
 
 // runAgent runs one Claude Code process in work and reads its stream.
 func runAgent(ctx context.Context, work, bin, prompt, model string, budget float64, transcript, repo string) Agent {
@@ -284,9 +308,13 @@ func runAgent(ctx context.Context, work, bin, prompt, model string, budget float
 				json.Unmarshal(c.Input, &in)
 				if c.Name == "Bash" && ovidCmd.MatchString(in.Command) {
 					a.OvidCalls++
+					if a.OvidCmds == nil {
+						a.OvidCmds = map[string]int{}
+					}
+					ovidSubs(in.Command, a.OvidCmds)
 				}
 				s := string(c.Input)
-				if strings.Contains(s, repo) || strings.Contains(s, "tests/agent") || strings.Contains(s, "ovid-sh") {
+				if namesDir(s, repo) || strings.Contains(s, "tests/agent") || strings.Contains(s, "ovid-sh") {
 					a.Outside = append(a.Outside, cut(s, 200))
 				}
 			}
@@ -330,6 +358,27 @@ func resultText(raw json.RawMessage) string {
 		b.WriteString(x.Text)
 	}
 	return b.String()
+}
+
+// namesDir reports whether s names dir itself or something under it. dir
+// must stand as a whole word of the shell command or JSON string: what
+// comes before it and what follows it (unless that is a / into it) must be
+// something that ends a token, not a byte that could be part of a longer
+// path (/var/tmp/ovid, /tmp/ovid-out, /tmp/ovid+copy).
+func namesDir(s, dir string) bool {
+	delim := func(c byte) bool { return strings.IndexByte(" \t\r\n\"'`;&|()<>=:", c) >= 0 }
+	for from := 0; ; {
+		i := strings.Index(s[from:], dir)
+		if i < 0 {
+			return false
+		}
+		i += from
+		end := i + len(dir)
+		if (i == 0 || delim(s[i-1])) && (end == len(s) || s[end] == '/' || delim(s[end])) {
+			return true
+		}
+		from = i + 1
+	}
 }
 
 // childEnv is this process's environment with ovid first on PATH and
