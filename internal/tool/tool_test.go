@@ -1098,6 +1098,51 @@ func withStdio(t *testing.T, stdout, stderr string, f func() int) int {
 	return f()
 }
 
+// TestUnsignedDivZero: udiv and urem by zero trap like / and %, and the
+// crash names the statement. Each is its own test, since the first trap
+// ends a process.
+func TestUnsignedDivZero(t *testing.T) {
+	dir := mkmod(t, map[string]string{
+		"demo/main.ov": "package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  return 0\n}\n",
+		"demo/main_test.ov": `package demo
+import ovid/io
+func Zero() i64 {
+  return 0
+}
+func TestUdiv(io *ovid/io.Cap) i64 {
+  return udiv(7, Zero())
+}
+func TestUrem(io *ovid/io.Cap) i64 {
+  return urem(7, Zero())
+}
+func TestFine(io *ovid/io.Cap) i64 {
+  return udiv(7, 7) - 1 + urem(7, 7)
+}
+`,
+	})
+	needExec(t)
+	var b bytes.Buffer
+	if code := Test(dir, "", false, &b); code != ExitFail {
+		t.Fatalf("code %d %s", code, b.String())
+	}
+	got := map[string]map[string]any{}
+	for _, r := range lines(t, b.String()) {
+		if r["fact"] == "test" {
+			got[r["id"].(string)] = r
+		}
+	}
+	if got["fn:demo.TestFine"]["ok"] != true {
+		t.Fatalf("fine %v", got["fn:demo.TestFine"])
+	}
+	for name, src := range map[string]string{"TestUdiv": "  return udiv(7, Zero())", "TestUrem": "  return urem(7, Zero())"} {
+		r := got["fn:demo."+name]
+		at, _ := r["at"].(map[string]any)
+		if r["signal"] != "floating point exception" || at["source"] != src {
+			t.Fatalf("%s: %v", name, r)
+		}
+	}
+}
+
 func TestTestCommand(t *testing.T) {
 	dir := mkmod(t, map[string]string{
 		"demo/main.ov": "package demo\nimport ovid/io\nfunc Two() i64 {\n  return 2\n}\nfunc main(io *ovid/io.Cap) i64 {\n  return 0\n}\n",
