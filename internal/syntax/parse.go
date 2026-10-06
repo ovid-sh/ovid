@@ -622,6 +622,9 @@ func (p *parser) stmt(s int, id string) *ir.Node {
 			p.expect(',')
 			name2 := p.ident()
 			ns2 := p.tok(name2)
+			if e.Name == "_" && name2 == "_" {
+				p.errorf("_, _ discards both results; receive the error")
+			}
 			p.expect('=')
 			v := p.parseExpr()
 			return &ir.Node{Op: "assign2", Name: e.Name, Two: &ir.Second{Name: name2, NameSpan: ns2}, Val: v, NameSpan: e.NameSpan}

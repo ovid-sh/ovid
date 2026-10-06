@@ -847,6 +847,9 @@ func Stmt(p *P, s i64, id i64) *Node {
     a2.namen = e.namen
     a2.name2p = p.tp
     a2.name2n = p.tn
+    if IsBlank(a2.namep, a2.namen) && IsBlank(a2.name2p, a2.name2n) {
+      Errorf(p, strptr("_, _ discards both results; receive the error"), strlen("_, _ discards both results; receive the error"))
+    }
     Expect(p, 61)
     a2.val = ParseExpr(p)
     return a2
