@@ -50,6 +50,12 @@
             echo "want one build receipt in ${program}/share/ovid" >&2
             exit 1
           fi
+          # syscalls_unknown means the list is incomplete, so a filter made
+          # from it could kill the program on a call it does make.
+          if ! jq -e '(.syscalls_unknown // 0) == 0' "''${receipts[0]}" > /dev/null; then
+            echo "${program}: the receipt's system calls are incomplete (syscalls_unknown)" >&2
+            exit 1
+          fi
           table=${pkgs.linuxHeaders}/include/asm/unistd_64.h
           names=
           for n in $(jq -r '.syscalls[]' "''${receipts[0]}"); do
