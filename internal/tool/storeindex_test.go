@@ -39,9 +39,10 @@ func main(io *ovid/io.Cap) i64 {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// mov [rcx+r8*8], rax: i lives in r8 and the base comes through rcx.
-	if !bytes.Contains(bin, []byte{0x4a, 0x89, 0x04, 0xc1}) {
-		t.Errorf("no mov [rcx+r8*8], rax")
+	// mov [r11+r8*8], rax: i lives in r8, and the base waits in the first
+	// temp register while the value is computed.
+	if !bytes.Contains(bin, []byte{0x4b, 0x89, 0x04, 0xc3}) {
+		t.Errorf("no mov [r11+r8*8], rax")
 	}
 	// imul rax, rax, 8: the index computed apart from the address.
 	if bytes.Contains(bin, []byte{0x48, 0x6b, 0xc0, 0x08}) {

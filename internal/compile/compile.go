@@ -1502,6 +1502,14 @@ func (c *cg) emitStore(addr, val *ir.Node, width int, off int32) error {
 	if err := c.emitExpr(n, 0); err != nil {
 		return err
 	}
+	if r, ok := c.tempReg(0, val); ok {
+		c.b.MovRegReg(r, asm.RAX)
+		if err := c.emitExpr(val, 1); err != nil {
+			return err
+		}
+		c.b.StoreMemReg(width, asm.RAX, r, index, off+d)
+		return nil
+	}
 	c.storeTemp(0)
 	if err := c.emitExpr(val, 1); err != nil {
 		return err

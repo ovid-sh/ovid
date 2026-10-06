@@ -1560,6 +1560,14 @@ func EmitStore(c *C, addr *ovid/parse.Node, val *ovid/parse.Node, width i64, off
   if EmitExpr(c, n, 0) != 0 {
     return c.err
   }
+  var r i64 = TempReg(c, 0, val)
+  if r >= 0 {
+    ovid/asm.MovRegReg(c.code, r, 0)
+    if EmitExpr(c, val, 1) != 0 {
+      return c.err
+    }
+    return ovid/asm.StoreMemReg(c.code, width, 0, r, ix, off + bd)
+  }
   StoreTemp(c, 0)
   if EmitExpr(c, val, 1) != 0 {
     return c.err
