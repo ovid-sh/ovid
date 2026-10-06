@@ -148,8 +148,9 @@ func ResetHeap(io *Cap, m *HeapMark) i64 {
   var p i64 = m.heap + m.used
   if io.heap + io.size == end {
     var page i64 = (p + 4095) & ^4095
-    if page < end {
-      syscall(SYS_MADVISE, page, end - page, 4, 0, 0, 0)
+    // A host may refuse madvise (seccomp); the loop below then zeroes
+    // those pages too.
+    if page < end && syscall(SYS_MADVISE, page, end - page, 4, 0, 0, 0) == 0 {
       end = page
     }
   }
