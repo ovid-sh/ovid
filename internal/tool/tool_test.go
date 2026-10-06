@@ -1694,7 +1694,7 @@ func TestSelfHost(t *testing.T) {
 	// Both dumps are valid JSON and say the same thing. A literal's bytes
 	// that are not UTF-8 (prog's asm tests have some) come out as
 	// value_hex, which loses nothing.
-	lit := mkmod(t, demo("package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  return load8(strptr(\"\\xb8\\n\") + 1) + strlen(\"é\")\n}\n"))
+	lit := mkmod(t, demo("package demo\nimport ovid/io\nconst T [3]i64 = {-1, 0, 7}\nfunc main(io *ovid/io.Cap) i64 {\n  return load8(strptr(\"\\xb8\\n\") + 1) + strlen(\"é\") + T[1] + len(T)\n}\n"))
 	for _, dir := range []string{prog, lit} {
 		b.Reset()
 		Dump(dir, "", "", &b)
@@ -1707,7 +1707,7 @@ func TestSelfHost(t *testing.T) {
 			t.Fatalf("dumps of %s differ", dir)
 		}
 	}
-	if b.Reset(); Dump(lit, "", "", &b) != 0 || !strings.Contains(b.String(), `"value_hex": "b80a"`) || !strings.Contains(b.String(), `"value": "é"`) {
+	if b.Reset(); Dump(lit, "", "", &b) != 0 || !strings.Contains(b.String(), `"value_hex": "b80a"`) || !strings.Contains(b.String(), `"value": "é"`) || !strings.Contains(b.String(), `"values": [`) {
 		t.Fatalf("dump of literals: %s", b.String())
 	}
 	// A source line that is not UTF-8 is still valid JSON in a diagnostic.

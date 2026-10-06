@@ -413,7 +413,7 @@ func EPkg(e *E, k *Pkg) i64 {
       if d.istab != 0 {
         WL(e, strptr(",\"type\":\"["), 10)
         WInt(e.io, e.b, d.tabn)
-        WL(e, strptr("]i64\",\"value\":0,\"table\":true,\"values\":["), 36)
+        WL(e, strptr("]i64\",\"value\":0,\"table\":true,\"values\":["), 39)
         var vi i64 = 0
         while vi < d.tabn {
           if vi > 0 {
