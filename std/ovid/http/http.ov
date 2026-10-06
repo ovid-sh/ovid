@@ -264,8 +264,8 @@ func SentHeaderLen(res *Response, name i64, n i64) i64 {
 func ReadStdio(io *ovid/io.Cap) *Request {
   var r *Request = ovid/io.Alloc(io, sizeof(Request)) as *Request
   // The buffer doubles up to one byte past MAX_REQUEST and no further:
-  // that byte tells input of exactly the limit from input over it, and
-  // no read goes past it.
+  // that byte distinguishes input of exactly the limit from input over
+  // it, and no read goes past it.
   var max i64 = MAX_REQUEST + 1
   var cap i64 = 4096
   var p i64 = ovid/io.Alloc(io, cap)
