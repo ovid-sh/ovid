@@ -707,7 +707,7 @@ func exprMax(n *ir.Node, lv int) int {
 	switch n.Op {
 	case "int", "bool", "name", "strptr", "strlen", "sizeof":
 		return -1
-	case "add", "sub", "mul", "div", "mod", "and", "or", "xor", "shl", "shr", "eq", "ne", "lt", "le", "gt", "ge":
+	case "add", "sub", "mul", "div", "mod", "and", "or", "xor", "shl", "shr", "ushr", "umulhi", "udiv", "urem", "ult", "eq", "ne", "lt", "le", "gt", "ge":
 		return max2(exprMax(n.Left, lv), exprMax(n.Right, lv+1), lv)
 	case "land", "lor":
 		return max1(exprMax(n.Left, lv), exprMax(n.Right, lv))
@@ -1165,6 +1165,22 @@ func (c *cg) arithRcx(op string) {
 		c.b.Cqo()
 		c.b.IdivRcx()
 		c.b.MovRegReg(asm.RAX, asm.RDX)
+	case "ushr":
+		c.b.ShrRaxCl()
+	case "umulhi":
+		c.b.MulRcx()
+		c.b.MovRegReg(asm.RAX, asm.RDX)
+	case "udiv":
+		c.b.XorEdxEdx()
+		c.b.DivRcx()
+	case "urem":
+		c.b.XorEdxEdx()
+		c.b.DivRcx()
+		c.b.MovRegReg(asm.RAX, asm.RDX)
+	case "ult":
+		c.b.CmpRaxRcx()
+		c.b.SetccAl(0x92)
+		c.b.MovzxRaxAl()
 	}
 }
 
@@ -1672,7 +1688,7 @@ func (c *cg) emitExpr(n *ir.Node, lv int) error {
 			return nil
 		}
 		return fmt.Errorf("name %s", n.Name)
-	case "add", "sub", "mul", "div", "mod", "and", "or", "xor", "shl", "shr":
+	case "add", "sub", "mul", "div", "mod", "and", "or", "xor", "shl", "shr", "ushr", "umulhi", "udiv", "urem", "ult":
 		return c.emitArith(n, lv)
 	case "eq", "ne", "lt", "le", "gt", "ge":
 		cc, err := c.emitCmp(n, lv)
@@ -1846,9 +1862,9 @@ func (c *cg) typeOf(n *ir.Node) string {
 		return "invalid"
 	}
 	switch n.Op {
-	case "int", "strptr", "strlen", "sizeof", "add", "sub", "mul", "div", "mod", "and", "or", "xor", "shl", "shr", "neg", "bnot", "load8", "load16", "load32", "load64", "bswap16", "bswap32", "bswap64", "syscall":
+	case "int", "strptr", "strlen", "sizeof", "add", "sub", "mul", "div", "mod", "and", "or", "xor", "shl", "shr", "ushr", "umulhi", "udiv", "urem", "neg", "bnot", "load8", "load16", "load32", "load64", "bswap16", "bswap32", "bswap64", "syscall":
 		return "i64"
-	case "bool", "eq", "ne", "lt", "le", "gt", "ge", "land", "lor", "not":
+	case "bool", "eq", "ne", "lt", "le", "gt", "ge", "ult", "land", "lor", "not":
 		return "bool"
 	case "name":
 		if n.Pkg != "" {

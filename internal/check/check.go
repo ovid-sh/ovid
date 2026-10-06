@@ -880,6 +880,13 @@ func (c *checker) expr0(e *env, n *ir.Node) string {
 		c.want(e, n.Left, "i64", "left of "+opText[n.Op])
 		c.want(e, n.Right, "i64", "right of "+opText[n.Op])
 		return "i64"
+	case "ushr", "umulhi", "udiv", "urem", "ult":
+		c.want(e, n.Left, "i64", "argument 1 of "+n.Op)
+		c.want(e, n.Right, "i64", "argument 2 of "+n.Op)
+		if n.Op == "ult" {
+			return "bool"
+		}
+		return "i64"
 	case "lt", "le", "gt", "ge":
 		c.want(e, n.Left, "i64", "left of "+opText[n.Op])
 		c.want(e, n.Right, "i64", "right of "+opText[n.Op])

@@ -181,6 +181,21 @@ func WOp(e *E, op i64) i64 {
   if op == OP_BSWAP64 {
     return WL(e, strptr("bswap64"), 7)
   }
+  if op == OP_USHR {
+    return WL(e, strptr("ushr"), 4)
+  }
+  if op == OP_UMULHI {
+    return WL(e, strptr("umulhi"), 6)
+  }
+  if op == OP_UDIV {
+    return WL(e, strptr("udiv"), 4)
+  }
+  if op == OP_UREM {
+    return WL(e, strptr("urem"), 4)
+  }
+  if op == OP_ULT {
+    return WL(e, strptr("ult"), 3)
+  }
   if op == OP_LOAD64 {
     return WL(e, strptr("load64"), 6)
   }
