@@ -1187,7 +1187,11 @@ func (c *checker) call(e *env, n *ir.Node) string {
 			}
 		}
 		is := Issue{Code: "unknown_name", ID: n.ID, Message: "undefined function " + path + "." + n.Func}
-		if s := Suggest(n.Func, cands); s != "" {
+		if other := c.elsewhere(path, n.Func); other != "" {
+			// The name exists one package over: the likelier slip, and
+			// its signature is the hint, as for a call that got there.
+			is.Hint = "did you mean " + other + "." + n.Func + "? " + c.sigText(other, n.Func)
+		} else if s := Suggest(n.Func, cands); s != "" {
 			is.Hint = "did you mean " + s + "?"
 		} else if c.pkgs[path] == nil {
 			is.Hint = "there is no package " + path
@@ -1231,6 +1235,24 @@ func (c *checker) callSig(n *ir.Node) (sig, bool) {
 	}
 	sg, ok := c.sigs[path+"."+n.Func]
 	return sg, ok
+}
+
+// elsewhere returns the path of a loaded package other than path that
+// declares a func named name, the lowest path when several do, or "".
+func (c *checker) elsewhere(path, name string) string {
+	found := ""
+	for p, pk := range c.pkgs {
+		if p == path || (found != "" && p > found) {
+			continue
+		}
+		for i := range pk.Funcs {
+			if pk.Funcs[i].Name == name {
+				found = p
+				break
+			}
+		}
+	}
+	return found
 }
 
 func (c *checker) sigText(path, name string) string {

@@ -1,0 +1,10 @@
+package demo
+import ovid/io
+import ovid/mem
+// A func called through the wrong package, when another loaded package
+// declares that very name: the hint names the package and the signature.
+func main(io *ovid/io.Cap) i64 {
+  var n i64 = ovid/mem.CLen(strptr("hi")) // error: unknown_name 15 hint="did you mean ovid/io.CLen? ovid/io: func CLen(p i64) i64"
+  var m i64 = ovid/io.FormatI64(n, 0) // error: unknown_name 15 hint="did you mean ovid/mem.FormatI64? ovid/mem: func FormatI64(dst i64, v i64) i64"
+  return n + m
+}
