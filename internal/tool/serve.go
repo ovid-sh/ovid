@@ -10,19 +10,31 @@ import (
 )
 
 // serveSrc is the stdio host the toolchain writes for an entry package
-// that has handle and no main. Its main joins the entry package itself, so
-// it cannot collide with a package of the module's, and the imports it
-// needs, ovid/io and ovid/http, are ones handle's signature already made
-// the package declare.
+// that has handle and no main: it serves the requests on stdin one after
+// another and resets the heap between two of them. Its main joins the
+// entry package itself, so it cannot collide with a package of the
+// module's, and the imports it needs, ovid/io and ovid/http, are ones
+// handle's signature already made the package declare. Its locals shadow
+// any func of the package with the same name.
 const serveSrc = `package %s
 
 func main(io *ovid/io.Cap) i64 {
-  var req *ovid/http.Request = ovid/http.ReadStdio(io)
-  var res *ovid/http.Response = ovid/http.NewResponse(io)
-  if ovid/http.Err(req) != 0 {
-    return ovid/http.WriteStdio(io, req, res, 0)
+  var s *ovid/http.Stdio = ovid/http.NewStdio(io)
+  var m *ovid/io.HeapMark = ovid/io.MarkHeap(io)
+  var req *ovid/http.Request = ovid/http.NextStdio(io, s)
+  while req != 0 as *ovid/http.Request {
+    var res *ovid/http.Response = ovid/http.NewResponse(io)
+    var result i64 = 0
+    if ovid/http.Err(req) == 0 {
+      result = handle(io, req, res)
+    }
+    if ovid/http.WriteStdio(io, req, res, result) != 0 {
+      return 1
+    }
+    ovid/io.ResetHeap(io, m)
+    req = ovid/http.NextStdio(io, s)
   }
-  return ovid/http.WriteStdio(io, req, res, handle(io, req, res))
+  return 0
 }
 `
 

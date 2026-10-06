@@ -1,0 +1,11 @@
+// exit: 0
+package demo
+
+import ovid/io
+import ovid/http
+
+// Empty stdin is no request: the stdio host writes nothing and exits 0.
+func handle(io *ovid/io.Cap, req *ovid/http.Request, res *ovid/http.Response) i64 {
+  ovid/http.Write(io, res, strptr("never"), 5)
+  return 0
+}

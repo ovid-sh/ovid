@@ -4,6 +4,7 @@ package tool
 
 import (
 	"bytes"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -34,10 +35,17 @@ func traceSyscalls(t *testing.T, bin string, args ...string) ([]sysCall, int) {
 // runs it.
 func traceRefusing(t *testing.T, refuse uint64, bin string, args ...string) ([]sysCall, int) {
 	t.Helper()
+	return traceCmd(t, refuse, exec.Command(bin, args...))
+}
+
+// traceCmd is traceRefusing for a command already set up, with its stdin
+// or stdout, say.
+func traceCmd(t *testing.T, refuse uint64, cmd *exec.Cmd) ([]sysCall, int) {
+	t.Helper()
+	bin := cmd.Path
 	// Every ptrace request must come from the thread that started the tracee.
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
-	cmd := exec.Command(bin, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Ptrace: true}
 	if err := cmd.Start(); err != nil {
 		t.Skipf("ptrace is not allowed here: %v", err)
@@ -253,6 +261,77 @@ func main(io *ovid/io.Cap) i64 {
 	}
 	if len(tried) != 2 || tried[0] != tried[1] {
 		t.Fatalf("munmap of %#x, want the same mapping tried by both resets", tried)
+	}
+}
+
+// TestServeHostResetsHeap: the stdio host gives each request's memory back
+// before it reads the next. Every request's handler takes 200 MiB, more
+// than the first region, so a mapping of its own, and the host unmaps it
+// before the next request. (The child's ru_maxrss would say less: Go
+// starts it sharing the test's own memory, whose peak exec carries over.)
+func TestServeHostResetsHeap(t *testing.T) {
+	const (
+		sysMmap   = 9
+		sysMunmap = 11
+		n         = 8
+	)
+	dir := mkmod(t, demo(`package demo
+import ovid/io
+import ovid/http
+func handle(io *ovid/io.Cap, req *ovid/http.Request, res *ovid/http.Response) i64 {
+  ovid/io.Alloc(io, 200 << 20)
+  ovid/http.Write(io, res, strptr("ok"), 2)
+  return 0
+}
+`))
+	// Files, not pipes: a traced command is never waited for, so nothing
+	// copies to or from a pipe for it.
+	in := filepath.Join(t.TempDir(), "in")
+	if err := os.WriteFile(in, bytes.Repeat([]byte("GET / HTTP/1.1\r\n\r\n"), n), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stdin, err := os.Open(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stdin.Close()
+	stdout, err := os.Create(filepath.Join(t.TempDir(), "out"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stdout.Close()
+	cmd := exec.Command(mustBuild(t, dir))
+	cmd.Stdin, cmd.Stdout = stdin, stdout
+	calls, code := traceCmd(t, ^uint64(0), cmd)
+	if code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	out, _ := os.ReadFile(stdout.Name())
+	if want := bytes.Repeat([]byte("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"), n); !bytes.Equal(out, want) {
+		t.Fatalf("got %q, want %d responses", out, n)
+	}
+	live := map[uint64]uint64{}
+	unmaps := 0
+	for _, c := range calls {
+		switch c.nr {
+		case sysMmap:
+			if c.ret < 0 {
+				t.Fatalf("mmap of %d bytes failed: %d", c.args[1], c.ret)
+			}
+			live[uint64(c.ret)] = c.args[1]
+		case sysMunmap:
+			if c.ret != 0 || live[c.args[0]] != c.args[1] {
+				t.Fatalf("munmap(%#x, %d) = %d, not a whole mapping given back", c.args[0], c.args[1], c.ret)
+			}
+			delete(live, c.args[0])
+			unmaps++
+		}
+		if len(live) > 2 {
+			t.Fatalf("%d mappings live at once, want the startup region and one request's", len(live))
+		}
+	}
+	if unmaps != n || len(live) != 1 {
+		t.Fatalf("%d munmaps, %d mappings left, want %d and only the startup region", unmaps, len(live), n)
 	}
 }
 

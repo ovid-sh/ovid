@@ -1,0 +1,32 @@
+// stdin: "POST /echo HTTP/1.1\r\n"
+// stdin: "Content-Length: 3\r\n"
+// stdin: "\r\n"
+// stdin: "abc"
+// stdin: "GET /echo HTTP/1.1\r\n"
+// stdin: "\r\n"
+// stdin: "POST /echo HTTP/1.0\r\n"
+// stdin: "content-length: 2\r\n"
+// stdin: "\r\n"
+// stdin: "xy"
+// stdin: "NOT A REQUEST\r\n"
+// stdin: "\r\n"
+// stdin: "GET /never HTTP/1.1\r\n"
+// stdin: "\r\n"
+// stdout: "HTTP/1.1 200 OK\r\nContent-Length: 9\r\n\r\nPOST: abc"
+// stdout: "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nGET: "
+// stdout: "HTTP/1.1 200 OK\r\nContent-Length: 8\r\n\r\nPOST: xy"
+// stdout: "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n"
+package demo
+
+import ovid/io
+import ovid/http
+
+// The stdio host serves the requests on stdin one after another: a body
+// is Content-Length bytes, none without it, and a request it cannot read
+// is answered and is the last.
+func handle(io *ovid/io.Cap, req *ovid/http.Request, res *ovid/http.Response) i64 {
+  ovid/http.Write(io, res, ovid/http.Method(req), ovid/http.MethodLen(req))
+  ovid/http.Write(io, res, strptr(": "), strlen(": "))
+  ovid/http.Write(io, res, ovid/http.Body(req), ovid/http.BodyLen(req))
+  return 0
+}
