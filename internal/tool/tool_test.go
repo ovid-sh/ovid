@@ -1144,6 +1144,50 @@ func TestFine(io *ovid/io.Cap) i64 {
 	}
 }
 
+// TestTableBounds: an index one past a table's end, or negative, traps
+// with an illegal instruction and the crash names the statement.
+func TestTableBounds(t *testing.T) {
+	dir := mkmod(t, map[string]string{
+		"demo/main.ov": "package demo\nimport ovid/io\nconst T [3]i64 = {4, 5, 6}\nfunc main(io *ovid/io.Cap) i64 {\n  return 0\n}\n",
+		"demo/main_test.ov": `package demo
+import ovid/io
+func At(i i64) i64 {
+  return T[i]
+}
+func TestPastEnd(io *ovid/io.Cap) i64 {
+  return At(len(T))
+}
+func TestNegative(io *ovid/io.Cap) i64 {
+  return At(0 - 1)
+}
+func TestEdges(io *ovid/io.Cap) i64 {
+  return At(0) + At(len(T) - 1) - 10
+}
+`,
+	})
+	needExec(t)
+	var b bytes.Buffer
+	if code := Test(dir, "", false, &b); code != ExitFail {
+		t.Fatalf("code %d %s", code, b.String())
+	}
+	got := map[string]map[string]any{}
+	for _, r := range lines(t, b.String()) {
+		if r["fact"] == "test" {
+			got[r["id"].(string)] = r
+		}
+	}
+	if got["fn:demo.TestEdges"]["ok"] != true {
+		t.Fatalf("edges %v", got["fn:demo.TestEdges"])
+	}
+	for _, name := range []string{"TestPastEnd", "TestNegative"} {
+		r := got["fn:demo."+name]
+		at, _ := r["at"].(map[string]any)
+		if r["signal"] != "illegal instruction" || at["source"] != "  return T[i]" {
+			t.Fatalf("%s: %v", name, r)
+		}
+	}
+}
+
 func TestTestCommand(t *testing.T) {
 	dir := mkmod(t, map[string]string{
 		"demo/main.ov": "package demo\nimport ovid/io\nfunc Two() i64 {\n  return 2\n}\nfunc main(io *ovid/io.Cap) i64 {\n  return 0\n}\n",
@@ -1276,6 +1320,44 @@ func TestProgTests(t *testing.T) {
 	needExec(t)
 	if code := Test(filepath.Join(repo(t), "prog"), "", false, &b); code != 0 {
 		t.Fatalf("prog tests fail:\n%s", b.String())
+	}
+}
+
+// TestOutlineTable: outline shows a table in its declared shape, not as a
+// const with a value.
+func TestOutlineTable(t *testing.T) {
+	dir := mkmod(t, demo("package demo\nimport ovid/io\nconst Pow [3]i64 = {1, 10, 100}\nconst K i64 = 7\nfunc main(io *ovid/io.Cap) i64 {\n  return Pow[0] + K\n}\n"))
+	var b bytes.Buffer
+	Outline(dir, "demo", false, false, Page{}, &b)
+	sigs := map[string]any{}
+	for _, r := range lines(t, b.String()) {
+		if r["id"] != nil {
+			sigs[r["id"].(string)] = r["sig"]
+		}
+	}
+	if sigs["cn:demo.Pow"] != "const Pow [3]i64" || sigs["cn:demo.K"] != "const K i64 = 7" {
+		t.Fatalf("sigs %v", sigs)
+	}
+}
+
+// TestMoveTableUse: a func whose only use of a package is a table read or
+// its length brings that import along when it moves.
+func TestMoveTableUse(t *testing.T) {
+	dir := mkmod(t, map[string]string{
+		"demo/main.ov": "package demo\nimport ovid/io\nimport util\nfunc Sum() i64 {\n  return util.Primes[0] + len(util.Primes)\n}\nfunc main(io *ovid/io.Cap) i64 {\n  return 0\n}\n",
+		"util/util.ov": "package util\nconst Primes [2]i64 = {2, 3}\n",
+	})
+	var b bytes.Buffer
+	if code := Move(dir, "Sum", "other", "", false, &b); code != 0 {
+		t.Fatalf("move %d: %s", code, b.String())
+	}
+	src, _ := os.ReadFile(filepath.Join(dir, "other/other.ov"))
+	if !strings.Contains(string(src), "import util\n") || !strings.Contains(string(src), "util.Primes[0] + len(util.Primes)") {
+		t.Fatalf("other.ov:\n%s", src)
+	}
+	b.Reset()
+	if code := Check(dir, false, &b); code != 0 {
+		t.Fatalf("after move: %s", b.String())
 	}
 }
 
@@ -1650,7 +1732,7 @@ func TestSelfHost(t *testing.T) {
 	// Both dumps are valid JSON and say the same thing. A literal's bytes
 	// that are not UTF-8 (prog's asm tests have some) come out as
 	// value_hex, which loses nothing.
-	lit := mkmod(t, demo("package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  return load8(strptr(\"\\xb8\\n\") + 1) + strlen(\"é\")\n}\n"))
+	lit := mkmod(t, demo("package demo\nimport ovid/io\nconst T [3]i64 = {-1, 0, 7}\nconst E [0]i64 = {}\nfunc main(io *ovid/io.Cap) i64 {\n  return load8(strptr(\"\\xb8\\n\") + 1) + strlen(\"é\") + T[1] + len(T)\n}\n"))
 	for _, dir := range []string{prog, lit} {
 		b.Reset()
 		Dump(dir, "", "", &b)
@@ -1663,7 +1745,7 @@ func TestSelfHost(t *testing.T) {
 			t.Fatalf("dumps of %s differ", dir)
 		}
 	}
-	if b.Reset(); Dump(lit, "", "", &b) != 0 || !strings.Contains(b.String(), `"value_hex": "b80a"`) || !strings.Contains(b.String(), `"value": "é"`) {
+	if b.Reset(); Dump(lit, "", "", &b) != 0 || !strings.Contains(b.String(), `"value_hex": "b80a"`) || !strings.Contains(b.String(), `"value": "é"`) || !strings.Contains(b.String(), `"values": [`) {
 		t.Fatalf("dump of literals: %s", b.String())
 	}
 	// A source line that is not UTF-8 is still valid JSON in a diagnostic.

@@ -134,7 +134,33 @@ func Max(a i64, b i64) i64 {
 }
 
 func LeafOp(op i64) bool {
-  return op == ovid/parse.OP_INT || op == ovid/parse.OP_SIZEOF || op == ovid/parse.OP_STRPTR || op == ovid/parse.OP_STRLEN
+  return op == ovid/parse.OP_INT || op == ovid/parse.OP_SIZEOF || op == ovid/parse.OP_STRPTR || op == ovid/parse.OP_STRLEN || op == ovid/parse.OP_LEN
+}
+
+// TableOf finds the table an index or len node names, placing its elements
+// in rodata on first use.
+func TableOf(c *C, n *ovid/parse.Node) *ovid/parse.Decl {
+  var pp i64 = c.pkg.pathp
+  var pn i64 = c.pkg.pathn
+  if n.pkgn != 0 {
+    pp = n.pkgp
+    pn = n.pkgn
+  }
+  var k *ovid/parse.Pkg = FindPkg(c, pp, pn)
+  if k == 0 as *ovid/parse.Pkg {
+    return 0 as *ovid/parse.Decl
+  }
+  var d *ovid/parse.Decl = ovid/parse.FindDecl(k.cs, n.namep, n.namen)
+  if d == 0 as *ovid/parse.Decl {
+    return d
+  }
+  if d.istab == 0 {
+    return 0 as *ovid/parse.Decl
+  }
+  if d.ro == 0 {
+    d.ro = ovid/asm.RoBytes(c.code, d.tab, d.tabn * 8) + 1
+  }
+  return d
 }
 
 // ArithOp: the binary operators that EmitArith evaluates into rax, the
@@ -326,7 +352,7 @@ func ExprPeak(n *ovid/parse.Node, lv i64) i64 {
     var r i64 = ExprPeak(n.right, lv)
     return Max(l, r)
   }
-  if UnaryOp(op) {
+  if UnaryOp(op) || op == ovid/parse.OP_INDEX {
     return ExprPeak(n.arg, lv)
   }
   if op == ovid/parse.OP_FIELD {
@@ -470,7 +496,7 @@ func TypeOf(c *C, n *ovid/parse.Node) i64 {
   if LeafOp(op) || ArithOp(op) || op == ovid/parse.OP_NEG || op == ovid/parse.OP_BNOT || ovid/parse.BswapOp(op) {
     return SetI64(c)
   }
-  if ovid/parse.LoadOp(op) || op == ovid/parse.OP_SYSCALL {
+  if ovid/parse.LoadOp(op) || op == ovid/parse.OP_SYSCALL || op == ovid/parse.OP_INDEX {
     return SetI64(c)
   }
   if op == ovid/parse.OP_BOOL || CmpOp(op) || op == ovid/parse.OP_LAND || op == ovid/parse.OP_LOR || op == ovid/parse.OP_NOT {
@@ -1839,6 +1865,34 @@ func EmitExpr(c *C, n *ovid/parse.Node, lv i64) i64 {
     var off i64 = ovid/asm.Intern(c.code, n.strp, n.strn)
     ovid/asm.MovRegImm64(c.code, 0, 0)
     ovid/asm.AbsHere(c.code, off)
+    return 0
+  }
+  if op == ovid/parse.OP_LEN {
+    var lt *ovid/parse.Decl = TableOf(c, n)
+    if lt == 0 as *ovid/parse.Decl {
+      return FailIn(c, strptr("no table in "), strlen("no table in "))
+    }
+    ovid/asm.MovRegImm(c.code, 0, lt.tabn)
+    return 0
+  }
+  if op == ovid/parse.OP_INDEX {
+    // rax = table[rax], after an unsigned check of rax against the
+    // length, so a negative index trips it too; ud2 is the trap.
+    var it *ovid/parse.Decl = TableOf(c, n)
+    if it == 0 as *ovid/parse.Decl {
+      return FailIn(c, strptr("no table in "), strlen("no table in "))
+    }
+    if EmitExpr(c, n.arg, lv) != 0 {
+      return c.err
+    }
+    ovid/asm.MovRegImm64(c.code, 1, 0)
+    ovid/asm.AbsHere(c.code, it.ro - 1)
+    ovid/asm.AluRegImm(c.code, 7, 0, it.tabn)
+    var ok i64 = ovid/asm.NewLabel(c.code)
+    ovid/asm.Jcc(c.code, 0x82, ok)
+    ovid/asm.Ud2(c.code)
+    ovid/asm.Mark(c.code, ok)
+    ovid/asm.LoadMem(c.code, 64, 1, 48, 0)
     return 0
   }
   if op == ovid/parse.OP_STRLEN {

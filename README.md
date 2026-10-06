@@ -96,6 +96,7 @@ re-read).
 ## Language, briefly
 
 `i64`, `bool`, and pointers to structs (`*T`). Struct fields are 8 bytes and `sizeof(T)` gives a struct's size.
+Read-only constant tables (`const T [N]i64 = {...}`, read as `T[i]` with a bounds check, `len(T)`).
 No struct values, globals, function pointers, methods, generics, or implicit
 allocation. At most six parameters, one result. Operators follow Go
 precedence and are signed; `>>` is arithmetic, and `ushr`, `umulhi`, `udiv`, `urem`, and `ult` are the unsigned forms. String literals exist only as `strptr("…")`
@@ -124,7 +125,7 @@ cmp /tmp/s1 /tmp/s2                        # byte-identical
 
 The two compilers emit byte-identical binaries for the same source, and
 `go test ./internal/tool -run TestSelfHost` checks it. The self-hosted
-compiler is about 112 KB, and `TestSelfHostSize` fails if it outgrows its
+compiler is about 120 KB, and `TestSelfHostSize` fails if it outgrows its
 budget. On starship (Ryzen 7 8745HS, 2026-10-04) it built `prog/` in 9 ms,
 against 27 ms for the Go one, and a generated program of 100,000 funcs
 (300,000 lines) in 0.57 s against 2.25 s. One command measures all of it:

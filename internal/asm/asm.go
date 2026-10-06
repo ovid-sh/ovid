@@ -338,6 +338,9 @@ func (b *Buf) ImulRcx() { b.emit(0x48, 0xF7, 0xE9) }
 // Int3 encodes int3, which pads code that never runs.
 func (b *Buf) Int3() { b.emit(0xCC) }
 
+// Ud2 traps with an illegal instruction: a failed check.
+func (b *Buf) Ud2() { b.emit(0x0F, 0x0B) }
+
 func (b *Buf) NegRax() { b.emit(0x48, 0xF7, 0xD8) }
 
 func (b *Buf) NotRax() { b.emit(0x48, 0xF7, 0xD0) }

@@ -527,6 +527,25 @@ func Int3(c *Code) i64 {
   return 0
 }
 
+// Ud2 traps with an illegal instruction: a failed check.
+func Ud2(c *Code) i64 {
+  E(c, 0x0F)
+  E(c, 0x0B)
+  return 0
+}
+
+// RoBytes appends n bytes at p to rodata and returns their offset.
+func RoBytes(c *Code, p i64, n i64) i64 {
+  while (c.ron + n) > c.rocap {
+    c.ro = Double(c, c.ro, c.rocap)
+    c.rocap = c.rocap * 2
+  }
+  var off i64 = c.ron
+  ovid/mem.Copy(c.ro + off, p, n)
+  c.ron = off + n
+  return off
+}
+
 func NegRax(c *Code) i64 {
   E(c, 0x48)
   E(c, 0xF7)

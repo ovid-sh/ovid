@@ -196,6 +196,12 @@ func WOp(e *E, op i64) i64 {
   if op == OP_ULT {
     return WL(e, strptr("ult"), 3)
   }
+  if op == OP_INDEX {
+    return WL(e, strptr("index"), 5)
+  }
+  if op == OP_LEN {
+    return WL(e, strptr("len"), 3)
+  }
   if op == OP_LOAD64 {
     return WL(e, strptr("load64"), 6)
   }
@@ -404,8 +410,27 @@ func EPkg(e *E, k *Pkg) i64 {
     while d != 0 as *Decl {
       WC(e, 123)
       EDeclId(e, strptr("cn:"), 3, d)
-      WL(e, strptr(",\"type\":\"i64\",\"value\":"), 22)
-      WInt(e.io, e.b, d.val)
+      if d.istab != 0 {
+        WL(e, strptr(",\"type\":\"["), 10)
+        WInt(e.io, e.b, d.tabn)
+        WL(e, strptr("]i64\",\"value\":0,\"table\":true"), strlen("]i64\",\"value\":0,\"table\":true"))
+        // An empty table has no values key, as the Go dump omits it.
+        if d.tabn > 0 {
+          WL(e, strptr(",\"values\":["), strlen(",\"values\":["))
+          var vi i64 = 0
+          while vi < d.tabn {
+            if vi > 0 {
+              WC(e, 44)
+            }
+            WInt(e.io, e.b, load64(d.tab + (vi * 8)))
+            vi = vi + 1
+          }
+          WC(e, 93)
+        }
+      } else {
+        WL(e, strptr(",\"type\":\"i64\",\"value\":"), 22)
+        WInt(e.io, e.b, d.val)
+      }
       WC(e, 125)
       d = d.next
       if d != 0 as *Decl {

@@ -70,6 +70,7 @@ File:
   package app/util          // must equal the directory path
   import ovid/io            // one import per line, the full path
   const Limit i64 = 64      // consts are i64
+  const Pow [3]i64 = {1, 10, 100}   // a table: read-only, Pow[i] and len(Pow)
   type Pair struct {        // fields are i64, bool, or *T; one per line
     a i64
     next *Pair
@@ -90,6 +91,14 @@ Imports may not form a cycle, directly or through other packages
 Types: i64, bool, *T (T a struct in this package or path.T from an import).
 No struct values, slices, arrays, strings, generics, methods, globals, or
 closures. At most 6 params; exactly one result type.
+
+Tables: const Name [N]i64 = {e, ...} is a read-only table of N constant
+expressions in the binary's data, which may run over several lines. It is
+not a value: read Name[i] (i64; i outside 0..N-1 kills the program with
+an illegal instruction, which ovid test reports at the statement) and
+len(Name) (N, a compile-time constant), also as path.Name[i] from another
+package. len is a keyword only before a ( (spaces or tabs may sit between);
+elsewhere a variable may be named len.
 
 Statements: var x T = e | var x T (zero: 0, false, or a null pointer) | x = e | p.f = e | if c { } else if c { } else { }
 | while c { } | return e | store8/16/32/64(addr, v) (the low bits of v) | call(...).

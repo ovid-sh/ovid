@@ -42,6 +42,8 @@ const OP_UMULHI i64 = 33
 const OP_UDIV i64 = 34
 const OP_UREM i64 = 35
 const OP_ULT i64 = 36
+const OP_INDEX i64 = 37
+const OP_LEN i64 = 38
 const OP_LOR i64 = 40
 const OP_LAND i64 = 41
 const OP_EQ i64 = 42
@@ -135,7 +137,9 @@ type Node struct {
 // typ is the const/field/param type or the func result; sub holds fields or
 // params. A func also has its package (set by IndexFuncs) and, for the code
 // generator, its label and whether it is reachable from main. The checker
-// sets dup on a func whose name was already declared in its package.
+// sets dup on a func whose name was already declared in its package. A
+// table (const Name [N]i64) has istab set, its N elements at tab, and ro,
+// once the code generator has placed them in rodata, their offset + 1.
 type Decl struct {
   namep i64
   namen i64
@@ -152,6 +156,10 @@ type Decl struct {
   lab i64
   live i64
   dup i64
+  tab i64
+  tabn i64
+  istab i64
+  ro i64
 }
 
 // Pkg is one package: the merged result of its files. mark, ord, low, and
@@ -421,6 +429,9 @@ func ParseConst(p *P, s i64) i64 {
   Ident(p)
   var np i64 = p.tp
   var nn i64 = p.tn
+  if PeekByte(p, 91) {
+    return ParseTable(p, s, np, nn)
+  }
   ParseType(p)
   var tp i64 = p.tp
   var tn i64 = p.tn
@@ -453,6 +464,78 @@ func ParseConst(p *P, s i64) i64 {
   return 0
 }
 
+// ParseTable reads the rest of const Name [N]i64 = {e, ...}: N elements,
+// each a constant expression, which may run over several lines.
+func ParseTable(p *P, s i64, np i64, nn i64) i64 {
+  Expect(p, 91)
+  if !IsNum(p) {
+    Errorf(p, strptr("expected the table's length"), strlen("expected the table's length"))
+    return 0
+  }
+  var want i64 = Number(p).ival
+  Expect(p, 93)
+  ExpectKw(p, strptr("i64"), 3)
+  Expect(p, 61)
+  Expect(p, 123)
+  var cap i64 = 16
+  var vals i64 = ovid/io.Alloc(p.io, cap * 8)
+  var n i64 = 0
+  while p.err == 0 && !PeekByte(p, 125) {
+    if Eof(p) {
+      Errorf(p, strptr("unclosed table"), strlen("unclosed table"))
+      return 0
+    }
+    var ex *Node = ParseExpr(p)
+    p.cok = true
+    var v i64 = EvalConst(p, ex)
+    if !p.cok {
+      if ErrBegin(p) {
+        EW(p, strptr("element "), strlen("element "))
+        EWInt(p, n)
+        EW(p, strptr(" of table "), strlen(" of table "))
+        EW(p, np, nn)
+        EW(p, strptr(" is not a constant integer expression"), strlen(" is not a constant integer expression"))
+        ErrEnd(p)
+      }
+      return 0
+    }
+    if n >= cap {
+      var more i64 = ovid/io.Alloc(p.io, cap * 16)
+      ovid/mem.Copy(more, vals, cap * 8)
+      vals = more
+      cap = cap * 2
+    }
+    store64(vals + (n * 8), v)
+    n = n + 1
+    if !PeekByte(p, 125) {
+      Expect(p, 44)
+    }
+  }
+  Expect(p, 125)
+  if n != want {
+    if ErrBegin(p) {
+      EW(p, strptr("table "), strlen("table "))
+      EW(p, np, nn)
+      EW(p, strptr(" is declared ["), strlen(" is declared ["))
+      EWInt(p, want)
+      EW(p, strptr("]i64 but has "), strlen("]i64 but has "))
+      EWInt(p, n)
+      EW(p, strptr(" elements"), strlen(" elements"))
+      ErrEnd(p)
+    }
+    return 0
+  }
+  var d *Decl = NewDecl(p, np, nn, s)
+  d.typp = strptr("i64")
+  d.typn = 3
+  d.istab = 1
+  d.tab = vals
+  d.tabn = n
+  AddConst(p.pkg, d)
+  ExpectEnd(p)
+  return 0
+}
+
 // EvalConst folds a const expression with Go int64 semantics; it clears
 // p.cok if n is not constant.
 func EvalConst(p *P, n *Node) i64 {
@@ -479,9 +562,35 @@ func EvalConst(p *P, n *Node) i64 {
     var c *Decl = p.pkg.cs
     while c != 0 as *Decl {
       if ovid/mem.Eq(c.namep, c.namen, n.namep, n.namen) {
+        if c.istab != 0 {
+          p.cok = false
+        }
         return c.val
       }
       c = c.next
+    }
+    p.cok = false
+    return 0
+  }
+  if op == OP_LEN {
+    // len(Table) of a table in this package, declared above.
+    if n.pkgn > 0 && !ovid/mem.Eq(n.pkgp, n.pkgn, p.pkg.pathp, p.pkg.pathn) {
+      if ErrBegin(p) {
+        EW(p, strptr("a const's value cannot name another package's table ("), strlen("a const's value cannot name another package's table ("))
+        EW(p, n.pkgp, n.pkgn)
+        EW(p, strptr("."), 1)
+        EW(p, n.namep, n.namen)
+        EW(p, strptr("); write the number"), strlen("); write the number"))
+        ErrEnd(p)
+      }
+      return 0
+    }
+    var lc *Decl = p.pkg.cs
+    while lc != 0 as *Decl {
+      if lc.istab != 0 && ovid/mem.Eq(lc.namep, lc.namen, n.namep, n.namen) {
+        return lc.tabn
+      }
+      lc = lc.next
     }
     p.cok = false
     return 0
@@ -956,6 +1065,25 @@ func Postfix(p *P) *Node {
       c.off = e.off
       c.end = p.last
       e = c
+    } else if PeekByte(p, 91) {
+      // Name[i] reads a table; the name node is replaced, not kept.
+      if e.op != OP_NAME {
+        Errorf(p, strptr("only a table can be indexed"), strlen("only a table can be indexed"))
+        return e
+      }
+      Expect(p, 91)
+      var ix *Node = ParseExpr(p)
+      Expect(p, 93)
+      var t *Node = NewNode(p, OP_INDEX)
+      t.num = Eid(p)
+      t.namep = e.namep
+      t.namen = e.namen
+      t.pkgp = e.pkgp
+      t.pkgn = e.pkgn
+      t.arg = ix
+      t.off = e.off
+      t.end = p.last
+      e = t
     } else {
       return e
     }
@@ -1000,6 +1128,24 @@ func Primary0(p *P) *Node {
   if PeekKw(p, strptr("syscall"), 7) {
     Ident(p)
     return CallArgs(p, OP_SYSCALL, 0, 0, 0, 0)
+  }
+  if PeekLen(p) {
+    // len(Table), a compile-time constant.
+    Ident(p)
+    Expect(p, 40)
+    var tn *Node = Primary(p)
+    if tn.op != OP_NAME {
+      Errorf(p, strptr("len takes a table"), strlen("len takes a table"))
+      return tn
+    }
+    Expect(p, 41)
+    var ln *Node = NewNode(p, OP_LEN)
+    ln.num = Eid(p)
+    ln.namep = tn.namep
+    ln.namen = tn.namen
+    ln.pkgp = tn.pkgp
+    ln.pkgn = tn.pkgn
+    return ln
   }
   var uop i64 = 0
   if PeekKw(p, strptr("ushr"), 4) {

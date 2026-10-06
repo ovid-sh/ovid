@@ -393,12 +393,41 @@ func CheckPkgConst(c *Ch, pkp i64, pkn i64, np i64, nn i64) i64 {
   }
   var k *ovid/parse.Pkg = FindPkg(c, pkp, pkn)
   if k != 0 as *ovid/parse.Pkg {
-    if ovid/parse.FindDecl(k.cs, np, nn) != 0 as *ovid/parse.Decl {
+    var cd *ovid/parse.Decl = ovid/parse.FindDecl(k.cs, np, nn)
+    if cd != 0 as *ovid/parse.Decl {
+      if cd.istab != 0 {
+        Err(c, strptr("bad_type"), strlen("bad_type"), strptr("a table is not a value"), strlen("a table is not a value"))
+        return SetBad(c)
+      }
       return SetI64(c)
     }
   }
   Err(c, strptr("unknown_name"), strlen("unknown_name"), np, nn)
   return SetBad(c)
+}
+
+// Table resolves the table an index or len node names, in this package or
+// the one it spells, reporting an unknown name or a const that is no table.
+func Table(c *Ch, n *ovid/parse.Node) *ovid/parse.Decl {
+  var pp i64 = c.pathp
+  var pn i64 = c.pathn
+  if n.pkgn != 0 {
+    pp = n.pkgp
+    pn = n.pkgn
+  }
+  var k *ovid/parse.Pkg = FindPkg(c, pp, pn)
+  if k != 0 as *ovid/parse.Pkg {
+    var cd *ovid/parse.Decl = ovid/parse.FindDecl(k.cs, n.namep, n.namen)
+    if cd != 0 as *ovid/parse.Decl {
+      if cd.istab == 0 {
+        Err(c, strptr("bad_type"), strlen("bad_type"), strptr("a const is not a table"), strlen("a const is not a table"))
+        return 0 as *ovid/parse.Decl
+      }
+      return cd
+    }
+  }
+  Err(c, strptr("unknown_name"), strlen("unknown_name"), n.namep, n.namen)
+  return 0 as *ovid/parse.Decl
 }
 
 func Imported(c *Ch, pp i64, pn i64) bool {
@@ -552,11 +581,33 @@ func CheckExprIn(c *Ch, n *ovid/parse.Node) i64 {
     if loc != 0 {
       return SetTy(c, load64(loc + 16), load64(loc + 24))
     }
-    if ovid/parse.FindDecl(c.pkg.cs, n.namep, n.namen) != 0 as *ovid/parse.Decl {
+    var cd *ovid/parse.Decl = ovid/parse.FindDecl(c.pkg.cs, n.namep, n.namen)
+    if cd != 0 as *ovid/parse.Decl {
+      if cd.istab != 0 {
+        Err(c, strptr("bad_type"), strlen("bad_type"), strptr("a table is not a value"), strlen("a table is not a value"))
+        return SetBad(c)
+      }
       return SetI64(c)
     }
     Err(c, strptr("unknown_name"), strlen("unknown_name"), n.namep, n.namen)
     return SetBad(c)
+  }
+  if op == ovid/parse.OP_INDEX || op == ovid/parse.OP_LEN {
+    // A param or local of the name shadows a table, as it does a const.
+    var td *ovid/parse.Decl = 0 as *ovid/parse.Decl
+    if n.pkgn == 0 && Lookup(c, n.namep, n.namen) != 0 {
+      Err(c, strptr("bad_type"), strlen("bad_type"), strptr("a variable is not a table"), strlen("a variable is not a table"))
+    } else {
+      td = Table(c, n)
+    }
+    if op == ovid/parse.OP_INDEX {
+      CheckExpr(c, n.arg)
+      NeedI64(c, strptr("index"), strlen("index"))
+    }
+    if td == 0 as *ovid/parse.Decl {
+      return SetBad(c)
+    }
+    return SetI64(c)
   }
   if ovid/parse.UnsignedOp(op) {
     CheckExpr(c, n.left)

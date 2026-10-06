@@ -190,6 +190,10 @@ func run(p *ir.Program, lean bool) *Result {
 			if !decl(cn.ID, cn.Name, cn.Span) {
 				continue
 			}
+			if cn.Table {
+				c.r.Facts = append(c.r.Facts, Fact{"fact": "table", "id": cn.ID, "len": len(cn.Values)})
+				continue
+			}
 			c.r.Facts = append(c.r.Facts, Fact{"fact": "const", "id": cn.ID, "value": cn.Value})
 			if cn.Type != "i64" {
 				c.err(cn.ID, "bad_type", "const must be i64")
@@ -868,14 +872,35 @@ func (c *checker) expr0(e *env, n *ir.Node) string {
 			c.use(id, n.ID, "name", c.fn.ID, n.NameSpan)
 			return t
 		}
-		for _, cn := range c.pkg.Consts {
-			if cn.Name == n.Name {
+		for i := range c.pkg.Consts {
+			if cn := &c.pkg.Consts[i]; cn.Name == n.Name {
 				c.use(cn.ID, n.ID, "name", c.fn.ID, n.NameSpan)
+				if cn.Table {
+					c.tableAsValue(n, cn)
+					return "invalid"
+				}
 				return "i64"
 			}
 		}
 		c.unknownName(n.ID, n.Name, e)
 		return "invalid"
+	case "index", "len":
+		// A param or local of the name shadows a table, as it does a const.
+		var cn *ir.Const
+		if _, id, ok := e.lookup(n.Name); ok && n.Pkg == "" {
+			c.use(id, n.ID, "name", c.fn.ID, n.NameSpan)
+			c.issue(Issue{Code: "bad_type", ID: n.ID, Message: n.Name + " is a variable, not a table",
+				Hint: "only a const declared [N]i64 can be indexed or measured"})
+		} else {
+			cn = c.table(n)
+		}
+		if n.Op == "index" {
+			c.want(e, n.Arg, "i64", "index of "+n.Name)
+		}
+		if cn == nil {
+			return "invalid"
+		}
+		return "i64"
 	case "add", "sub", "mul", "div", "mod", "and", "or", "xor", "shl", "shr":
 		c.want(e, n.Left, "i64", "left of "+opText[n.Op])
 		c.want(e, n.Right, "i64", "right of "+opText[n.Op])
@@ -966,16 +991,55 @@ func (c *checker) expr0(e *env, n *ir.Node) string {
 }
 
 // pkgConst checks a reference to another package's const, path.Name.
+// tableAsValue reports a table used where a value is wanted.
+func (c *checker) tableAsValue(n *ir.Node, cn *ir.Const) {
+	c.issue(Issue{Code: "bad_type", ID: n.ID, Message: cn.Name + " is a table, not a value",
+		Hint: "read an element with " + cn.Name + "[i], or its length with len(" + cn.Name + ")"})
+}
+
+// table resolves the table an index or len node names, in this package or
+// the one it spells, reporting an unknown name or a const that is no table.
+func (c *checker) table(n *ir.Node) *ir.Const {
+	path := n.Pkg
+	if path == "" {
+		path = c.pkg.Path
+	}
+	pk := c.pkgs[path]
+	if pk != nil {
+		for i := range pk.Consts {
+			if cn := &pk.Consts[i]; cn.Name == n.Name {
+				c.use(cn.ID, n.ID, "name", c.fn.ID, n.NameSpan)
+				if !cn.Table {
+					c.issue(Issue{Code: "bad_type", ID: n.ID, Message: cn.Name + " is a const, not a table",
+						Hint: "only a const declared [N]i64 can be indexed or measured"})
+					return nil
+				}
+				return cn
+			}
+		}
+	}
+	is := Issue{Code: "unknown_name", ID: n.ID, Message: "undefined table " + path + "." + n.Name}
+	if pk == nil {
+		is.Hint = "there is no package " + path
+	}
+	c.issue(is)
+	return nil
+}
+
 func (c *checker) pkgConst(n *ir.Node) string {
 	pk := c.pkgs[n.Pkg]
 	var cands []string
 	if pk != nil {
-		for _, cn := range pk.Consts {
-			if cn.Name == n.Name {
+		for i := range pk.Consts {
+			if cn := &pk.Consts[i]; cn.Name == n.Name {
 				c.use(cn.ID, n.ID, "name", c.fn.ID, n.NameSpan)
+				if cn.Table {
+					c.tableAsValue(n, cn)
+					return "invalid"
+				}
 				return "i64"
 			}
-			cands = append(cands, cn.Name)
+			cands = append(cands, pk.Consts[i].Name)
 		}
 	}
 	is := Issue{Code: "unknown_name", ID: n.ID, Message: "undefined const " + n.Pkg + "." + n.Name}

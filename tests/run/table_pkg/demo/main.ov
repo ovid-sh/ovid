@@ -1,0 +1,43 @@
+// A constant table: read by index, measured by len, shared across
+// packages, with constant expressions as elements.
+// exit: 7
+package demo
+import ovid/io
+import util
+const Pow10 [5]i64 = {1, 10, 100,
+  1000,
+  10000}
+const One i64 = 1
+const Signs [3]i64 = {-1, 0 - 2, One + One - 1}
+const N i64 = len(Pow10)
+const Lens [2]i64 = {len(Pow10), len(Signs) + N}
+func Sum(n i64) i64 {
+  var s i64 = 0
+  var i i64 = 0
+  while i < n {
+    s = s + Pow10[i]
+    i = i + 1
+  }
+  return s
+}
+func main(io *ovid/io.Cap) i64 {
+  if len(Pow10) != 5 || len(Signs) != 3 || len(util.Primes) != 4 || N != 5 || Lens[0] != 5 || Lens[1] != 8 {
+    return 1
+  }
+  if Pow10[0] != 1 || Pow10[4] != 10000 || Sum(len(Pow10)) != 11111 {
+    return 2
+  }
+  if Signs[0] != -1 || Signs[1] != -2 || Signs[2] != 1 {
+    return 3
+  }
+  var last i64 = len(util.Primes) - 1
+  if util.Primes[last] != 7 || util.Primes[1] * util.Primes[2] != 15 {
+    return 4
+  }
+  var p i64 = ovid/io.Alloc(io, 8)
+  store64(p, Pow10[2] + util.Primes[0])
+  if load64(p) != 102 {
+    return 5
+  }
+  return util.Primes[3]
+}

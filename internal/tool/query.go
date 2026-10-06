@@ -157,6 +157,9 @@ func sigOf(l *module.Loc) string {
 		}
 		return "type " + n.Name + " struct { " + strings.Join(fs, "; ") + " }"
 	case *ir.Const:
+		if n.Table {
+			return fmt.Sprintf("const %s %s", n.Name, n.Type)
+		}
 		return fmt.Sprintf("const %s i64 = %d", n.Name, n.Value)
 	case *ir.Field:
 		return n.Name + " " + check.ShowType(l.Pkg, n.Type)
