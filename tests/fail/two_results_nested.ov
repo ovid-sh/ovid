@@ -1,12 +1,16 @@
 // A two-result call nested in an expression is used as one value, even
-// where two names receive the expression.
+// where two names receive the expression or a two-result func forwards it.
 package demo
 import ovid/io
 func Two(x i64) (i64, i64) {
   return x, 0
 }
+func Fwd() (i64, i64) {
+  return Two(Two(2)) // error: unused_result 14
+}
 func main(io *ovid/io.Cap) i64 {
   var v i64, e i64 = 1 + Two(1) // error: unused_result 26 // error: arity 22
   v, e = Two(Two(2)) // error: unused_result 14
-  return v + e
+  var f i64, g i64 = Fwd()
+  return v + e + f + g
 }
