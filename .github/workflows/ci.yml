@@ -45,3 +45,25 @@ jobs:
         with:
           go-version: stable
       - run: go test -count=1 ./...
+
+  # The flake (#151): nix flake check on each system it builds here. On
+  # Linux that includes a NixOS VM test, which needs KVM, so open /dev/kvm
+  # to the runner user before Nix starts and looks for it.
+  nix:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - if: runner.os == 'Linux'
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            system-features = nixos-test benchmark big-parallel kvm
+      - run: nix flake check -L
