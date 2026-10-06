@@ -267,7 +267,8 @@ ovid test [--run substr] [--list] [--no-confine]
   --list prints the tests without running them.
 ovid outline [--pkg P] [--all] [--uses] [--ids] [--json] [--offset N] [--limit N]
   Packages: "path  funcs=N types=N consts=N  imports ...  files", one a
-  line. --pkg P: the file's path, then "  line  sig" per decl; --ids adds
+  line. --pkg P: the file's path, then "  line  sig" per decl (a struct as
+  "type T struct { N fields }"; show prints the fields); --ids adds
   "  id hash=H" (a decl's id is its name, the hash guards an edit); --uses
   adds "used by pkg N, ..." or "unused", so a decl used by only one other
   package is a candidate to move there. --json: per decl id, kind, sig,

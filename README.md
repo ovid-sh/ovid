@@ -57,7 +57,7 @@ Every command prints JSON lines and the last line has `"ok"`. Exit codes:
 | `ovid build [-o out]` / `ovid run [-- args]` | compile, leaving out `_test.ov` files; run passes stdio and the exit code through and reports a death by signal on stderr, on Linux with the statement and call stack |
 | `ovid run --json [--timeout 5s] [--max-output N]` | run with the output captured: one last line with `exit` or `signal`, `stdout`, `stderr`, and `truncated` |
 | `ovid test [--run substr] [--list]` | each `TestX(io *ovid/io.Cap) i64` in its own process; 0 passes; a failure names the `return` that produced it, a crash its signal (on Linux, the statement and call stack) |
-| `ovid outline [--pkg P] [--ids]` | packages, or a package's decls one line each: line and signature, with id and hash after `--ids` |
+| `ovid outline [--pkg P] [--ids]` | packages, or a package's decls one line each: line and signature (a struct by its field count), with id and hash after `--ids` |
 | `ovid show <id\|name>... [--ids] [--exprs]` | source of a node (a decl with its doc comment) under a header with its id and hash; `--ids` tags each statement line with its id; a statement's expressions are listed with ids and hashes |
 | `ovid refs <id\|name>` | every use the checker resolves to a func, type, field, const, param, or local, grouped by the decl it is in |
 | `ovid grep <regexp>` | matching lines grouped by file and enclosing decl |
