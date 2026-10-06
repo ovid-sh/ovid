@@ -75,6 +75,10 @@ directory can be made, the program runs with nowhere to write. `test`'s
 summary carries the same fields. Reads are not restricted: a confined
 program can still read any file the caller can. A program that must write
 elsewhere, by an absolute path, needs `--no-confine`.
+If the confinement itself cannot be set up (the kernel refuses a rule or
+the filter), the program is not started and the request fails with
+`"error":"run"` and the reason; `confined` is never claimed for a program
+that did not run under it.
 
 A module that does not build ends as without `--json`: the diagnostics,
 then `{"ok":false,"errors":N}`, exit 125. So does a program that could not

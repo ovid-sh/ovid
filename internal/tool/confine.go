@@ -1,9 +1,10 @@
 package tool
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
-	"strconv"
 	"strings"
 )
 
@@ -15,10 +16,17 @@ import (
 // as a launcher (confineEnv set) that puts the rules in place and then
 // replaces itself with the program.
 type confineSpec struct {
-	syscalls []int64 // the program's list; execve is added for the launcher
-	writable string  // the one writable directory, the program's cwd
-	landlock bool    // whether the kernel can confine the file system
-	argv0    string  // the program's name for itself
+	Syscalls []int64 `json:"syscalls"` // the program's list; execve and exit_group are added for the launcher
+	Writable string  `json:"writable"` // the one writable directory, the program's cwd; "" for none
+	Landlock bool    `json:"landlock"` // whether the kernel can confine the file system
+	Argv0    string  `json:"argv0"`    // the program's name for itself
+	// StatusFD is where the launcher reports a failure to set up: a pipe
+	// to the parent, closed on exec, so that nothing read means the program
+	// was started as asked.
+	StatusFD int `json:"status_fd"`
+
+	status  *os.File // the parent's end of that pipe
+	statusW *os.File
 }
 
 // confineEnv is the variable that makes ovid a launcher.
@@ -27,7 +35,7 @@ const confineEnv = "OVID_CONFINE"
 // newConfine describes how to confine a program with the given system
 // calls to the directory writable; "" means it may write nowhere.
 func newConfine(syscalls []int64, writable, argv0 string) *confineSpec {
-	return &confineSpec{syscalls: syscalls, writable: writable, landlock: landlockAvailable(), argv0: argv0}
+	return &confineSpec{Syscalls: syscalls, Writable: writable, Landlock: landlockAvailable(), Argv0: argv0}
 }
 
 // writableDir makes the one directory a confined program may write in, or
@@ -46,61 +54,72 @@ func writableDir() string {
 // the point of running it, and an empty directory for every run is not.
 // Once removed, it stays "".
 func (c *confineSpec) keepWritable() string {
-	if c.writable == "" {
+	if c.Writable == "" {
 		return ""
 	}
-	if ents, err := os.ReadDir(c.writable); err == nil && len(ents) == 0 {
-		os.Remove(c.writable)
-		c.writable = ""
+	if ents, err := os.ReadDir(c.Writable); err == nil && len(ents) == 0 {
+		os.Remove(c.Writable)
+		c.Writable = ""
 		return ""
 	}
-	return c.writable
+	return c.Writable
 }
 
 // applied names what the kernel will enforce, for the record.
 func (c *confineSpec) applied() []string {
 	out := []string{"seccomp"}
-	if c.landlock {
+	if c.Landlock {
 		out = append(out, "landlock")
 	}
 	return out
 }
 
-// encode is the spec as the launcher's environment variable.
+// encode is the spec as the launcher's environment variable: JSON, so
+// that a name or a path may hold anything.
 func (c *confineSpec) encode() string {
-	var nums []string
-	for _, n := range c.syscalls {
-		nums = append(nums, strconv.FormatInt(n, 10))
-	}
-	ll := "0"
-	if c.landlock {
-		ll = "1"
-	}
-	return strings.Join([]string{strings.Join(nums, ","), ll, c.argv0, c.writable}, ";")
+	b, _ := json.Marshal(c)
+	return string(b)
 }
 
 func decodeConfine(s string) (*confineSpec, error) {
-	parts := strings.SplitN(s, ";", 4)
-	if len(parts) != 4 {
-		return nil, fmt.Errorf("bad confine spec")
+	var c confineSpec
+	if err := json.Unmarshal([]byte(s), &c); err != nil {
+		return nil, err
 	}
-	c := &confineSpec{landlock: parts[1] == "1", argv0: parts[2], writable: parts[3]}
-	for _, f := range strings.Split(parts[0], ",") {
-		if f == "" {
-			continue
-		}
-		n, err := strconv.ParseInt(f, 10, 64)
-		if err != nil {
-			return nil, err
-		}
-		c.syscalls = append(c.syscalls, n)
+	return &c, nil
+}
+
+// openStatus makes the pipe the launcher reports a failure on. The write
+// end is the extra file at index i of the command (fd 3+i in the child).
+func (c *confineSpec) openStatus(i int) (*os.File, error) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		return nil, err
 	}
-	return c, nil
+	c.status, c.statusW, c.StatusFD = r, w, 3+i
+	return w, nil
+}
+
+// setupError, once the launcher has exited or become the program, is what
+// the launcher reported, or nil: it writes only when it could not set up
+// the confinement, and the pipe closes on exec.
+func (c *confineSpec) setupError() error {
+	if c.status == nil {
+		return nil
+	}
+	c.statusW.Close()
+	msg, _ := io.ReadAll(c.status)
+	c.status.Close()
+	c.status, c.statusW = nil, nil
+	if len(msg) == 0 {
+		return nil
+	}
+	return fmt.Errorf("could not confine the program: %s", strings.TrimSpace(string(msg)))
 }
 
 // confineHint is what to do when the kernel killed the program for a system
 // call outside its list.
-const confineHint = "the program made a system call that its build receipt does not list, and --confine kills it for that; the list is in `ovid build`'s syscalls"
+const confineHint = "the program made a system call that its build receipt does not list, and confinement (the default; --no-confine turns it off) kills it for that; the list is in `ovid build`'s syscalls"
 
 // The launcher runs before main or any test does, in every binary that
 // links this package: ovid, and the test binaries. A process started with
@@ -140,7 +159,7 @@ func ConfineMain() bool {
 	if len(argv) == 0 {
 		os.Exit(111)
 	}
-	confineAndExec(c, argv[0], append([]string{c.argv0}, argv[1:]...))
+	confineAndExec(c, argv[0], append([]string{c.Argv0}, argv[1:]...))
 	os.Exit(114)
 	return true
 }

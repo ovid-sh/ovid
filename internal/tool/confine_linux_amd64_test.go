@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -89,7 +88,7 @@ func TestRunConfine(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.done()
-	pio := procIO{confine: &confineSpec{syscalls: noWrite, writable: t.TempDir()}}
+	pio := procIO{confine: &confineSpec{Syscalls: noWrite, Writable: t.TempDir()}}
 	if st.extra != nil {
 		pio.extra = []*os.File{st.extra}
 	}
@@ -155,11 +154,11 @@ func TestLauncherNeverRunsTests(t *testing.T) {
 	// becomes it, and the test binary is nothing but that launcher.
 	dir := mkmod(t, demo("package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  ovid/io.Print(strptr(\"launched\\n\"))\n  return 3\n}\n"))
 	bin, calls := buildSyscalls(t, dir)
-	var nums []string
+	var nums []int64
 	for _, n := range calls {
-		nums = append(nums, strconv.Itoa(n))
+		nums = append(nums, int64(n))
 	}
-	spec := strings.Join(nums, ",") + ";0;demo;" + t.TempDir()
+	spec := (&confineSpec{Syscalls: nums, Argv0: "demo", Writable: t.TempDir()}).encode()
 	for _, c := range []struct {
 		env  string
 		args []string
@@ -217,5 +216,48 @@ func TestConfineWritableDir(t *testing.T) {
 	}
 	if _, err := os.Stat(leak); err == nil {
 		t.Fatal("the program wrote into its module")
+	}
+}
+
+// TestConfineSpecRoundTrip: a module's name may hold anything, and the spec
+// crosses to the launcher as text; it must come back whole.
+func TestConfineSpecRoundTrip(t *testing.T) {
+	c := &confineSpec{Syscalls: []int64{1, 9, 60}, Writable: "/tmp/a dir;with\"odd\" chars", Landlock: true, Argv0: "demo;x", StatusFD: 5}
+	d, err := decodeConfine(c.encode())
+	if err != nil || d.Argv0 != c.Argv0 || d.Writable != c.Writable || !d.Landlock || d.StatusFD != 5 || len(d.Syscalls) != 3 || d.Syscalls[2] != 60 {
+		t.Fatalf("%v: %+v", err, d)
+	}
+	if _, err := decodeConfine("not a spec"); err == nil {
+		t.Fatal("a bad spec decoded")
+	}
+}
+
+// TestConfineSetupFailureIsReported: a launcher that cannot confine the
+// program never starts it, and the parent is told why, instead of taking
+// the launcher's exit for the program's.
+func TestConfineSetupFailureIsReported(t *testing.T) {
+	needExec(t)
+	dir := mkmod(t, demo("package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  return 0\n}\n"))
+	bin, calls := buildSyscalls(t, dir)
+	var nums []int64
+	for _, n := range calls {
+		nums = append(nums, int64(n))
+	}
+	// A writable directory that does not exist: the launcher cannot even be
+	// started there, and that is the request's error, not an exit.
+	pr := runProc(bin, nil, procIO{confine: &confineSpec{Syscalls: nums, Writable: filepath.Join(t.TempDir(), "gone"), Landlock: landlockAvailable()}}, 10*time.Second)
+	if pr.err == nil || pr.exited {
+		t.Fatalf("a missing writable directory: exited %v code %d err %v", pr.exited, pr.code, pr.err)
+	}
+	// A program that is not there: execve would fail; the launcher says so
+	// before the filter leaves it unable to.
+	pr = runProc(filepath.Join(t.TempDir(), "missing"), nil, procIO{confine: &confineSpec{Syscalls: nums}}, 10*time.Second)
+	if pr.err == nil || !strings.Contains(pr.err.Error(), "cannot execute") {
+		t.Fatalf("a missing program: exited %v code %d signal %v err %v", pr.exited, pr.code, pr.signal, pr.err)
+	}
+	// And a program that runs reports nothing.
+	pr = runProc(bin, nil, procIO{confine: &confineSpec{Syscalls: nums, Writable: t.TempDir(), Landlock: landlockAvailable()}}, 10*time.Second)
+	if pr.err != nil || !pr.exited || pr.code != 0 {
+		t.Fatalf("a program that runs: exited %v code %d err %v", pr.exited, pr.code, pr.err)
 	}
 }

@@ -1,7 +1,6 @@
 package tool
 
 import (
-	"os"
 	"runtime"
 	"syscall"
 	"unsafe"
@@ -74,28 +73,42 @@ func writeRights(abi int) uint64 {
 }
 
 // confineAndExec confines this process as c says and replaces it with bin.
-// It exits with 112 if the kernel refuses a rule, 113 if the filter cannot
-// be installed, and returns only if execve fails.
+// A failure to set up is written to c.StatusFD, for the parent to report as
+// its own, and ends the process: 112 if the kernel refuses a rule, 113 if
+// the filter cannot be installed, 114 if execve fails.
 func confineAndExec(c *confineSpec, bin string, argv []string) {
 	runtime.LockOSThread()
-	if _, _, e := syscall.RawSyscall6(syscall.SYS_PRCTL, prSetNoNewPrivs, 1, 0, 0, 0, 0); e != 0 {
-		os.Exit(112)
+	// The status pipe closes on exec: the parent reads nothing when the
+	// program started.
+	syscall.RawSyscall(syscall.SYS_FCNTL, uintptr(c.StatusFD), syscall.F_SETFD, syscall.FD_CLOEXEC)
+	fail := func(code int, what string) {
+		syscall.Write(c.StatusFD, []byte(what))
+		syscall.RawSyscall(syscall.SYS_EXIT_GROUP, uintptr(code), 0, 0)
 	}
-	if c.landlock {
-		if !restrictFS(c.writable) {
-			os.Exit(112)
+	if _, _, e := syscall.RawSyscall6(syscall.SYS_PRCTL, prSetNoNewPrivs, 1, 0, 0, 0, 0); e != 0 {
+		fail(112, "no_new_privs refused: "+e.Error())
+	}
+	if c.Landlock {
+		if !restrictFS(c.Writable) {
+			fail(112, "the kernel refused the Landlock rules")
 		}
 	}
+	// The program must be there before the filter is in place and nothing
+	// can be said any more.
+	if err := syscall.Access(bin, 1); err != nil {
+		fail(114, "cannot execute "+bin+": "+err.Error())
+	}
 	// The filter: this architecture, then each allowed number, then execve
-	// for the step that follows; anything else kills the process. The
-	// program itself has no execve unless its list says so.
+	// for the step that follows and exit_group for when it fails; anything
+	// else kills the process. The program itself has no execve unless its
+	// list says so.
 	type insn struct {
 		code   uint16
 		jt, jf uint8
 		k      uint32
 	}
 	prog := []insn{{bpfLdAbs, 0, 0, 4}, {bpfJeq, 1, 0, auditArchX8664}, {bpfRet, 0, 0, seccompRetKillProc}, {bpfLdAbs, 0, 0, 0}}
-	allow := append([]int64{syscall.SYS_EXECVE}, c.syscalls...)
+	allow := append([]int64{syscall.SYS_EXECVE, syscall.SYS_EXIT_GROUP}, c.Syscalls...)
 	for _, n := range allow {
 		prog = append(prog, insn{bpfJeq, 0, 1, uint32(n)}, insn{bpfRet, 0, 0, seccompRetAllow})
 	}
@@ -116,7 +129,7 @@ func confineAndExec(c *confineSpec, bin string, argv []string) {
 	// From here to execve only raw system calls: nothing else may run on
 	// this thread once the filter is in place.
 	if _, _, e := syscall.RawSyscall(sysSeccomp, seccompSetFilter, 0, uintptr(unsafe.Pointer(&fprog))); e != 0 {
-		syscall.RawSyscall(syscall.SYS_EXIT_GROUP, 113, 0, 0)
+		fail(113, "the kernel refused the seccomp filter: "+e.Error())
 	}
 	syscall.RawSyscall(syscall.SYS_EXECVE, uintptr(unsafe.Pointer(path)), uintptr(unsafe.Pointer(&av[0])), uintptr(unsafe.Pointer(&env[0])))
 	syscall.RawSyscall(syscall.SYS_EXIT_GROUP, 114, 0, 0)

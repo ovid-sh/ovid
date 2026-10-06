@@ -49,15 +49,19 @@ func (pio procIO) command(bin string, args []string) *exec.Cmd {
 		if err != nil {
 			self = os.Args[0]
 		}
-		c := *pio.confine
-		c.argv0 = pio.argv0
-		if c.argv0 == "" {
-			c.argv0 = bin
+		c := pio.confine
+		c.Argv0 = pio.argv0
+		if c.Argv0 == "" {
+			c.Argv0 = bin
+		}
+		// The launcher's status pipe is the last extra file.
+		if w, err := c.openStatus(len(pio.extra)); err == nil {
+			pio.extra = append(pio.extra, w)
 		}
 		cmd = exec.Command(self, append([]string{"--", bin}, args...)...)
 		cmd.Env = []string{confineEnv + "=" + c.encode(), "GODEBUG=asyncpreemptoff=1"}
-		if c.writable != "" {
-			cmd.Dir = c.writable
+		if c.Writable != "" {
+			cmd.Dir = c.Writable
 		}
 	} else {
 		cmd = exec.Command(bin, args...)
@@ -77,10 +81,18 @@ func (pio procIO) command(bin string, args []string) *exec.Cmd {
 // runProc runs bin, traced where the platform allows so a fault can be
 // traced back to a statement. A timeout of 0 means none.
 func runProc(bin string, args []string, pio procIO, timeout time.Duration) procResult {
-	if r, ok := runTraced(bin, args, pio, timeout); ok {
-		return r
+	r, ok := runTraced(bin, args, pio, timeout)
+	if !ok {
+		r = runPlain(bin, args, pio, timeout)
 	}
-	return runPlain(bin, args, pio, timeout)
+	// A launcher that could not confine the program never started it: that
+	// is a failure of the request, not an exit of the program.
+	if pio.confine != nil {
+		if err := pio.confine.setupError(); err != nil {
+			return procResult{err: err}
+		}
+	}
+	return r
 }
 
 func runPlain(bin string, args []string, pio procIO, timeout time.Duration) procResult {
