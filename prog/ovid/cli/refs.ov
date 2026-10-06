@@ -378,19 +378,35 @@ func CountNamed(d *ovid/parse.Decl, np i64, nn i64) i64 {
 
 // Copies counts the decls that share t's id: more than one when check
 // reports a duplicate, and refs then refuses to pick, as the Go refs does.
+// A field, param, or var is counted in every copy of its owner too.
 func Copies(t *Target) i64 {
-  if t.kind == T_VAR {
-    return 1
-  }
-  var list *ovid/parse.Decl = t.pkg.fs
   if t.kind == T_TYPE {
-    list = t.pkg.ts
-  } else if t.kind == T_CONST {
-    list = t.pkg.cs
-  } else if t.kind == T_FIELD || t.kind == T_PARAM {
-    list = t.own.sub
+    return CountNamed(t.pkg.ts, t.d.namep, t.d.namen)
   }
-  return CountNamed(list, t.d.namep, t.d.namen)
+  if t.kind == T_CONST {
+    return CountNamed(t.pkg.cs, t.d.namep, t.d.namen)
+  }
+  if t.kind == T_FUNC {
+    return CountNamed(t.pkg.fs, t.d.namep, t.d.namen)
+  }
+  var owners *ovid/parse.Decl = t.pkg.fs
+  if t.kind == T_FIELD {
+    owners = t.pkg.ts
+  }
+  var n i64 = 0
+  while owners != 0 as *ovid/parse.Decl {
+    if Eq2(owners.namep, owners.namen, t.own.namep, t.own.namen) {
+      if t.kind == T_VAR {
+        if FindVar(owners.body, t.vn.num) != 0 as *ovid/parse.Node {
+          n = n + 1
+        }
+      } else {
+        n = n + CountNamed(owners.sub, t.d.namep, t.d.namen)
+      }
+    }
+    owners = owners.next
+  }
+  return n
 }
 
 // Hits reports whether use u is of target t.
