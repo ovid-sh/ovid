@@ -167,6 +167,18 @@ module into `$out/bin` and keeps the build receipt (size, system calls) in
 binary and nothing else. A flake sees only files git tracks: `git add` a
 new `.ov` file before `nix build` can find it.
 
+On NixOS, `nixosModules.default` runs such a program as a service, and the
+receipt becomes its seccomp filter:
+
+```nix
+services.ovid.programs.cat = { package = catfile; args = [ "/etc/os-release" ]; };
+```
+
+`ovid-cat.service` runs sandboxed (`DynamicUser`, `ProtectSystem=strict`,
+...) with `SystemCallFilter` set to the receipt's system calls by name,
+plus the few systemd always allows; any other call kills it with SIGSYS.
+`lib.syscallFilter` makes that filter for a unit of your own.
+
 ## Not yet
 
 No HTTP client, no URL imports, no package
