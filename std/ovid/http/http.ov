@@ -193,8 +193,9 @@ func SetStatus(res *Response, code i64) i64 {
 
 // SetHeader adds a header to the response. It returns 0, or -1 (and adds
 // nothing) when the name or value is not one a header can carry: an empty
-// name, a byte outside a name's token characters, a CR, LF, or NUL in the
-// value. Content-Length and Transfer-Encoding frame the body, which is
+// name, a byte outside a name's token characters, a control byte other
+// than tab (CR and LF among them) or DEL in the value. Content-Length and
+// Transfer-Encoding frame the body, which is
 // the host's to do, so they are refused too.
 func SetHeader(io *ovid/io.Cap, res *Response, name i64, nn i64, val i64, vn i64) i64 {
   if !validName(name, nn) || !validValue(val, vn) {
@@ -343,8 +344,8 @@ func parse(r *Request, p i64, n i64) i64 {
     }
   }
   // Header lines up to the empty one. Each is "name:" then a value with
-  // no CR, LF, or NUL; a line starting with a blank (obsolete folding) is
-  // refused.
+  // no control byte but tab; a line starting with a blank (obsolete
+  // folding) is refused.
   var hs i64 = eol + 2
   var at i64 = hs
   var end i64 = lineEnd(p, n, at)
@@ -605,11 +606,14 @@ func validName(p i64, n i64) bool {
   return true
 }
 
+// validValue reports whether the n bytes at p can be a field value:
+// visible ASCII, space, tab, and bytes from 0x80 up. Every other control
+// byte (CR, LF, and NUL among them) and DEL are refused.
 func validValue(p i64, n i64) bool {
   var i i64 = 0
   while i < n {
     var c i64 = load8(p + i)
-    if c == 0 || c == 10 || c == 13 {
+    if (c < 32 && c != 9) || c == 127 {
       return false
     }
     i = i + 1

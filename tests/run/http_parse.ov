@@ -13,8 +13,12 @@
 // stdout: "length not digits 1\n"
 // stdout: "body short 1\n"
 // stdout: "chunked 3\n"
+// stdout: "control in value 1\n"
+// stdout: "del in value 1\n"
+// stdout: "tab and high bytes in value 0\n"
 // stdout: "status 0 -1 -1\n"
 // stdout: "headers -1 -1 -1 -1 -1 0\n"
+// stdout: "values -1 -1 0\n"
 // stdout: "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n"
 // stdout: "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n"
 // stdout: "HTTP/1.1 418 \r\nX-A: 1\r\nContent-Length: 2\r\n\r\nhi"
@@ -67,6 +71,9 @@ func main(io *ovid/io.Cap) i64 {
   try(io, strptr("length not digits"), strptr("GET / HTTP/1.1\r\nContent-Length: +1\r\n\r\nx"), strlen("GET / HTTP/1.1\r\nContent-Length: +1\r\n\r\nx"))
   try(io, strptr("body short"), strptr("GET / HTTP/1.1\r\nContent-Length: 9\r\n\r\nabc"), strlen("GET / HTTP/1.1\r\nContent-Length: 9\r\n\r\nabc"))
   try(io, strptr("chunked"), strptr("GET / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n"), strlen("GET / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n"))
+  try(io, strptr("control in value"), strptr("GET / HTTP/1.1\r\nA: b\x01c\r\n\r\n"), strlen("GET / HTTP/1.1\r\nA: b\x01c\r\n\r\n"))
+  try(io, strptr("del in value"), strptr("GET / HTTP/1.1\r\nA: b\x7fc\r\n\r\n"), strlen("GET / HTTP/1.1\r\nA: b\x7fc\r\n\r\n"))
+  try(io, strptr("tab and high bytes in value"), strptr("GET / HTTP/1.1\r\nA: b\tc\xc3\xa9\r\n\r\n"), strlen("GET / HTTP/1.1\r\nA: b\tc\xc3\xa9\r\n\r\n"))
 
   var res *ovid/http.Response = ovid/http.NewResponse(io)
   ovid/io.Print(strptr("status "))
@@ -92,6 +99,16 @@ func main(io *ovid/io.Cap) i64 {
   ovid/io.PrintInt(io, ovid/http.SetHeader(io, res, strptr("X-A"), strlen("X-A"), strptr("1"), 1))
   ovid/io.Print(strptr("\n"))
   ovid/http.Write(io, res, strptr("hi"), strlen("hi"))
+  // An escape byte and DEL are refused in a value; tab and bytes from
+  // 0x80 up are not.
+  var other *ovid/http.Response = ovid/http.NewResponse(io)
+  ovid/io.Print(strptr("values "))
+  ovid/io.PrintInt(io, ovid/http.SetHeader(io, other, strptr("X-B"), 3, strptr("\x1b[31m"), strlen("\x1b[31m")))
+  ovid/io.Print(strptr(" "))
+  ovid/io.PrintInt(io, ovid/http.SetHeader(io, other, strptr("X-B"), 3, strptr("a\x7f"), strlen("a\x7f")))
+  ovid/io.Print(strptr(" "))
+  ovid/io.PrintInt(io, ovid/http.SetHeader(io, other, strptr("X-B"), 3, strptr("a\tb\xc3\xa9"), strlen("a\tb\xc3\xa9")))
+  ovid/io.Print(strptr("\n"))
 
   var ok *ovid/http.Request = ovid/http.NewRequest(io, strptr("GET"), 3, strptr("/"), 1)
   var bad *ovid/http.Request = ovid/http.NewRequest(io, 0, 0, 0, 0)
