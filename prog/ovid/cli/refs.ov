@@ -43,9 +43,13 @@ func Split(p i64, n i64, c i64) i64 {
   return -1
 }
 
-// ParseInt reads the decimal in p[0:n], or -1.
+// ParseInt reads the decimal in p[0:n] as an id spells it: digits only,
+// no leading zero, at most 18 digits (so it cannot wrap); else -1.
 func ParseInt(p i64, n i64) i64 {
-  if n == 0 {
+  if n == 0 || n > 18 {
+    return -1
+  }
+  if n > 1 && load8(p) == 48 {
     return -1
   }
   var v i64 = 0
