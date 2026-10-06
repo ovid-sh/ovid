@@ -14,7 +14,8 @@ import (
 
 // Outline lists packages, or with pkg set, that package's declarations.
 // As text it prints each file's path once and then one line per decl:
-// the line number and the signature, with the id and hash after --ids
+// the line number and the signature (a struct by its field count), with
+// the id and hash after --ids
 // (ids, since a decl's id is its name, and the hash guards an edit). As
 // JSON (asJSON) it prints one record per package or decl with everything.
 // It prints the records of page; the last line counts them all and says
@@ -89,7 +90,12 @@ func Outline(dir, pkg string, all, uses, ids, asJSON bool, page Page, w io.Write
 				fmt.Fprintln(w, file)
 				lastFile = file
 			}
-			line := fmt.Sprintf("%5d  %s", d["line"], d["sig"])
+			sig := d["sig"].(string)
+			if td, ok := l.Node.(*ir.TypeDecl); ok {
+				// A struct's fields are show's to print; the outline says how many.
+				sig = fmt.Sprintf("type %s struct { %d fields }", td.Name, len(td.Fields))
+			}
+			line := fmt.Sprintf("%4d  %s", d["line"], sig)
 			if n, ok := d["id_copies"]; ok {
 				line += fmt.Sprintf("  (one of %d copies)", n)
 			}
@@ -506,7 +512,7 @@ func (g *groups) line(w io.Writer, file, decl string, line int, source string) {
 		}
 		fmt.Fprintln(w, h)
 	}
-	fmt.Fprintf(w, "%5d: %s\n", line, source)
+	fmt.Fprintf(w, "%4d: %s\n", line, source)
 }
 
 // usesByPkg counts refs by the package they appear in.
