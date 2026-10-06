@@ -1,0 +1,48 @@
+// The unsigned builtins: ushr, umulhi, udiv, urem, and ult, at the edges
+// where they differ from the signed operators.
+package demo
+import ovid/io
+func Half(x i64) i64 {
+  return ushr(x, 1)
+}
+func main(io *ovid/io.Cap) i64 {
+  var m i64 = -1
+  var top i64 = 1 << 63
+  // ushr shifts zeros in; >> shifts the sign in.
+  if ushr(m, 60) != 15 || (m >> 60) != -1 || ushr(top, 63) != 1 || ushr(m, 0) != -1 {
+    return 1
+  }
+  if Half(m) != 0x7FFFFFFFFFFFFFFF || ushr(0x12345678, 4) != 0x1234567 {
+    return 2
+  }
+  // The count is the low six bits, as for the operators.
+  if ushr(m, 64) != -1 || ushr(m, 65) != 0x7FFFFFFFFFFFFFFF {
+    return 3
+  }
+  // umulhi is the high half of the unsigned product.
+  if umulhi(m, m) != -2 || umulhi(m, 2) != 1 || umulhi(top, 2) != 1 || umulhi(top, 1) != 0 {
+    return 4
+  }
+  if umulhi(0x100000000, 0x100000000) != 1 || umulhi(3, 5) != 0 {
+    return 5
+  }
+  // udiv and urem treat the top bit as 2^63; / and % as a sign.
+  if udiv(m, 2) != 0x7FFFFFFFFFFFFFFF || (m / 2) != 0 || urem(m, 10) != 5 || (m % 10) != -1 {
+    return 6
+  }
+  if udiv(top, top) != 1 || udiv(top, 3) != 0x2AAAAAAAAAAAAAAA || urem(top, 3) != 2 || udiv(7, 2) != 3 {
+    return 7
+  }
+  // ult is an unsigned order.
+  if !ult(1, m) || ult(m, 1) || ult(m, m) || !ult(0, top) || (0 < top) {
+    return 8
+  }
+  var n i64 = 0
+  while ult(n, 3) {
+    n = n + 1
+  }
+  if n != 3 {
+    return 9
+  }
+  return 0
+}

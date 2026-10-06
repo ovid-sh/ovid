@@ -549,6 +549,16 @@ func CheckExpr(c *Ch, n *ovid/parse.Node) i64 {
     Err(c, strptr("unknown_name"), strlen("unknown_name"), n.namep, n.namen)
     return SetBad(c)
   }
+  if ovid/parse.UnsignedOp(op) {
+    CheckExpr(c, n.left)
+    NeedI64(c, strptr("unsigned argument 1"), strlen("unsigned argument 1"))
+    CheckExpr(c, n.right)
+    NeedI64(c, strptr("unsigned argument 2"), strlen("unsigned argument 2"))
+    if op == ovid/parse.OP_ULT {
+      return SetBool(c)
+    }
+    return SetI64(c)
+  }
   if op >= ovid/parse.OP_ADD && op <= ovid/parse.OP_SHR {
     CheckExpr(c, n.left)
     var lp i64 = c.typ

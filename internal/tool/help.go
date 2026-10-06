@@ -106,6 +106,10 @@ Binary operators, Go precedence: || && == != < <= > >= + - | ^ * / % << >> &
 (>> is arithmetic). Unary: ! (bool), - and ^ (i64). Comparisons give bool;
 if/while conditions must be bool. && and || short-circuit and are ordinary
 values: var sp bool = c == 32 || c == 9 || c == 10.
+The operators are signed. The unsigned ones are spelled as calls:
+ushr(x, n) (logical shift, count masked to 0..63 like >>), umulhi(a, b)
+(the high 64 bits of the 128-bit product), udiv(a, b), urem(a, b) (both
+trap on 0 like / and %), ult(a, b) bool.
 
 Strings: there is no string type. strptr("hi\n") is the address of an
 interned NUL-terminated literal and strlen("hi\n") is its length (3),

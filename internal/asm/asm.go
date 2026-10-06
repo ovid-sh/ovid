@@ -359,6 +359,17 @@ func (b *Buf) ShlRaxCl() { b.emit(0x48, 0xD3, 0xE0) }
 
 func (b *Buf) SarRaxCl() { b.emit(0x48, 0xD3, 0xF8) }
 
+func (b *Buf) ShrRaxCl() { b.emit(0x48, 0xD3, 0xE8) }
+
+// MulRcx encodes the one-operand mul rcx: rdx:rax = rax * rcx, unsigned.
+func (b *Buf) MulRcx() { b.emit(0x48, 0xF7, 0xE1) }
+
+// DivRcx encodes div rcx: rax = rdx:rax / rcx, rdx the remainder, unsigned.
+func (b *Buf) DivRcx() { b.emit(0x48, 0xF7, 0xF1) }
+
+// XorEdxEdx clears rdx, the high half of an unsigned dividend.
+func (b *Buf) XorEdxEdx() { b.emit(0x31, 0xD2) }
+
 // SetccAl uses a condition code: sete 0x94, setne 0x95, setl 0x9C,
 // setge 0x9D, setle 0x9E, setg 0x9F.
 func (b *Buf) SetccAl(cc byte) {

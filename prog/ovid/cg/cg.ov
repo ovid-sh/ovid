@@ -137,8 +137,10 @@ func LeafOp(op i64) bool {
   return op == ovid/parse.OP_INT || op == ovid/parse.OP_SIZEOF || op == ovid/parse.OP_STRPTR || op == ovid/parse.OP_STRLEN
 }
 
+// ArithOp: the binary operators that EmitArith evaluates into rax, the
+// unsigned builtins among them.
 func ArithOp(op i64) bool {
-  return op >= ovid/parse.OP_ADD && op <= ovid/parse.OP_SHR
+  return (op >= ovid/parse.OP_ADD && op <= ovid/parse.OP_SHR) || ovid/parse.UnsignedOp(op)
 }
 
 func CmpOp(op i64) bool {
@@ -462,6 +464,9 @@ func TypeOf(c *C, n *ovid/parse.Node) i64 {
     return FailIn(c, strptr("nil expr in "), strlen("nil expr in "))
   }
   var op i64 = n.op
+  if op == ovid/parse.OP_ULT {
+    return SetBool(c)
+  }
   if LeafOp(op) || ArithOp(op) || op == ovid/parse.OP_NEG || op == ovid/parse.OP_BNOT || ovid/parse.BswapOp(op) {
     return SetI64(c)
   }
@@ -1166,6 +1171,32 @@ func ArithRcx(c *C, op i64) i64 {
     ovid/asm.Cqo(c.code)
     ovid/asm.IdivRcx(c.code)
     ovid/asm.MovRegReg(c.code, 0, 2)
+    return 0
+  }
+  if op == ovid/parse.OP_USHR {
+    ovid/asm.ShrRaxCl(c.code)
+    return 0
+  }
+  if op == ovid/parse.OP_UMULHI {
+    ovid/asm.MulRcx(c.code)
+    ovid/asm.MovRegReg(c.code, 0, 2)
+    return 0
+  }
+  if op == ovid/parse.OP_UDIV {
+    ovid/asm.XorEdxEdx(c.code)
+    ovid/asm.DivRcx(c.code)
+    return 0
+  }
+  if op == ovid/parse.OP_UREM {
+    ovid/asm.XorEdxEdx(c.code)
+    ovid/asm.DivRcx(c.code)
+    ovid/asm.MovRegReg(c.code, 0, 2)
+    return 0
+  }
+  if op == ovid/parse.OP_ULT {
+    ovid/asm.CmpRaxRcx(c.code)
+    ovid/asm.SetccAl(c.code, 0x92)
+    ovid/asm.MovzxRaxAl(c.code)
     return 0
   }
   return FailIn(c, strptr("bad arith op in "), strlen("bad arith op in "))

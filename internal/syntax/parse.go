@@ -779,6 +779,15 @@ func (p *parser) primary0() *ir.Node {
 	case p.peekKw("syscall"):
 		p.ident()
 		return p.callArgs("syscall", "", "", ir.Span{})
+	case p.peekKw("ushr"), p.peekKw("umulhi"), p.peekKw("ult"), p.peekKw("udiv"), p.peekKw("urem"):
+		// The unsigned operations are binary operators spelled as calls.
+		op := p.ident()
+		p.expect('(')
+		l := p.parseExpr()
+		p.expect(',')
+		r := p.parseExpr()
+		p.expect(')')
+		return &ir.Node{ID: p.eid(), Op: op, Left: l, Right: r}
 	case p.peekKw("load8"), p.peekKw("load16"), p.peekKw("load32"), p.peekKw("load64"), p.peekKw("bswap16"), p.peekKw("bswap32"), p.peekKw("bswap64"):
 		op := p.ident()
 		p.expect('(')

@@ -614,6 +614,36 @@ func SarRaxCl(c *Code) i64 {
   return 0
 }
 
+func ShrRaxCl(c *Code) i64 {
+  E(c, 0x48)
+  E(c, 0xD3)
+  E(c, 0xE8)
+  return 0
+}
+
+// MulRcx encodes the one-operand mul rcx: rdx:rax = rax * rcx, unsigned.
+func MulRcx(c *Code) i64 {
+  E(c, 0x48)
+  E(c, 0xF7)
+  E(c, 0xE1)
+  return 0
+}
+
+// DivRcx encodes div rcx: rax = rdx:rax / rcx, rdx the remainder, unsigned.
+func DivRcx(c *Code) i64 {
+  E(c, 0x48)
+  E(c, 0xF7)
+  E(c, 0xF1)
+  return 0
+}
+
+// XorEdxEdx clears rdx, the high half of an unsigned dividend.
+func XorEdxEdx(c *Code) i64 {
+  E(c, 0x31)
+  E(c, 0xD2)
+  return 0
+}
+
 func SetccAl(c *Code, cc i64) i64 {
   E(c, 0x0F)
   E(c, cc)

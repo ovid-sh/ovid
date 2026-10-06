@@ -37,6 +37,11 @@ const OP_SIZEOF i64 = 28
 const OP_BSWAP16 i64 = 29
 const OP_BSWAP32 i64 = 30
 const OP_BSWAP64 i64 = 31
+const OP_USHR i64 = 32
+const OP_UMULHI i64 = 33
+const OP_UDIV i64 = 34
+const OP_UREM i64 = 35
+const OP_ULT i64 = 36
 const OP_LOR i64 = 40
 const OP_LAND i64 = 41
 const OP_EQ i64 = 42
@@ -68,6 +73,12 @@ func StoreOp(op i64) bool {
 
 func BswapOp(op i64) bool {
   return op >= OP_BSWAP16 && op <= OP_BSWAP64
+}
+
+// UnsignedOp groups the unsigned operations: binary operators spelled as
+// calls, with left and right like the operators. ult gives a bool.
+func UnsignedOp(op i64) bool {
+  return op >= OP_USHR && op <= OP_ULT
 }
 
 func OpWidth(op i64) i64 {
@@ -989,6 +1000,31 @@ func Primary0(p *P) *Node {
   if PeekKw(p, strptr("syscall"), 7) {
     Ident(p)
     return CallArgs(p, OP_SYSCALL, 0, 0, 0, 0)
+  }
+  var uop i64 = 0
+  if PeekKw(p, strptr("ushr"), 4) {
+    uop = OP_USHR
+  } else if PeekKw(p, strptr("umulhi"), 6) {
+    uop = OP_UMULHI
+  } else if PeekKw(p, strptr("udiv"), 4) {
+    uop = OP_UDIV
+  } else if PeekKw(p, strptr("urem"), 4) {
+    uop = OP_UREM
+  } else if PeekKw(p, strptr("ult"), 3) {
+    uop = OP_ULT
+  }
+  if uop != 0 {
+    Ident(p)
+    Expect(p, 40)
+    var ul *Node = ParseExpr(p)
+    Expect(p, 44)
+    var ur *Node = ParseExpr(p)
+    Expect(p, 41)
+    var un *Node = NewNode(p, uop)
+    un.num = Eid(p)
+    un.left = ul
+    un.right = ur
+    return un
   }
   var isLoad bool = PeekKw(p, strptr("load8"), 5) || PeekKw(p, strptr("load16"), 6) || PeekKw(p, strptr("load32"), 6) || PeekKw(p, strptr("load64"), 6)
   var isBswap bool = PeekKw(p, strptr("bswap16"), 7) || PeekKw(p, strptr("bswap32"), 7) || PeekKw(p, strptr("bswap64"), 7)
