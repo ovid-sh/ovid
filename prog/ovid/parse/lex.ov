@@ -260,8 +260,9 @@ func Ident(p *P) i64 {
 // A statement tries many keywords at one position, so the end of the word
 // there is kept: kwat is that position + 1, kwend the word's end (the
 // position itself when no identifier starts there).
-// PeekLen reports whether the next tokens are len(: len is a keyword only
-// there, so a variable may still be named len.
+// PeekLen reports whether the next tokens are len(, with at most spaces
+// and tabs between: len is a keyword only there, so a variable may still
+// be named len.
 func PeekLen(p *P) bool {
   if !PeekKw(p, strptr("len"), 3) {
     return false

@@ -219,15 +219,20 @@ func (p *parser) peekKw(k string) bool {
 	return id == k
 }
 
-// peekLen reports whether the next tokens are len(: len is a keyword only
-// there, so a variable may still be named len.
+// peekLen reports whether the next tokens are len(, with at most spaces
+// and tabs between: len is a keyword only there, so a variable may still
+// be named len.
 func (p *parser) peekLen() bool {
 	if !p.peekKw("len") {
 		return false
 	}
 	m := p.save()
 	p.ident()
-	open := p.peekByte('(')
+	i := p.i
+	for i < len(p.src) && (p.src[i] == ' ' || p.src[i] == '\t') {
+		i++
+	}
+	open := i < len(p.src) && p.src[i] == '('
 	p.restore(m)
 	return open
 }
