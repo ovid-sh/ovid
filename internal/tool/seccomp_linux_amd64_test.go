@@ -142,12 +142,12 @@ func TestBuildReportsSyscalls(t *testing.T) {
 	reader := mkmod(t, demo(`package demo
 import ovid/io
 func main(io *ovid/io.Cap) i64 {
-  var p i64 = ovid/io.Alloc(io, 8)
   var n i64 = ovid/io.Alloc(io, 8)
-  if ovid/io.ReadFile(io, ovid/io.Arg(io, 1), ovid/io.CLen(ovid/io.Arg(io, 1)), p, n) != 0 {
+  var p i64, e i64 = ovid/io.ReadFile(io, ovid/io.Arg(io, 1), ovid/io.CLen(ovid/io.Arg(io, 1)), n)
+  if e != 0 {
     return 1
   }
-  ovid/io.Stdout(load64(p), load64(n))
+  ovid/io.Stdout(p, load64(n))
   return 0
 }
 `))

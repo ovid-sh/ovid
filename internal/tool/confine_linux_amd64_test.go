@@ -15,7 +15,8 @@ import (
 )
 
 // writerProg writes "hello" to out.txt in its working directory and to the
-// path in its first argument, and prints both results.
+// path in its first argument, and prints both results (an error code: 13
+// is EACCES, what Landlock refuses with).
 const writerProg = `package demo
 import ovid/io
 func main(io *ovid/io.Cap) i64 {
@@ -60,7 +61,7 @@ func TestRunConfine(t *testing.T) {
 		}
 		t.Log("no Landlock on this kernel: the file-system half is not checked")
 	} else {
-		if len(confined) != 2 || confined[1] != "landlock" || r["stdout"] != "cwd 0 module -1\n" {
+		if len(confined) != 2 || confined[1] != "landlock" || r["stdout"] != "cwd 0 module 13\n" {
 			t.Fatalf("with Landlock: %s", b.String())
 		}
 		if _, err := os.Stat(leak); err == nil {
@@ -216,7 +217,7 @@ func TestConfineWritableDir(t *testing.T) {
 		t.Fatal(b.String())
 	}
 	r := last(t, b.String())
-	if r["exit"] != float64(0) || r["stdout"] != "cwd -1 module -1\n" || r["writable"] != nil {
+	if r["exit"] != float64(0) || r["stdout"] != "cwd 13 module 13\n" || r["writable"] != nil {
 		t.Fatalf("with nowhere to write: %v", r)
 	}
 	if _, err := os.Stat(leak); err == nil {

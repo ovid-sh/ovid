@@ -96,19 +96,18 @@ func main(io *ovid/io.Cap) i64 {
   var buf i64 = ovid/io.Alloc(io, size)
   var n i64 = 0
   var r i64 = 1
-  while r > 0 {
+  var e i64 = 0
+  while r > 0 && e == 0 {
     if n == size {
       var bigger i64 = ovid/io.Alloc(io, size * 2)
       ovid/mem.Copy(bigger, buf, n)
       buf = bigger
       size = size * 2
     }
-    r = ovid/io.Read(0, buf + n, size - n)
-    if r > 0 {
-      n = n + r
-    }
+    r, e = ovid/io.Read(0, buf + n, size - n)
+    n = n + r
   }
-  if r < 0 {
+  if e != 0 {
     ovid/io.Eprint(strptr("sortn: cannot read standard input\n"))
     return 1
   }

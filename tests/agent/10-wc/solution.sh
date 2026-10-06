@@ -15,13 +15,14 @@ func main(io *ovid/io.Cap) i64 {
     return 1
   }
   var name i64 = ovid/io.Arg(io, 1)
-  var cells i64 = ovid/io.Alloc(io, 16)
-  if ovid/io.ReadFile(io, name, ovid/io.CLen(name), cells, cells + 8) != 0 {
+  var nn i64 = ovid/io.Alloc(io, 8)
+  var data i64, e i64 = ovid/io.ReadFile(io, name, ovid/io.CLen(name), nn)
+  if e != 0 {
     ovid/io.Eprint(strptr("wc: cannot read the file\n"))
     return 1
   }
-  var p i64 = load64(cells)
-  var n i64 = load64(cells + 8)
+  var p i64 = data
+  var n i64 = load64(nn)
   var lines i64 = 0
   var words i64 = 0
   var inword bool = false
