@@ -17,6 +17,11 @@ import (
 	"ovid/internal/tool"
 )
 
+// commit is the revision for a build with no VCS stamp of its own (built
+// outside a checkout, as Nix does): -ldflags "-X main.commit=REV", where a
+// "-dirty" suffix means the tree had changes.
+var commit string
+
 // args is a parsed command line: positionals, flags with values, and bools.
 type args struct {
 	pos   []string
@@ -270,6 +275,10 @@ func version(w io.Writer) int {
 				r["commit_time"] = s.Value
 			}
 		}
+	}
+	if _, ok := r["commit"]; !ok && commit != "" {
+		r["commit"] = strings.TrimSuffix(commit, "-dirty")
+		r["dirty"] = strings.HasSuffix(commit, "-dirty")
 	}
 	if exe, err := os.Executable(); err == nil {
 		r["path"] = exe
