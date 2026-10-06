@@ -255,6 +255,8 @@
                 hello.package = hello;
                 cat = { package = catfile; args = [ "/etc/os-release" ]; };
                 greet = { package = greet; listen = 8080; };
+                # The module's defaults, untouched, on a unix socket.
+                sock = { package = greet; listen = "/run/greet.sock"; };
               };
               systemd.services."ovid-greet@".serviceConfig.RuntimeMaxSec = "3s";
             };
@@ -302,6 +304,16 @@
               machine.wait_until_succeeds("test -z \"$(systemctl list-units --all --plain --no-legend 'ovid-greet@*')\"", timeout=30)
               machine.succeed("bash -c 'exec ${idle 8}; ! curl -sS --max-time 2 \"http://127.0.0.1:8080/hello?9th\"'")
               machine.wait_until_succeeds("test -z \"$(systemctl list-units --all --plain --no-legend 'ovid-greet@*')\"", timeout=30)
+
+              # The defaults the test above overrides or cannot reach: a
+              # connection lives 60 s, and a unix socket has no per-source
+              # cap (0: only the 64 connections bound it; a source there is a UID).
+              machine.wait_for_unit("ovid-sock.socket")
+              out = machine.succeed("curl -fsS --unix-socket /run/greet.sock 'http://x/hello?unix'")
+              assert out == "hello, unix\n", out
+              machine.succeed("systemctl show ovid-sock@probe.service -p RuntimeMaxUSec --value | grep -x 1min")
+              machine.succeed("systemctl show ovid-sock.socket -p MaxConnectionsPerSource --value | grep -x 0")
+              machine.succeed("systemctl show ovid-greet.socket -p MaxConnectionsPerSource --value | grep -x 8")
 
               machine.succeed("cp -r ${./nix/example} /tmp/ex && chmod -R u+w /tmp/ex")
               machine.succeed("cd /tmp/ex && ovid build -o /tmp/h && /tmp/h | grep 'hello from'")
