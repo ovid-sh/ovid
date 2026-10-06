@@ -20,8 +20,10 @@ const helpOverview = `ovid: a small compiled language and its toolchain, built f
 
 Source is plain .ov text. A module is a directory with ovid.mod; each
 subdirectory holding .ov files is one package, and its path is the package
-name. Every command prints JSON lines; the last line always has "ok".
-Exit codes: 0 ok, 1 errors, 2 stale edit, 64 usage, 124 run: timeout,
+name. Every command prints JSON lines with "ok" in the last line, except
+help, run, and the read commands outline, show, refs, grep, which print
+text (outline, refs, grep still end with the JSON "ok" line; show prints
+source only; --json gives records). Exit codes: 0 ok, 1 errors, 2 stale edit, 64 usage, 124 run: timeout,
 125 run: could not build or start the program.
 Paths in records are relative to the working directory; with
 OVID_PATHS=module in the environment, to the module root.
