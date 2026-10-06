@@ -444,6 +444,10 @@ func planSplices(w io.Writer, dir string, m *module.Module, base map[string][]by
 		}
 	}
 	before := runCheck(m)
+	// Everything the plan needed from m is in sps, loaded, and before; what
+	// follows needs only its root. Let the tree go before the next is built,
+	// or an edit costs two modules' memory at its peak.
+	m.Release()
 	full := map[string][]byte{}
 	for k, v := range base {
 		full[k] = v
