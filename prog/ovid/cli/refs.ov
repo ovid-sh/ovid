@@ -400,7 +400,7 @@ func CmdRefs(io *ovid/io.Cap) i64 {
     var line i64 = LineOf(f, u.tokp - f.src, lp, ln)
     var tmp i64 = ovid/io.Alloc(io, 32)
     var dn i64 = ovid/mem.FormatI64(tmp, line)
-    var pad i64 = 5 - dn
+    var pad i64 = 4 - dn
     while pad > 0 {
       ovid/mem.WByte(io, b, 32)
       pad = pad - 1
