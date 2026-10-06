@@ -413,16 +413,20 @@ func EPkg(e *E, k *Pkg) i64 {
       if d.istab != 0 {
         WL(e, strptr(",\"type\":\"["), 10)
         WInt(e.io, e.b, d.tabn)
-        WL(e, strptr("]i64\",\"value\":0,\"table\":true,\"values\":["), 39)
-        var vi i64 = 0
-        while vi < d.tabn {
-          if vi > 0 {
-            WC(e, 44)
+        WL(e, strptr("]i64\",\"value\":0,\"table\":true"), strlen("]i64\",\"value\":0,\"table\":true"))
+        // An empty table has no values key, as the Go dump omits it.
+        if d.tabn > 0 {
+          WL(e, strptr(",\"values\":["), strlen(",\"values\":["))
+          var vi i64 = 0
+          while vi < d.tabn {
+            if vi > 0 {
+              WC(e, 44)
+            }
+            WInt(e.io, e.b, load64(d.tab + (vi * 8)))
+            vi = vi + 1
           }
-          WInt(e.io, e.b, load64(d.tab + (vi * 8)))
-          vi = vi + 1
+          WC(e, 93)
         }
-        WC(e, 93)
       } else {
         WL(e, strptr(",\"type\":\"i64\",\"value\":"), 22)
         WInt(e.io, e.b, d.val)

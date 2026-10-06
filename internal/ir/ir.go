@@ -49,7 +49,8 @@ type Import struct {
 }
 
 // Const is a const, or a table: a const whose Values are its elements,
-// read with Name[i] and len(Name). A table's Type is [N]i64 and its Value 0.
+// read with Name[i] and len(Name). A table's Type is [N]i64 and its Value
+// 0; an empty table's Values are absent from the dump.
 type Const struct {
 	ID       string  `json:"id"`
 	Name     string  `json:"name"`
