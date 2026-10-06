@@ -52,7 +52,8 @@ func main(io *ovid/io.Cap) i64 {
 		want string
 	}{
 		{head(body) + strings.Repeat("x", body), fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n%d", len(fmt.Sprint(body)), body)},
-		// Answered from the head: the body is not read at all.
+		// Answered by the head's Content-Length, without waiting for the
+		// rest of the body.
 		{head(body+1) + strings.Repeat("x", body+1), tooLarge},
 		{"POST / HTTP/1.1\r\nContent-Length: 99999999999999999999\r\n\r\n" + strings.Repeat("x", max), tooLarge},
 		// A head with no end, longer than a request may be.
