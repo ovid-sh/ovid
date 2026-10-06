@@ -208,21 +208,26 @@ func (b *Buf) rexMem(w bool, reg, base, index int, force bool) {
 // LoadMem loads rax from width bits (8, 16, 32, or 64) at
 // [base+index+disp], zero-extended. index is -1 for none.
 func (b *Buf) LoadMem(width, base, index int, disp int32) {
+	b.LoadMemReg(width, RAX, base, index, disp)
+}
+
+// LoadMemReg is LoadMem into dst.
+func (b *Buf) LoadMemReg(width, dst, base, index int, disp int32) {
 	switch width {
 	case 8:
-		b.rexMem(true, RAX, base, index, false)
+		b.rexMem(true, dst, base, index, false)
 		b.emit(0x0F, 0xB6)
 	case 16:
-		b.rexMem(true, RAX, base, index, false)
+		b.rexMem(true, dst, base, index, false)
 		b.emit(0x0F, 0xB7)
 	case 32:
-		b.rexMem(false, RAX, base, index, false)
+		b.rexMem(false, dst, base, index, false)
 		b.emit(0x8B)
 	default:
-		b.rexMem(true, RAX, base, index, false)
+		b.rexMem(true, dst, base, index, false)
 		b.emit(0x8B)
 	}
-	b.memOperand(RAX, base, index, disp)
+	b.memOperand(dst, base, index, disp)
 }
 
 // StoreMemReg stores the low width bits (8, 16, 32, or 64) of src at
