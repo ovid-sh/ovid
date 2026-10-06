@@ -30,6 +30,9 @@ type Buf struct {
 	labels []int
 	fixups []fixup
 	abs    []absFix
+	// Marks counts the labels marked so far: code between two of them
+	// runs straight through.
+	Marks int
 }
 
 type fixup struct {
@@ -51,6 +54,7 @@ func (b *Buf) NewLabel() int {
 
 func (b *Buf) Mark(id int) {
 	b.labels[id] = len(b.Code)
+	b.Marks++
 }
 
 func (b *Buf) Pos() int { return len(b.Code) }

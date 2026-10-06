@@ -154,6 +154,13 @@ type cg struct {
 	saved      []int       // callee-saved registers the func uses
 	saveBase   int32       // their save slots lie below this displacement
 	tregs      []int       // registers for temps at levels 0, 1, ...
+	// The last quotient of a local by a constant, kept in qreg (-1 for
+	// none) for the next division of the same local by the same constant,
+	// while the local is not assigned and no label is reached.
+	qreg       int
+	qloc       int
+	qdiv       int64
+	qmark      int // b.Marks when it was kept; -1 for none
 	pkg        *ir.Package
 	fn         *ir.Func
 	marks      []Mark
@@ -314,6 +321,7 @@ func (c *cg) emitFunc(pkg *ir.Package, fn *ir.Func) error {
 	}
 	c.allocRegs(fn)
 	c.allocTemps()
+	c.allocQuot(fn)
 	c.saveBase = -(c.localBytes + tempBytes)
 	frame := c.localBytes + tempBytes + int32(8*len(c.saved))
 	if frame%16 != 0 {
@@ -524,6 +532,61 @@ func (c *cg) allocTemps() {
 	}
 }
 
+// allocQuot gives a func that divides locals by constants more than once
+// a callee-saved register no local uses, to keep a quotient in; calls
+// leave it alone.
+func (c *cg) allocQuot(fn *ir.Func) {
+	c.qreg = -1
+	c.qloc = -1
+	c.qmark = -1
+	callee := []int{asm.RBX, asm.R12, asm.R13, asm.R14, asm.R15}
+	if len(c.saved) < len(callee) && c.quotStmts(fn.Body) >= 2 {
+		c.qreg = callee[len(c.saved)]
+		c.saved = append(c.saved, c.qreg)
+	}
+}
+
+// quotOf reports whether n divides a local by a constant through magic:
+// the local, and the constant.
+func (c *cg) quotOf(n *ir.Node) (int, int64, bool) {
+	if n.Op != "div" && n.Op != "mod" {
+		return 0, 0, false
+	}
+	i, ok := c.ref[uncast(n.Left)]
+	k, d := c.operand(n.Right)
+	if !ok || k != kImm || (d > -2 && d < 2) || (d > 0 && d&(d-1) == 0) {
+		return 0, 0, false
+	}
+	return i, d, true
+}
+
+// quotStmts counts the divisions in stmts that quotOf accepts.
+func (c *cg) quotStmts(stmts []*ir.Node) int {
+	m := 0
+	for _, s := range stmts {
+		if s == nil {
+			continue
+		}
+		m += c.quotExpr(s.Val) + c.quotExpr(s.Base) + c.quotExpr(s.Addr) + c.quotExpr(s.Cond)
+		m += c.quotStmts(s.Then) + c.quotStmts(s.Else) + c.quotStmts(s.Body)
+	}
+	return m
+}
+
+func (c *cg) quotExpr(n *ir.Node) int {
+	if n == nil {
+		return 0
+	}
+	m := c.quotExpr(n.Left) + c.quotExpr(n.Right) + c.quotExpr(n.Arg) + c.quotExpr(n.Base)
+	for _, a := range n.Args {
+		m += c.quotExpr(a)
+	}
+	if _, _, ok := c.quotOf(n); ok {
+		m++
+	}
+	return m
+}
+
 // weighStmts adds, for each local used or assigned in stmts, 4^depth to
 // its weight, depth being the number of loops around the use (at most 5).
 func (c *cg) weighStmts(stmts []*ir.Node, depth int, w []int) {
@@ -708,9 +771,18 @@ func (c *cg) emitStmt(s *ir.Node) error {
 			} else {
 				c.b.MovMemRbpImm(c.locals[i].disp, 0)
 			}
+			if c.qloc == i {
+				c.qmark = -1
+			}
 			return nil
 		}
-		return c.emitAssign(i, s.Val)
+		if err := c.emitAssign(i, s.Val); err != nil {
+			return err
+		}
+		if c.qloc == i {
+			c.qmark = -1
+		}
+		return nil
 	case "setfield":
 		off, err := c.fieldOff(s.Base, s.Name)
 		if err != nil {
@@ -963,6 +1035,15 @@ func (c *cg) divConst(mod bool, d int64) {
 		c.b.SarRegImm(asm.RAX, k)
 		return
 	}
+	c.quotient(d)
+	if mod {
+		c.remainder(d)
+	}
+}
+
+// quotient emits rcx = rax and rax = rax / d, for a d that magic takes.
+// Uses rdx.
+func (c *cg) quotient(d int64) {
 	m, s := magic(d)
 	c.b.MovRegReg(asm.RCX, asm.RAX)
 	c.b.MovRegImm(asm.RAX, m)
@@ -979,10 +1060,34 @@ func (c *cg) divConst(mod bool, d int64) {
 	c.b.MovRegReg(asm.RAX, asm.RDX)
 	c.b.ShrRegImm(asm.RAX, 63)
 	c.b.AluRegReg(aluAdd, asm.RAX, asm.RDX)
-	if mod {
-		c.b.ImulRaxImm(int32(d))
-		c.b.AluRegReg(aluSub, asm.RCX, asm.RAX)
-		c.b.MovRegReg(asm.RAX, asm.RCX)
+}
+
+// remainder emits rax = rcx - rax*d: the remainder of rcx by d, when
+// rax is their quotient.
+func (c *cg) remainder(d int64) {
+	c.b.ImulRaxImm(int32(d))
+	c.b.AluRegReg(aluSub, asm.RCX, asm.RAX)
+	c.b.MovRegReg(asm.RAX, asm.RCX)
+}
+
+// emitQuot emits x / d or x % d of local i, which is n's left side,
+// dividing only when qreg does not have the quotient already.
+func (c *cg) emitQuot(n *ir.Node, i int, d int64) {
+	k, v := c.operand(n.Left)
+	if c.qmark == c.b.Marks && c.qloc == i && c.qdiv == d {
+		c.b.MovRegReg(asm.RAX, c.qreg)
+		if n.Op == "mod" {
+			c.loadOpnd(asm.RCX, k, v)
+			c.remainder(d)
+		}
+		return
+	}
+	c.loadOpnd(asm.RAX, k, v)
+	c.quotient(d)
+	c.b.MovRegReg(c.qreg, asm.RAX)
+	c.qloc, c.qdiv, c.qmark = i, d, c.b.Marks
+	if n.Op == "mod" {
+		c.remainder(d)
 	}
 }
 
@@ -1061,6 +1166,10 @@ func (c *cg) arithRcx(op string) {
 // the left side waits in a temp: a register when tempReg has one, else a
 // slot in the frame.
 func (c *cg) emitArith(n *ir.Node, lv int) error {
+	if i, d, ok := c.quotOf(n); ok && c.qreg >= 0 {
+		c.emitQuot(n, i, d)
+		return nil
+	}
 	if k, v := c.operand(n.Right); k != kNone {
 		if err := c.emitExpr(n.Left, lv); err != nil {
 			return err

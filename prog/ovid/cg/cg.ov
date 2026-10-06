@@ -56,6 +56,14 @@ type C struct {
   tregs i64
   ntregs i64
   mshift i64
+  // The last quotient of a local by a constant, kept in qreg (-1 for none)
+  // for the next division of the same local by the same constant, while
+  // the local is not assigned and no label is reached. qloc is the
+  // local's record, qmark code.marks when it was kept (-1 for none).
+  qreg i64
+  qloc i64
+  qdiv i64
+  qmark i64
   msg *ovid/mem.Buf
   adding bool
 }
@@ -761,6 +769,66 @@ func AllocTemps(c *C) i64 {
   return 0
 }
 
+// AllocQuot gives a func that divides locals by constants more than once
+// a callee-saved register no local uses, to keep a quotient in; calls
+// leave it alone.
+func AllocQuot(c *C, body *ovid/parse.Node) i64 {
+  c.qreg = -1
+  c.qloc = 0
+  c.qmark = -1
+  if c.nsaved < 5 && QuotStmts(c, body) >= 2 {
+    c.qreg = CalleeReg(c.nsaved)
+    store64(c.saved + (c.nsaved * 8), c.qreg)
+    c.nsaved = c.nsaved + 1
+  }
+  return 0
+}
+
+// QuotOf returns the record of the local n divides by a constant through
+// Magic, or 0; c.opv then gets the constant.
+func QuotOf(c *C, n *ovid/parse.Node) i64 {
+  if n.op != ovid/parse.OP_DIV && n.op != ovid/parse.OP_MOD {
+    return 0
+  }
+  var loc i64 = LocOf(c, Uncast(n.left))
+  if loc == 0 || Operand(c, n.right) != KIMM {
+    return 0
+  }
+  var d i64 = c.opv
+  if (d > (0 - 2) && d < 2) || (d > 0 && (d & (d - 1)) == 0) {
+    return 0
+  }
+  return loc
+}
+
+// QuotStmts counts the divisions in the statement list s that QuotOf
+// accepts.
+func QuotStmts(c *C, s *ovid/parse.Node) i64 {
+  var m i64 = 0
+  while s != 0 as *ovid/parse.Node {
+    m = ((m + QuotExpr(c, s.val)) + (QuotExpr(c, s.base) + QuotExpr(c, s.addr))) + QuotExpr(c, s.cond)
+    m = ((m + QuotStmts(c, s.then)) + QuotStmts(c, s.els)) + QuotStmts(c, s.body)
+    s = s.next
+  }
+  return m
+}
+
+func QuotExpr(c *C, n *ovid/parse.Node) i64 {
+  if n == 0 as *ovid/parse.Node {
+    return 0
+  }
+  var m i64 = ((QuotExpr(c, n.left) + QuotExpr(c, n.right)) + QuotExpr(c, n.arg)) + QuotExpr(c, n.base)
+  var a *ovid/parse.Node = n.args
+  while a != 0 as *ovid/parse.Node {
+    m = m + QuotExpr(c, a)
+    a = a.next
+  }
+  if QuotOf(c, n) != 0 {
+    m = m + 1
+  }
+  return m
+}
+
 // TempReg is the register temp level lv may use while right is evaluated,
 // or -1: none when right calls something, which may clobber it.
 func TempReg(c *C, lv i64, right *ovid/parse.Node) i64 {
@@ -937,6 +1005,16 @@ func DivConst(c *C, mod bool, d i64) i64 {
     ovid/asm.MovRegReg(c.code, 0, 1)
     return ovid/asm.SarRegImm(c.code, 0, k)
   }
+  Quotient(c, d)
+  if mod {
+    Remainder(c, d)
+  }
+  return 0
+}
+
+// Quotient emits rcx = rax and rax = rax / d, for a d that Magic takes.
+// Uses rdx.
+func Quotient(c *C, d i64) i64 {
   var m i64 = Magic(c, d)
   ovid/asm.MovRegReg(c.code, 1, 0)
   ovid/asm.MovRegImm(c.code, 0, m)
@@ -952,11 +1030,39 @@ func DivConst(c *C, mod bool, d i64) i64 {
   // The quotient rounds toward zero: add one when it is negative.
   ovid/asm.MovRegReg(c.code, 0, 2)
   ovid/asm.ShrRegImm(c.code, 0, 63)
-  ovid/asm.AluRegReg(c.code, ALU_ADD, 0, 2)
-  if mod {
-    ovid/asm.ImulRaxImm(c.code, d)
-    ovid/asm.AluRegReg(c.code, ALU_SUB, 1, 0)
-    ovid/asm.MovRegReg(c.code, 0, 1)
+  return ovid/asm.AluRegReg(c.code, ALU_ADD, 0, 2)
+}
+
+// Remainder emits rax = rcx - rax*d: the remainder of rcx by d, when rax
+// is their quotient.
+func Remainder(c *C, d i64) i64 {
+  ovid/asm.ImulRaxImm(c.code, d)
+  ovid/asm.AluRegReg(c.code, ALU_SUB, 1, 0)
+  return ovid/asm.MovRegReg(c.code, 0, 1)
+}
+
+// EmitQuot emits x / d or x % d of the local whose record is loc, which
+// is n's left side, dividing only when qreg does not have the quotient
+// already.
+func EmitQuot(c *C, n *ovid/parse.Node, loc i64, d i64) i64 {
+  var k i64 = Operand(c, n.left)
+  var v i64 = c.opv
+  if c.qmark == c.code.marks && c.qloc == loc && c.qdiv == d {
+    ovid/asm.MovRegReg(c.code, 0, c.qreg)
+    if n.op == ovid/parse.OP_MOD {
+      LoadOpnd(c, 1, k, v)
+      Remainder(c, d)
+    }
+    return 0
+  }
+  LoadOpnd(c, 0, k, v)
+  Quotient(c, d)
+  ovid/asm.MovRegReg(c.code, c.qreg, 0)
+  c.qloc = loc
+  c.qdiv = d
+  c.qmark = c.code.marks
+  if n.op == ovid/parse.OP_MOD {
+    Remainder(c, d)
   }
   return 0
 }
@@ -1061,6 +1167,10 @@ func ArithRcx(c *C, op i64) i64 {
 // slot in the frame.
 func EmitArith(c *C, n *ovid/parse.Node, lv i64) i64 {
   var op i64 = n.op
+  var qloc i64 = QuotOf(c, n)
+  if qloc != 0 && c.qreg >= 0 {
+    return EmitQuot(c, n, qloc, c.opv)
+  }
   var k i64 = Operand(c, n.right)
   var v i64 = c.opv
   if k != KNONE {
@@ -1774,11 +1884,20 @@ func EmitStmt(c *C, s *ovid/parse.Node) i64 {
       // runs: the frame is not cleared on entry, and the slot may have been
       // a sibling block's.
       if load64(loc + LOC_REG) >= 0 {
-        return ovid/asm.MovRegImm(c.code, load64(loc + LOC_REG), 0)
+        ovid/asm.MovRegImm(c.code, load64(loc + LOC_REG), 0)
+      } else {
+        ovid/asm.MovMemRbpImm(c.code, load64(loc + 16), 0)
       }
-      return ovid/asm.MovMemRbpImm(c.code, load64(loc + 16), 0)
+    } else {
+      EmitAssign(c, s, loc)
+      if c.err != 0 {
+        return c.err
+      }
     }
-    return EmitAssign(c, s, loc)
+    if c.qloc == loc {
+      c.qmark = -1
+    }
+    return 0
   }
   if op == ovid/parse.OP_SETFIELD {
     var off i64 = FieldOff(c, s.base, s.namep, s.namen)
@@ -1881,6 +2000,7 @@ func EmitFunc(c *C, fn *ovid/parse.Decl) i64 {
   }
   AllocRegs(c, body, ovid/parse.CountDecls(c.fn.sub))
   AllocTemps(c)
+  AllocQuot(c, body)
   c.saveBase = 0 - (c.localBytes + tempBytes)
   var frame i64 = (c.localBytes + tempBytes) + (c.nsaved * 8)
   if (frame % 16) != 0 {

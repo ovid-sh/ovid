@@ -21,6 +21,9 @@ type Code struct {
   abss i64
   ro i64
   ron i64
+  // marks counts the labels marked so far: code between two of them runs
+  // straight through.
+  marks i64
   rocap i64
   stab i64
   smask i64
@@ -104,6 +107,7 @@ func NewLabel(c *Code) i64 {
 
 func Mark(c *Code, id i64) i64 {
   store64(c.labs + (id * 8), c.len)
+  c.marks = c.marks + 1
   return 0
 }
 
