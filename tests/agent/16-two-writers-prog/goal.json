@@ -1,0 +1,15 @@
+{
+  "check": true,
+  "inject": {
+    "ovid/parse/zz_goal_test.ov": "package ovid/parse\n\nimport ovid/io\n\nfunc GoalDecl(io *ovid/io.Cap, name i64, n i64, next *Decl) *Decl {\n  var d *Decl = ovid/io.Alloc(io, sizeof(Decl)) as *Decl\n  d.namep = name\n  d.namen = n\n  d.next = next\n  return d\n}\n\nfunc TestGoalLastDecl(io *ovid/io.Cap) i64 {\n  var c *Decl = GoalDecl(io, strptr(\"c\"), 1, 0 as *Decl)\n  var b *Decl = GoalDecl(io, strptr(\"b\"), 1, c)\n  var a *Decl = GoalDecl(io, strptr(\"a\"), 1, b)\n  if LastDecl(a) != c || LastDecl(c) != c {\n    return 1\n  }\n  if LastDecl(0 as *Decl) != 0 as *Decl {\n    return 2\n  }\n  return 0\n}\n\nfunc TestGoalLookupDecl(io *ovid/io.Cap) i64 {\n  var c *Decl = GoalDecl(io, strptr(\"cc\"), 2, 0 as *Decl)\n  var b *Decl = GoalDecl(io, strptr(\"bb\"), 2, c)\n  var a *Decl = GoalDecl(io, strptr(\"aa\"), 2, b)\n  if LookupDecl(a, strptr(\"bb\"), 2) != b || LookupDecl(a, strptr(\"cc\"), 2) != c {\n    return 1\n  }\n  if LookupDecl(a, strptr(\"b\"), 1) != 0 as *Decl || LookupDecl(0 as *Decl, strptr(\"aa\"), 2) != 0 as *Decl {\n    return 2\n  }\n  return 0\n}\n"
+  },
+  "tests": ["TestGoalLastDecl", "TestGoalLookupDecl"],
+  "runs": [
+    {"args": ["check", "."], "files": {"ovid.mod": "module m\nentry m\n", "m/main.ov": "package m\n\nfunc H(x i64, b bool) bool {\n  return x + 1 > x * 2 && !b || x == 0\n}\n"}, "stdout": "{\"fact\":\"error\",\"code\":\"bad_main\",\"message\":\"entry package has no main\",\"id\":\"pkg:m\",\"pkg\":\"m\",\"file\":\"m/main.ov\",\"line\":1,\"col\":1,\"source\":\"package m\"}\n{\"fact\":\"summary\",\"ok\":false,\"errors\":1,\"packages\":1,\"funcs\":1,\"revision\":\"c7da54d46f79fdf3\"}\n", "exit": 1}
+  ],
+  "contains": [
+    {"re": "^func LookupDecl\\(d \\*Decl, np i64, nn i64\\) \\*Decl", "count": 1, "file": "ovid/parse/ast.ov"},
+    {"re": "^func LastDecl\\(d \\*Decl\\) \\*Decl", "count": 1, "file": "ovid/parse/ast.ov"}
+  ],
+  "lacks": [{"re": "\\bFindDecl\\b"}]
+}
