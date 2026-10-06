@@ -3,65 +3,67 @@ package ovid/parse
 import ovid/io
 import ovid/mem
 
-// Op codes. Statements are 1..11; everything else is an expression, and
+// Op codes. Statements are 1..13; everything else is an expression, and
 // the binary operators (OP_LOR and up) come after every other expression,
 // so EvalConst can tell them apart by number.
 const OP_VAR i64 = 1
-const OP_ASSIGN i64 = 2
-const OP_SETFIELD i64 = 3
-const OP_STORE8 i64 = 4
-const OP_STORE16 i64 = 5
-const OP_STORE32 i64 = 6
-const OP_STORE64 i64 = 7
-const OP_RETURN i64 = 8
-const OP_IF i64 = 9
-const OP_WHILE i64 = 10
-const OP_EXPR i64 = 11
-const OP_INT i64 = 12
-const OP_BOOL i64 = 13
-const OP_NAME i64 = 14
-const OP_CALL i64 = 15
-const OP_SYSCALL i64 = 16
-const OP_FIELD i64 = 17
-const OP_CAST i64 = 18
-const OP_NOT i64 = 19
-const OP_NEG i64 = 20
-const OP_BNOT i64 = 21
-const OP_LOAD8 i64 = 22
-const OP_LOAD16 i64 = 23
-const OP_LOAD32 i64 = 24
-const OP_LOAD64 i64 = 25
-const OP_STRPTR i64 = 26
-const OP_STRLEN i64 = 27
-const OP_SIZEOF i64 = 28
-const OP_BSWAP16 i64 = 29
-const OP_BSWAP32 i64 = 30
-const OP_BSWAP64 i64 = 31
-const OP_USHR i64 = 32
-const OP_UMULHI i64 = 33
-const OP_UDIV i64 = 34
-const OP_UREM i64 = 35
-const OP_ULT i64 = 36
-const OP_INDEX i64 = 37
-const OP_LEN i64 = 38
-const OP_LOR i64 = 40
-const OP_LAND i64 = 41
-const OP_EQ i64 = 42
-const OP_NE i64 = 43
-const OP_LT i64 = 44
-const OP_LE i64 = 45
-const OP_GT i64 = 46
-const OP_GE i64 = 47
-const OP_ADD i64 = 48
-const OP_SUB i64 = 49
-const OP_OR i64 = 50
-const OP_XOR i64 = 51
-const OP_MUL i64 = 52
-const OP_DIV i64 = 53
-const OP_MOD i64 = 54
-const OP_AND i64 = 55
-const OP_SHL i64 = 56
-const OP_SHR i64 = 57
+const OP_VAR2 i64 = 2
+const OP_ASSIGN i64 = 3
+const OP_ASSIGN2 i64 = 4
+const OP_SETFIELD i64 = 5
+const OP_STORE8 i64 = 6
+const OP_STORE16 i64 = 7
+const OP_STORE32 i64 = 8
+const OP_STORE64 i64 = 9
+const OP_RETURN i64 = 10
+const OP_IF i64 = 11
+const OP_WHILE i64 = 12
+const OP_EXPR i64 = 13
+const OP_INT i64 = 14
+const OP_BOOL i64 = 15
+const OP_NAME i64 = 16
+const OP_CALL i64 = 17
+const OP_SYSCALL i64 = 18
+const OP_FIELD i64 = 19
+const OP_CAST i64 = 20
+const OP_NOT i64 = 21
+const OP_NEG i64 = 22
+const OP_BNOT i64 = 23
+const OP_LOAD8 i64 = 24
+const OP_LOAD16 i64 = 25
+const OP_LOAD32 i64 = 26
+const OP_LOAD64 i64 = 27
+const OP_STRPTR i64 = 28
+const OP_STRLEN i64 = 29
+const OP_SIZEOF i64 = 30
+const OP_BSWAP16 i64 = 31
+const OP_BSWAP32 i64 = 32
+const OP_BSWAP64 i64 = 33
+const OP_USHR i64 = 34
+const OP_UMULHI i64 = 35
+const OP_UDIV i64 = 36
+const OP_UREM i64 = 37
+const OP_ULT i64 = 38
+const OP_INDEX i64 = 39
+const OP_LEN i64 = 40
+const OP_LOR i64 = 50
+const OP_LAND i64 = 51
+const OP_EQ i64 = 52
+const OP_NE i64 = 53
+const OP_LT i64 = 54
+const OP_LE i64 = 55
+const OP_GT i64 = 56
+const OP_GE i64 = 57
+const OP_ADD i64 = 58
+const OP_SUB i64 = 59
+const OP_OR i64 = 60
+const OP_XOR i64 = 61
+const OP_MUL i64 = 62
+const OP_DIV i64 = 63
+const OP_MOD i64 = 64
+const OP_AND i64 = 65
+const OP_SHL i64 = 66
+const OP_SHR i64 = 67
 
 // LoadOp, StoreOp, and BswapOp group the memory and byte-order builtins;
 // OpWidth is the width in bits of one of them.
@@ -97,7 +99,10 @@ func OpWidth(op i64) i64 {
 }
 
 // Node is a statement or expression. num is its per-func id number; lists
-// (args, then, els, body) are chained through next. valk selects the JSON
+// (args, then, els, body) are chained through next. A var2 or assign2
+// receives a call's two results into name and name2 (typ and typ2 for a
+// var2; "_" discards; loc2 is the second local); a return with val2
+// returns two. valk selects the JSON
 // value: 1 int, 2 bool, 3 string. loc is for the code generator: on a var,
 // an assign, or a name, the local it is, by number from 1 (0 for none). The
 // heap is never reused, so Alloc memory starts zeroed.
@@ -108,6 +113,10 @@ type Node struct {
   namen i64
   typp i64
   typn i64
+  name2p i64
+  name2n i64
+  typ2p i64
+  typ2n i64
   pkgp i64
   pkgn i64
   fnp i64
@@ -122,6 +131,7 @@ type Node struct {
   base *Node
   addr *Node
   val *Node
+  val2 *Node
   cond *Node
   args *Node
   then *Node
@@ -131,6 +141,7 @@ type Node struct {
   off i64
   end i64
   loc i64
+  loc2 i64
 }
 
 // Decl is an import (name = path), const, type, field, func, or param.
@@ -139,7 +150,8 @@ type Node struct {
 // generator, its label and whether it is reachable from main. The checker
 // sets dup on a func whose name was already declared in its package. A
 // table (const Name [N]i64) has istab set, its N elements at tab, and ro,
-// once the code generator has placed them in rodata, their offset + 1.
+// once the code generator has placed them in rodata, their offset + 1. A
+// func with two results has the second, its error code, in typ2.
 type Decl struct {
   namep i64
   namen i64
@@ -160,6 +172,8 @@ type Decl struct {
   tabn i64
   istab i64
   ro i64
+  typ2p i64
+  typ2n i64
 }
 
 // Pkg is one package: the merged result of its files. mark, ord, low, and
@@ -718,9 +732,30 @@ func ParseFunc(p *P, s i64) i64 {
     }
   }
   Expect(p, 41)
-  ParseType(p)
-  d.typp = p.tp
-  d.typn = p.tn
+  if PeekByte(p, 40) {
+    // Two results: (T, i64), the second an error code.
+    Expect(p, 40)
+    ParseType(p)
+    d.typp = p.tp
+    d.typn = p.tn
+    Expect(p, 44)
+    ParseType(p)
+    d.typ2p = p.tp
+    d.typ2n = p.tn
+    if !ovid/mem.Eq(p.tp, p.tn, strptr("i64"), 3) {
+      if ErrBegin(p) {
+        EW(p, strptr("the second result is an error code; write ("), strlen("the second result is an error code; write ("))
+        EW(p, d.typp, d.typn)
+        EW(p, strptr(", i64)"), strlen(", i64)"))
+        ErrEnd(p)
+      }
+    }
+    Expect(p, 41)
+  } else {
+    ParseType(p)
+    d.typp = p.tp
+    d.typn = p.tn
+  }
   d.body = ParseBlock(p)
   AddFunc(p.pkg, d)
   p.fnp = 0
@@ -799,6 +834,26 @@ func Stmt(p *P, s i64, id i64) *Node {
     return sn
   }
   var e *Node = ParseExpr(p)
+  if PeekByte(p, 44) {
+    // a, b = call: the call's two results into existing locals.
+    if e.op != OP_NAME || e.pkgn != 0 {
+      Errorf(p, strptr("cannot assign to this expression"), strlen("cannot assign to this expression"))
+      return e
+    }
+    Expect(p, 44)
+    Ident(p)
+    var a2 *Node = NewNode(p, OP_ASSIGN2)
+    a2.namep = e.namep
+    a2.namen = e.namen
+    a2.name2p = p.tp
+    a2.name2n = p.tn
+    if IsBlank(a2.namep, a2.namen) && IsBlank(a2.name2p, a2.name2n) {
+      Errorf(p, strptr("_, _ discards both results; receive the error"), strlen("_, _ discards both results; receive the error"))
+    }
+    Expect(p, 61)
+    a2.val = ParseExpr(p)
+    return a2
+  }
   if PeekAssign(p) {
     Expect(p, 61)
     var v *Node = ParseExpr(p)
@@ -825,18 +880,60 @@ func Stmt(p *P, s i64, id i64) *Node {
 }
 
 func ParseVar(p *P) *Node {
-  Ident(p)
   var n *Node = NewNode(p, OP_VAR)
-  n.namep = p.tp
-  n.namen = p.tn
-  ParseType(p)
-  n.typp = p.tp
-  n.typn = p.tn
+  VarName(p, n, false)
+  if PeekByte(p, 44) {
+    // var a T, b T = call: the call's two results. _ discards one.
+    Expect(p, 44)
+    n.op = OP_VAR2
+    VarName(p, n, true)
+    Expect(p, 61)
+    n.val = ParseExpr(p)
+    if IsBlank(n.namep, n.namen) && IsBlank(n.name2p, n.name2n) {
+      Errorf(p, strptr("var _, _ discards both results; receive the error"), strlen("var _, _ discards both results; receive the error"))
+    }
+    return n
+  }
+  if IsBlank(n.namep, n.namen) {
+    Errorf(p, strptr("_ only discards one of a call's two results: var x T, _ = f(...)"), strlen("_ only discards one of a call's two results: var x T, _ = f(...)"))
+  }
   if PeekAssign(p) {
     Expect(p, 61)
     n.val = ParseExpr(p)
   }
   return n
+}
+
+// IsBlank reports whether the name is _.
+func IsBlank(np i64, nn i64) bool {
+  return nn == 1 && load8(np) == 95
+}
+
+// VarName reads a var's name and type into n's first or second slot; _ has
+// no type.
+func VarName(p *P, n *Node, second bool) i64 {
+  Ident(p)
+  var np i64 = p.tp
+  var nn i64 = p.tn
+  var tp i64 = 0
+  var tn i64 = 0
+  if !IsBlank(np, nn) {
+    ParseType(p)
+    tp = p.tp
+    tn = p.tn
+  }
+  if second {
+    n.name2p = np
+    n.name2n = nn
+    n.typ2p = tp
+    n.typ2n = tn
+  } else {
+    n.namep = np
+    n.namen = nn
+    n.typp = tp
+    n.typn = tn
+  }
+  return 0
 }
 
 func ParseReturn(p *P) *Node {
@@ -849,6 +946,11 @@ func ParseReturn(p *P) *Node {
     return n
   }
   n.val = ParseExpr(p)
+  if PeekByte(p, 44) {
+    // return v, e: a func with two results.
+    Expect(p, 44)
+    n.val2 = ParseExpr(p)
+  }
   return n
 }
 

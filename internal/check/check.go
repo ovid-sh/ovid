@@ -56,6 +56,7 @@ type sig struct {
 	params []string
 	names  []string
 	result string
+	two    bool // the func also returns an error code (i64)
 	id     string
 }
 
@@ -67,6 +68,8 @@ type checker struct {
 	fn       *ir.Func
 	imported map[string]bool
 	res      string
+	two      bool              // the func being checked returns two results
+	recv     bool              // the call being checked is received by a var2 or assign2
 	dup      map[*ir.Func]bool // funcs whose name was already declared
 	dupName  map[string]bool   // those funcs, as pkg.Name
 	lean     bool              // record no Types and no Uses
@@ -260,7 +263,7 @@ func run(p *ir.Program, lean bool) *Result {
 				c.err(fn.ID, "struct_value", "result must be i64, bool, or a pointer; write *"+rt)
 			}
 			c.useType(rt, fn.ID, "result", fn.ID, fn.ResultSpan)
-			c.sigs[pkg.Path+"."+fn.Name] = sig{params: ps, names: names, result: rt, id: fn.ID}
+			c.sigs[pkg.Path+"."+fn.Name] = sig{params: ps, names: names, result: rt, two: fn.Result2 != "", id: fn.ID}
 			c.r.Facts = append(c.r.Facts, Fact{"fact": "func", "id": fn.ID, "sig": Signature(pkg.Path, fn)})
 			for _, st := range fn.Body {
 				st.Walk(func(n *ir.Node) { claim(n.ID) })
@@ -504,7 +507,7 @@ func (c *checker) checkEntry(p *ir.Program) {
 				ok = pt == t
 			}
 		}
-		if res, _ := c.resolve(handle.Result); !ok || res != "i64" {
+		if res, _ := c.resolve(handle.Result); !ok || res != "i64" || handle.Result2 != "" {
 			c.issue(Issue{Code: "bad_handler", ID: handle.ID, Message: "handle has the wrong signature", Expected: hw, Got: Signature(ep.Path, handle)})
 		}
 	} else {
@@ -514,7 +517,7 @@ func (c *checker) checkEntry(p *ir.Program) {
 			pt, _ = c.resolve(main.Params[0].Type)
 		}
 		res, _ := c.resolve(main.Result)
-		if len(main.Params) != 1 || pt != "*ovid/io.Cap" || res != "i64" {
+		if len(main.Params) != 1 || pt != "*ovid/io.Cap" || res != "i64" || main.Result2 != "" {
 			c.issue(Issue{Code: "bad_main", ID: main.ID, Message: "main has the wrong signature", Expected: want, Got: Signature(ep.Path, main)})
 		}
 	}
@@ -556,6 +559,10 @@ func Signature(pkg string, fn *ir.Func) string {
 		b.WriteString(ShowType(pkg, pa.Type))
 	}
 	b.WriteString(") ")
+	if fn.Result2 != "" {
+		b.WriteString("(" + ShowType(pkg, fn.Result) + ", " + fn.Result2 + ")")
+		return b.String()
+	}
 	b.WriteString(ShowType(pkg, fn.Result))
 	return b.String()
 }
@@ -673,6 +680,7 @@ func (c *checker) checkBody(fn *ir.Func) {
 	if c.res == "" {
 		c.res = "invalid"
 	}
+	c.two = fn.Result2 != ""
 	c.stmts(e, fn.Body)
 	if !pathsReturn(fn.Body) {
 		c.issue(Issue{Code: "missing_return", ID: fn.ID, Message: fn.Name + ": not every path ends in return",
@@ -735,6 +743,76 @@ func (c *checker) stmt(e *env, s *ir.Node) {
 		if vt != t && vt != "invalid" && t != "invalid" {
 			c.mismatch(s.Val.ID, "assign to "+s.Name, vt, t)
 		}
+	case "var2", "assign2":
+		// Each name's type: declared (var2) or the local's (assign2); "_"
+		// takes anything. The call's results must match them in order.
+		ts := [2]string{}
+		for i, name := range []string{s.Name, s.Two.Name} {
+			if name == "_" {
+				ts[i] = "_"
+				continue
+			}
+			if i == 1 && name == s.Name {
+				c.err(s.ID, "duplicate_name", name+" receives both results; give the error code its own name, or _")
+			}
+			if s.Op == "var2" {
+				typ, sp := s.Type, s.TypeSpan
+				if i == 1 {
+					typ, sp = s.Two.Type, s.Two.TypeSpan
+				}
+				t, err := c.resolve(typ)
+				if err != nil {
+					c.err(s.ID, "bad_type", err.Error())
+					t = "invalid"
+				} else if !scalar(t) {
+					c.err(s.ID, "struct_value", "local must be i64, bool, or a pointer; write *"+t)
+				}
+				c.useType(t, s.ID, "type", c.fn.ID, sp)
+				if _, ok := e.get(name); ok {
+					c.err(s.ID, "duplicate_name", name+" is already declared in this function; assign with `"+name+" = ...` instead")
+				}
+				ts[i] = t
+			} else {
+				sp := s.NameSpan
+				if i == 1 {
+					sp = s.Two.NameSpan
+				}
+				t, id, ok := e.lookup(name)
+				if !ok {
+					c.unknownName(s.ID, name, e)
+					t = "invalid"
+				} else {
+					c.use(id, s.ID, "assign", c.fn.ID, sp)
+				}
+				ts[i] = t
+			}
+		}
+		// Only a call that is the whole value is received; a two-result
+		// call nested in an expression is used as one value.
+		sg, direct := c.callSig(s.Val)
+		c.recv = direct && sg.two
+		vt := c.expr(e, s.Val)
+		c.recv = false
+		if !direct || !sg.two {
+			if vt != "invalid" {
+				c.issue(Issue{Code: "arity", ID: s.Val.ID, Message: "two names receive one value",
+					Expected: "a call to a func with two results", Got: "one value",
+					Hint: "only a func declared (T, i64) returns two results"})
+			}
+		} else {
+			for i, want := range []string{sg.result, "i64"} {
+				if ts[i] != "_" && ts[i] != "invalid" && want != "invalid" && ts[i] != want {
+					c.mismatch(s.Val.ID, []string{"first", "second"}[i]+" result into "+[]string{s.Name, s.Two.Name}[i], want, ts[i])
+				}
+			}
+		}
+		if s.Op == "var2" {
+			for i, name := range []string{s.Name, s.Two.Name} {
+				if name != "_" {
+					e.bind(name, ts[i], s.ID)
+				}
+			}
+		}
 	case "setfield":
 		bt := c.expr(e, s.Base)
 		ft := c.field(s, bt)
@@ -758,9 +836,29 @@ func (c *checker) stmt(e *env, s *ir.Node) {
 			c.mismatch(s.ID, "return", "nothing", c.res)
 			return
 		}
+		// return f(...) forwards both results of a two-result call.
+		forward := false
+		if sg, ok := c.callSig(s.Val); ok && sg.two && c.two && s.Val2 == nil {
+			c.recv, forward = true, true
+		}
 		vt := c.expr(e, s.Val)
 		if vt != c.res && vt != "invalid" && c.res != "invalid" {
 			c.mismatch(s.Val.ID, "return value of "+c.fn.Name, vt, c.res)
+		}
+		if forward {
+			return
+		}
+		if s.Val2 != nil && !c.two {
+			c.issue(Issue{Code: "arity", ID: s.ID, Message: c.fn.Name + " returns one value", Expected: "1", Got: "2",
+				Hint: "declare the func (" + c.fn.Result + ", i64) to return an error code too"})
+		} else if s.Val2 == nil && c.two {
+			c.issue(Issue{Code: "arity", ID: s.ID, Message: c.fn.Name + " returns a value and an error code", Expected: "2", Got: "1",
+				Hint: "write return v, 0 on success and return 0, code on failure"})
+		}
+		if s.Val2 != nil {
+			if et := c.expr(e, s.Val2); et != "i64" && et != "invalid" {
+				c.mismatch(s.Val2.ID, "error code returned by "+c.fn.Name, et, "i64")
+			}
 		}
 	case "if":
 		if ct := c.expr(e, s.Cond); ct != "bool" && ct != "invalid" {
@@ -1101,6 +1199,11 @@ func (c *checker) call(e *env, n *ir.Node) string {
 		return "invalid"
 	}
 	c.use(sg.id, n.ID, "call", c.fn.ID, n.NameSpan)
+	if sg.two && !c.recv {
+		c.issue(Issue{Code: "unused_result", ID: n.ID, Message: n.Func + " returns a value and an error code; only a var or an assignment of two names can receive them",
+			Hint: "var v " + sg.result + ", e i64 = " + n.Func + "(...), or _ for the one not needed"})
+	}
+	c.recv = false
 	if len(n.Args) != len(sg.params) {
 		c.issue(Issue{Code: "arity", ID: n.ID, Message: fmt.Sprintf("%s takes %d arguments, got %d", n.Func, len(sg.params), len(n.Args)),
 			Expected: fmt.Sprint(len(sg.params)), Got: fmt.Sprint(len(n.Args)), Hint: c.sigText(path, n.Func)})
@@ -1114,6 +1217,20 @@ func (c *checker) call(e *env, n *ir.Node) string {
 		}
 	}
 	return sg.result
+}
+
+// callSig is the signature of the func a call node names, if it is a call
+// to a known func.
+func (c *checker) callSig(n *ir.Node) (sig, bool) {
+	if n == nil || n.Op != "call" {
+		return sig{}, false
+	}
+	path := n.Pkg
+	if path == "" {
+		path = c.pkg.Path
+	}
+	sg, ok := c.sigs[path+"."+n.Func]
+	return sg, ok
 }
 
 func (c *checker) sigText(path, name string) string {

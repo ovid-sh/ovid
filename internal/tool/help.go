@@ -91,7 +91,29 @@ Imports may not form a cycle, directly or through other packages
 
 Types: i64, bool, *T (T a struct in this package or path.T from an import).
 No struct values, slices, arrays, strings, generics, methods, globals, or
-closures. At most 6 params; exactly one result type.
+closures. At most 6 params; one result type, or two: (T, i64), a value
+and an error code (0: success), see Errors below.
+
+Errors: a func declared (T, i64) returns a value and an error code, 0 for
+success. A caller must receive both, with a var of two names or an
+assignment to two locals, _ discarding one; a call used as a single value
+or as a statement is unused_result:
+  func Div(a i64, b i64) (i64, i64) {    // the quotient and 0, or 0 and a code
+    if b == 0 {
+      return 0, E_ZERO
+    }
+    return a / b, 0
+  }
+  var q i64, e i64 = Div(x, y)
+  if e != 0 {
+    return 0, e                 // pass it on; return Div(x, y) forwards both
+  }
+  q, e = Div(q, 2)              // into locals that exist
+  var r i64, _ = Div(x, 3)      // the error is ignored, visibly
+What a code means is up to the func: consts the package declares. The
+second result is always i64; main, handle, and tests have one result.
+Faults (a bad load, a division by zero, a table index out of range) are
+not errors: they kill the program, and ovid test reports where.
 
 Tables: const Name [N]i64 = {e, ...} is a read-only table of N constant
 expressions in the binary's data, which may run over several lines. It is
@@ -102,6 +124,7 @@ package. len is a keyword only before a ( (spaces or tabs may sit between);
 elsewhere a variable may be named len.
 
 Statements: var x T = e | var x T (zero: 0, false, or a null pointer) | x = e | p.f = e | if c { } else if c { } else { }
+| var v T, e i64 = f(...) | v, e = f(...) | return v, e (two results, see Errors)
 | while c { } | return e | store8/16/32/64(addr, v) (the low bits of v) | call(...).
 Every path through a func must return.
 
