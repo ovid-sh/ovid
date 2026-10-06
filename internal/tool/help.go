@@ -97,7 +97,8 @@ expressions in the binary's data, which may run over several lines. It is
 not a value: read Name[i] (i64; i outside 0..N-1 kills the program with
 an illegal instruction, which ovid test reports at the statement) and
 len(Name) (N, a compile-time constant), also as path.Name[i] from another
-package. len is a keyword only as len(; a variable may be named len.
+package. len is a keyword only before a ( (spaces or tabs may sit between);
+elsewhere a variable may be named len.
 
 Statements: var x T = e | var x T (zero: 0, false, or a null pointer) | x = e | p.f = e | if c { } else if c { } else { }
 | while c { } | return e | store8/16/32/64(addr, v) (the low bits of v) | call(...).
