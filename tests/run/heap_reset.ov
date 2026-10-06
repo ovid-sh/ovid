@@ -1,0 +1,73 @@
+// stdout: "same 1, zero 1\n"
+// stdout: "past a region: same 1, zero 1\n"
+// stdout: "own mapping: same 1, zero 1\n"
+package demo
+
+import ovid/io
+
+func dirty(io *ovid/io.Cap, n i64) i64 {
+  var p i64 = ovid/io.Alloc(io, n)
+  store64(p, 7)
+  store64((p + n) - 8, 7)
+  return p
+}
+
+// zero is 1 when the n bytes at p are all 0.
+func zero(p i64, n i64) i64 {
+  var i i64 = 0
+  while i < n {
+    if load64(p + i) != 0 {
+      return 0
+    }
+    i = i + 8
+  }
+  return 1
+}
+
+func say(label i64, same bool, z i64) i64 {
+  ovid/io.Print(label)
+  ovid/io.Print(strptr("same "))
+  if same {
+    ovid/io.Print(strptr("1"))
+  } else {
+    ovid/io.Print(strptr("0"))
+  }
+  ovid/io.Print(strptr(", zero "))
+  if z == 1 {
+    ovid/io.Print(strptr("1\n"))
+  } else {
+    ovid/io.Print(strptr("0\n"))
+  }
+  return 0
+}
+
+func main(io *ovid/io.Cap) i64 {
+  var m *ovid/io.HeapMark = ovid/io.MarkHeap(io)
+  var a i64 = dirty(io, 4096)
+  dirty(io, 100)
+  ovid/io.ResetHeap(io, m)
+  var b i64 = ovid/io.Alloc(io, 8192)
+  say(strptr(""), a == b, zero(b, 8192))
+
+  // Enough 1 MiB blocks to start a second region, then a reset back into
+  // the first one.
+  ovid/io.ResetHeap(io, m)
+  var first i64 = dirty(io, 1 << 20)
+  var i i64 = 0
+  while i < 140 {
+    dirty(io, 1 << 20)
+    i = i + 1
+  }
+  ovid/io.ResetHeap(io, m)
+  var again i64 = ovid/io.Alloc(io, 1 << 20)
+  say(strptr("past a region: "), first == again, zero(again, 1 << 20))
+
+  // Most of a region, then a block that gets a mapping of its own.
+  ovid/io.ResetHeap(io, m)
+  var low i64 = dirty(io, 100 << 20)
+  dirty(io, 100 << 20)
+  ovid/io.ResetHeap(io, m)
+  var next i64 = ovid/io.Alloc(io, 100 << 20)
+  say(strptr("own mapping: "), low == next, zero(next, 100 << 20))
+  return 0
+}

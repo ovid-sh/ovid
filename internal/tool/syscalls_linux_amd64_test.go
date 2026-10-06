@@ -118,8 +118,63 @@ func main(io *ovid/io.Cap) i64 {
 				c.args[1], flags, mapPrivate|mapAnonymous|mapNoReserve)
 		}
 	}
-	if want := []uint64{128 << 20, 100 << 20, 128 << 20}; !slices.Equal(sizes, want) {
+	// The large block carries Alloc's 16-byte mapping header.
+	if want := []uint64{128 << 20, 100<<20 + 16, 128 << 20}; !slices.Equal(sizes, want) {
 		t.Fatalf("mmap sizes %v, want %v: the startup region, the large block, and a second region", sizes, want)
+	}
+}
+
+// TestResetHeapUnmaps: a reset gives back every mapping Alloc took after
+// the mark, the blocks with mappings of their own and the regions it grew
+// into, so a host that resets between requests keeps only its first region.
+func TestResetHeapUnmaps(t *testing.T) {
+	const (
+		sysMmap   = 9
+		sysMunmap = 11
+	)
+	dir := mkmod(t, demo(`package demo
+import ovid/io
+func main(io *ovid/io.Cap) i64 {
+  var m *ovid/io.HeapMark = ovid/io.MarkHeap(io)
+  var r i64 = 0
+  while r < 3 {
+    var i i64 = 0
+    while i < 200 {
+      if i == 50 {
+        ovid/io.Alloc(io, 100 << 20)
+      }
+      ovid/io.Alloc(io, 1 << 20)
+      i = i + 1
+    }
+    ovid/io.ResetHeap(io, m)
+    r = r + 1
+  }
+  return 3
+}
+`))
+	calls, code := traceSyscalls(t, mustBuild(t, dir))
+	if code != 3 {
+		t.Fatalf("exit %d, want 3", code)
+	}
+	var mapped, unmapped []uint64
+	for _, c := range calls {
+		switch c.nr {
+		case sysMmap:
+			mapped = append(mapped, c.args[1])
+		case sysMunmap:
+			unmapped = append(unmapped, c.args[1])
+		}
+	}
+	// The startup region stays; every later mapping, three requests' worth
+	// of a large block and a second region, is given back.
+	want := []uint64{100<<20 + 16, 128 << 20, 100<<20 + 16, 128 << 20, 100<<20 + 16, 128 << 20}
+	if len(mapped) == 0 || mapped[0] != 128<<20 || !slices.Equal(mapped[1:], want) {
+		t.Fatalf("mmap sizes %v, want the startup region and then %v", mapped, want)
+	}
+	slices.Sort(unmapped)
+	slices.Sort(want)
+	if !slices.Equal(unmapped, want) {
+		t.Fatalf("munmap sizes %v, want %v", unmapped, want)
 	}
 }
 

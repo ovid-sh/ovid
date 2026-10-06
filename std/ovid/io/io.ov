@@ -1,13 +1,16 @@
 package ovid/io
 
 // Cap is the capability main receives: argv and the heap. Only code
-// handed a *Cap can allocate or read arguments.
+// handed a *Cap can allocate or read arguments. maps is the newest mapping
+// Alloc took from the kernel after the first region, or 0; each starts
+// with the one before it and its own length (see Alloc).
 type Cap struct {
   argc i64
   argv i64
   heap i64
   used i64
   size i64
+  maps i64
 }
 
 const SYS_READ i64 = 0
@@ -15,6 +18,8 @@ const SYS_WRITE i64 = 1
 const SYS_CLOSE i64 = 3
 const SYS_FSTAT i64 = 5
 const SYS_MMAP i64 = 9
+const SYS_MUNMAP i64 = 11
+const SYS_MADVISE i64 = 28
 const SYS_EXIT i64 = 60
 const SYS_OPENAT i64 = 257
 const SYS_FSTATAT i64 = 262
@@ -58,12 +63,16 @@ const EXIT_OOM i64 = 71
 // runtime maps the first one before main runs.
 const HEAPCHUNK i64 = 128 << 20
 
-// Alloc returns n zeroed bytes (8-aligned) from the heap. Nothing is ever
-// freed. A request that does not fit in what is left of the current region
-// starts a new region, or, when it is more than half a region, gets a
-// mapping of its own and leaves the current region in use. The result is
-// never 0: if the kernel refuses, the program ends with exit code 71 and
-// "out of memory" on standard error.
+// MAPHEAD is the header Alloc puts at the start of each mapping it takes
+// after the first region: the previous mapping (io.maps) and the length.
+const MAPHEAD i64 = 16
+
+// Alloc returns n zeroed bytes (8-aligned) from the heap. Nothing is freed
+// but by ResetHeap. A request that does not fit in what is left of the
+// current region starts a new region, or, when it is more than half a
+// region, gets a mapping of its own and leaves the current region in use.
+// The result is never 0: if the kernel refuses, the program ends with exit
+// code 71 and "out of memory" on standard error.
 func Alloc(io *Cap, n i64) i64 {
   var align i64 = (n + 7) & ^7
   if align < 8 {
@@ -72,15 +81,83 @@ func Alloc(io *Cap, n i64) i64 {
   var u i64 = io.used
   if (u + align) > io.size {
     if align > HEAPCHUNK / 2 {
-      return Map(align)
+      return mapped(io, align + MAPHEAD) + MAPHEAD
     }
-    io.heap = Map(HEAPCHUNK)
+    io.heap = mapped(io, HEAPCHUNK)
     io.size = HEAPCHUNK
-    u = 0
+    u = MAPHEAD
   }
   var p i64 = io.heap + u
   io.used = u + align
   return p
+}
+
+// mapped maps n bytes and links them into io.maps, so ResetHeap can find
+// them.
+func mapped(io *Cap, n i64) i64 {
+  var p i64 = Map(n)
+  store64(p, io.maps)
+  store64(p + 8, n)
+  io.maps = p
+  return p
+}
+
+// HeapMark is a point in the heap's life that ResetHeap returns to.
+type HeapMark struct {
+  heap i64
+  used i64
+  size i64
+  maps i64
+}
+
+// MarkHeap records where the heap is now. The mark itself is allocated
+// before that point, so it outlives every reset to it.
+func MarkHeap(io *Cap) *HeapMark {
+  var m *HeapMark = Alloc(io, sizeof(HeapMark)) as *HeapMark
+  m.heap = io.heap
+  m.used = io.used
+  m.size = io.size
+  m.maps = io.maps
+  return m
+}
+
+// ResetHeap frees everything Alloc returned since m: the mappings taken
+// since go back to the kernel, and the rest of the region m was in is
+// zeroed, so Alloc returns those addresses again. It is for a host that
+// serves one request after another, between two of them: memory a request
+// allocated must not be used after, as it reads zeros or another
+// request's data. Bytes the region had in use are zeroed in place; whole
+// pages past them, when a later region took over, are handed back to the
+// kernel (MADV_DONTNEED), which zeroes them on the next touch. m must be a
+// mark of this io not yet reset past: a reset to m frees any later mark.
+func ResetHeap(io *Cap, m *HeapMark) i64 {
+  var end i64 = io.heap + io.used
+  if io.heap != m.heap {
+    end = m.heap + m.size
+  }
+  var q i64 = io.maps
+  while q != m.maps {
+    var prev i64 = load64(q)
+    syscall(SYS_MUNMAP, q, load64(q + 8), 0, 0, 0, 0)
+    q = prev
+  }
+  io.maps = m.maps
+  io.heap = m.heap
+  io.size = m.size
+  io.used = m.used
+  var p i64 = m.heap + m.used
+  if io.heap + io.size == end {
+    var page i64 = (p + 4095) & ^4095
+    if page < end {
+      syscall(SYS_MADVISE, page, end - page, 4, 0, 0, 0)
+      end = page
+    }
+  }
+  while p < end {
+    store64(p, 0)
+    p = p + 8
+  }
+  return 0
 }
 
 // Map returns n fresh zeroed bytes from the kernel (mmap, private and

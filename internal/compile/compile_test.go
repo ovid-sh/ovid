@@ -26,6 +26,7 @@ func ioPkg() ir.Package {
 				{ID: "fld:heap", Name: "heap", Type: "i64"},
 				{ID: "fld:used", Name: "used", Type: "i64"},
 				{ID: "fld:size", Name: "size", Type: "i64"},
+				{ID: "fld:maps", Name: "maps", Type: "i64"},
 			},
 		}},
 	}

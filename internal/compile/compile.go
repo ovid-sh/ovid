@@ -231,6 +231,10 @@ func (c *cg) emitStartup(mainLab int) error {
 	if err != nil {
 		return err
 	}
+	maps, err := capOff(c.prog, "maps")
+	if err != nil {
+		return err
+	}
 	fail := c.b.NewLabel()
 	c.b.MovR12MemRsp()
 	c.b.LeaR13RspPlus8()
@@ -260,6 +264,7 @@ func (c *cg) emitStartup(mainLab int) error {
 	c.b.MovMemRegDispRax(asm.RCX, heap)
 	c.b.MovRegImm64(asm.RAX, 0)
 	c.b.MovMemRegDispRax(asm.RCX, used)
+	c.b.MovMemRegDispRax(asm.RCX, maps)
 	c.b.MovRegImm64(asm.RAX, heapSize)
 	c.b.MovMemRegDispRax(asm.RCX, size)
 	c.b.MovRegReg(asm.RDI, asm.RSP)
