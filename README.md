@@ -28,7 +28,7 @@ ovid.mod              module <name> / entry <pkg>
 <pkg path>/*.ov       one directory per package; any number of files
 ```
 
-The package path is the directory path. `ovid/io`, `ovid/mem`, and `ovid/test` (`Eq`, `True`: a failing check prints got/want) ship with
+The package path is the directory path. `ovid/io`, `ovid/mem`, `ovid/test` (`Eq`, `True`: a failing check prints got/want), and `ovid/http` (an HTTP handler's request and response, and a host that serves one request over stdin and stdout) ship with
 the toolchain (`std/`, embedded in the binary). A module cannot replace them:
 a package of its own with one of those paths is an error (`reserved_path`),
 and `ovid.mod` has no way to name another standard library. Only the shipped
