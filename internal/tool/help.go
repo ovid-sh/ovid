@@ -97,13 +97,20 @@ Errors: a func declared (T, i64) returns a value and an error code, 0 for
 success. A caller must receive both, with a var of two names or an
 assignment to two locals, _ discarding one; a call used as a single value
 or as a statement is unused_result:
-  func Open(io *ovid/io.Cap, p i64) (i64, i64)      // fd, 0 or 0, code
-  var fd i64, e i64 = ovid/io.Open(io, p)
-  if e != 0 {
-    return 0, e                 // pass it on; return Open(...) forwards both
+  func Div(a i64, b i64) (i64, i64) {    // the quotient and 0, or 0 and a code
+    if b == 0 {
+      return 0, E_ZERO
+    }
+    return a / b, 0
   }
-  var n i64, _ = Read(fd)       // the error is ignored, visibly
-What a code means is the library's: ovid/io's E_ consts and ErrText.
+  var q i64, e i64 = Div(x, y)
+  if e != 0 {
+    return 0, e                 // pass it on; return Div(x, y) forwards both
+  }
+  q, e = Div(q, 2)              // into locals that exist
+  var r i64, _ = Div(x, 3)      // the error is ignored, visibly
+What a code means is up to the func: consts the package declares. The
+second result is always i64; main, handle, and tests have one result.
 Faults (a bad load, a division by zero, a table index out of range) are
 not errors: they kill the program, and ovid test reports where.
 
