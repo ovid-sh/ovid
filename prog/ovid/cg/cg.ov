@@ -149,7 +149,7 @@ func UnaryOp(op i64) bool {
   if op == ovid/parse.OP_NOT || op == ovid/parse.OP_NEG || op == ovid/parse.OP_BNOT || op == ovid/parse.OP_CAST {
     return true
   }
-  return op == ovid/parse.OP_LOAD8 || op == ovid/parse.OP_LOAD32 || op == ovid/parse.OP_LOAD64
+  return ovid/parse.LoadOp(op) || ovid/parse.BswapOp(op)
 }
 
 func FindPkg(c *C, pp i64, pn i64) *ovid/parse.Pkg {
@@ -355,7 +355,7 @@ func StmtPeak(s *ovid/parse.Node) i64 {
     var v i64 = ExprPeak(s.val, 1)
     return Max(b, Max(v, 1))
   }
-  if op == ovid/parse.OP_STORE8 || op == ovid/parse.OP_STORE64 {
+  if ovid/parse.StoreOp(op) {
     var b i64 = ExprPeak(s.addr, 0)
     var v i64 = ExprPeak(s.val, 1)
     return Max(b, Max(v, 1))
@@ -462,10 +462,10 @@ func TypeOf(c *C, n *ovid/parse.Node) i64 {
     return FailIn(c, strptr("nil expr in "), strlen("nil expr in "))
   }
   var op i64 = n.op
-  if LeafOp(op) || ArithOp(op) || op == ovid/parse.OP_NEG || op == ovid/parse.OP_BNOT {
+  if LeafOp(op) || ArithOp(op) || op == ovid/parse.OP_NEG || op == ovid/parse.OP_BNOT || ovid/parse.BswapOp(op) {
     return SetI64(c)
   }
-  if op == ovid/parse.OP_LOAD8 || op == ovid/parse.OP_LOAD32 || op == ovid/parse.OP_LOAD64 || op == ovid/parse.OP_SYSCALL {
+  if ovid/parse.LoadOp(op) || op == ovid/parse.OP_SYSCALL {
     return SetI64(c)
   }
   if op == ovid/parse.OP_BOOL || CmpOp(op) || op == ovid/parse.OP_LAND || op == ovid/parse.OP_LOR || op == ovid/parse.OP_NOT {
@@ -1857,18 +1857,12 @@ func EmitExpr(c *C, n *ovid/parse.Node, lv i64) i64 {
   if op == ovid/parse.OP_SYSCALL {
     return EmitSys(c, n, lv)
   }
-  if op == ovid/parse.OP_LOAD8 || op == ovid/parse.OP_LOAD32 || op == ovid/parse.OP_LOAD64 {
+  if ovid/parse.LoadOp(op) {
     var ld i64 = EmitAddr(c, n.arg, lv)
     if ld == ADDRERR {
       return c.err
     }
-    var width i64 = 64
-    if op == ovid/parse.OP_LOAD8 {
-      width = 8
-    } else if op == ovid/parse.OP_LOAD32 {
-      width = 32
-    }
-    ovid/asm.LoadMem(c.code, width, c.amBase, c.amIndex, ld)
+    ovid/asm.LoadMem(c.code, ovid/parse.OpWidth(op), c.amBase, c.amIndex, ld)
     return 0
   }
   if !UnaryOp(op) {
@@ -1883,6 +1877,8 @@ func EmitExpr(c *C, n *ovid/parse.Node, lv i64) i64 {
     ovid/asm.MovzxRaxAl(c.code)
   } else if op == ovid/parse.OP_NEG {
     ovid/asm.NegRax(c.code)
+  } else if ovid/parse.BswapOp(op) {
+    ovid/asm.BswapRax(c.code, ovid/parse.OpWidth(op))
   } else {
     ovid/asm.NotRax(c.code)
   }
@@ -1944,11 +1940,8 @@ func EmitStmt(c *C, s *ovid/parse.Node) i64 {
     }
     return EmitStore(c, s.base, s.val, 64, off)
   }
-  if op == ovid/parse.OP_STORE8 {
-    return EmitStore(c, s.addr, s.val, 8, 0)
-  }
-  if op == ovid/parse.OP_STORE64 {
-    return EmitStore(c, s.addr, s.val, 64, 0)
+  if ovid/parse.StoreOp(op) {
+    return EmitStore(c, s.addr, s.val, ovid/parse.OpWidth(op), 0)
   }
   if op == ovid/parse.OP_EXPR {
     return EmitExpr(c, s.val, 0)

@@ -354,13 +354,17 @@ func RexMem(c *Code, w bool, reg i64, base i64, index i64, force bool) i64 {
   return 0
 }
 
-// LoadMem loads rax from width bits at [base+index+disp], zero-extended.
-// index is -1 for none.
+// LoadMem loads rax from width bits (8, 16, 32, or 64) at
+// [base+index+disp], zero-extended. index is -1 for none.
 func LoadMem(c *Code, width i64, base i64, index i64, disp i64) i64 {
   if width == 8 {
     RexMem(c, true, 0, base, index, false)
     E(c, 0x0F)
     E(c, 0xB6)
+  } else if width == 16 {
+    RexMem(c, true, 0, base, index, false)
+    E(c, 0x0F)
+    E(c, 0xB7)
   } else if width == 32 {
     RexMem(c, false, 0, base, index, false)
     E(c, 0x8B)
@@ -371,13 +375,21 @@ func LoadMem(c *Code, width i64, base i64, index i64, disp i64) i64 {
   return MemOperand(c, 0, base, index, disp)
 }
 
-// StoreMemReg stores the low width bits (8 or 64) of src at
+// StoreMemReg stores the low width bits (8, 16, 32, or 64) of src at
 // [base+index+disp].
 func StoreMemReg(c *Code, width i64, src i64, base i64, index i64, disp i64) i64 {
   if width == 8 {
     // sil and dil are only named with a REX prefix.
     RexMem(c, false, src, base, index, src >= 4 && src < 8)
     E(c, 0x88)
+  } else if width == 16 {
+    // The operand-size prefix goes before REX.
+    E(c, 0x66)
+    RexMem(c, false, src, base, index, false)
+    E(c, 0x89)
+  } else if width == 32 {
+    RexMem(c, false, src, base, index, false)
+    E(c, 0x89)
   } else {
     RexMem(c, true, src, base, index, false)
     E(c, 0x89)
@@ -385,8 +397,8 @@ func StoreMemReg(c *Code, width i64, src i64, base i64, index i64, disp i64) i64
   return MemOperand(c, src, base, index, disp)
 }
 
-// StoreMemImm stores imm, as a byte or sign-extended to 64 bits, at
-// [base+index+disp].
+// StoreMemImm stores the low width bits of imm (sign-extended to 64 for a
+// 64-bit store) at [base+index+disp].
 func StoreMemImm(c *Code, width i64, base i64, index i64, disp i64, imm i64) i64 {
   if width == 8 {
     RexMem(c, false, 0, base, index, false)
@@ -395,10 +407,33 @@ func StoreMemImm(c *Code, width i64, base i64, index i64, disp i64, imm i64) i64
     E(c, imm)
     return 0
   }
-  RexMem(c, true, 0, base, index, false)
+  if width == 16 {
+    E(c, 0x66)
+    RexMem(c, false, 0, base, index, false)
+    E(c, 0xC7)
+    MemOperand(c, 0, base, index, disp)
+    E(c, imm)
+    E(c, imm >> 8)
+    return 0
+  }
+  RexMem(c, width == 64, 0, base, index, false)
   E(c, 0xC7)
   MemOperand(c, 0, base, index, disp)
   EU32(c, imm)
+  return 0
+}
+
+// BswapRax reverses the bytes of the low width bits (16, 32, or 64) of
+// rax and zero-extends: bswap, then for 16 a shift down by 48.
+func BswapRax(c *Code, width i64) i64 {
+  if width != 32 {
+    E(c, 0x48)
+  }
+  E(c, 0x0F)
+  E(c, 0xC8)
+  if width == 16 {
+    ShrRegImm(c, 0, 48)
+  }
   return 0
 }
 

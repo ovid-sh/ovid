@@ -112,3 +112,26 @@ func TestHashTellsTwinsApart(t *testing.T) {
 		t.Fatal("an unknown id has a hash")
 	}
 }
+
+// TestStoreStmts: every store builtin indexes as a statement, so ids,
+// show, grep, and crash reports treat it like store8 and store64.
+func TestStoreStmts(t *testing.T) {
+	d := t.TempDir()
+	os.MkdirAll(filepath.Join(d, "demo"), 0o755)
+	os.WriteFile(filepath.Join(d, "ovid.mod"), []byte("module demo\nentry demo\n"), 0o644)
+	os.WriteFile(filepath.Join(d, "demo/main.ov"), []byte("package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  var p i64 = ovid/io.Alloc(io, 8)\n  store8(p, 1)\n  store16(p, 2)\n  store32(p, 3)\n  store64(p, 4)\n  return load16(p) + bswap16(load8(p))\n}\n"), 0o644)
+	m, err := Load(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"st:demo.main:2", "st:demo.main:3", "st:demo.main:4", "st:demo.main:5"} {
+		if l := m.Index()[id]; l == nil || l.Kind != "stmt" {
+			t.Errorf("%s: want a stmt, got %+v", id, l)
+		}
+	}
+	for _, id := range []string{"ex:demo.main:5", "ex:demo.main:6"} {
+		if l := m.Index()[id]; l == nil || l.Kind != "expr" {
+			t.Errorf("%s: want an expr, got %+v", id, l)
+		}
+	}
+}

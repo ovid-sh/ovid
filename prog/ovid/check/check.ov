@@ -615,12 +615,12 @@ func CheckExpr(c *Ch, n *ovid/parse.Node) i64 {
     NeedBool(c, strptr("not needs bool"), strlen("not needs bool"))
     return SetBool(c)
   }
-  if op == ovid/parse.OP_NEG || op == ovid/parse.OP_BNOT {
+  if op == ovid/parse.OP_NEG || op == ovid/parse.OP_BNOT || ovid/parse.BswapOp(op) {
     CheckExpr(c, n.arg)
     NeedI64(c, strptr("unary needs i64"), strlen("unary needs i64"))
     return SetI64(c)
   }
-  if op == ovid/parse.OP_LOAD8 || op == ovid/parse.OP_LOAD32 || op == ovid/parse.OP_LOAD64 {
+  if ovid/parse.LoadOp(op) {
     CheckExpr(c, n.arg)
     NeedI64(c, strptr("load needs i64"), strlen("load needs i64"))
     return SetI64(c)
@@ -828,7 +828,7 @@ func CheckStmt(c *Ch, s *ovid/parse.Node) i64 {
     }
     return 0
   }
-  if op == ovid/parse.OP_STORE8 || op == ovid/parse.OP_STORE64 {
+  if ovid/parse.StoreOp(op) {
     CheckExpr(c, s.addr)
     NeedI64(c, strptr("store address"), strlen("store address"))
     CheckExpr(c, s.val)

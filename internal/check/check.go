@@ -738,7 +738,7 @@ func (c *checker) stmt(e *env, s *ir.Node) {
 		if vt != ft && vt != "invalid" && ft != "invalid" {
 			c.mismatch(s.Val.ID, "field "+s.Name, vt, ft)
 		}
-	case "store8", "store64":
+	case "store8", "store16", "store32", "store64":
 		at := c.expr(e, s.Addr)
 		vt := c.expr(e, s.Val)
 		if at != "i64" && at != "invalid" {
@@ -947,8 +947,11 @@ func (c *checker) expr0(e *env, n *ir.Node) string {
 			c.want(e, a, "i64", fmt.Sprintf("syscall argument %d", i+1))
 		}
 		return "i64"
-	case "load8", "load32", "load64":
+	case "load8", "load16", "load32", "load64":
 		c.want(e, n.Arg, "i64", n.Op+" address")
+		return "i64"
+	case "bswap16", "bswap32", "bswap64":
+		c.want(e, n.Arg, "i64", "operand of "+n.Op)
 		return "i64"
 	}
 	c.err(n.ID, "bad_op", "unknown expression op "+n.Op)

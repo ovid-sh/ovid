@@ -98,7 +98,7 @@ re-read).
 No struct values, globals, function pointers, methods, generics, or implicit
 allocation. At most six parameters, one result. Operators follow Go
 precedence; `>>` is arithmetic. String literals exist only as `strptr("…")`
-and `strlen("…")`, and are read-only. Memory is `load8/32/64`, `store8/64`, and
+and `strlen("…")`, and are read-only. Memory is `load8/16/32/64`, `store8/16/32/64`, `bswap16/32/64`, and
 `ovid/io.Alloc`. `main` is `func main(io *ovid/io.Cap) i64`; `io` is the
 capability for argv, the heap, and syscalls, and `syscall` is only allowed in
 `ovid/io`. Other packages' funcs and consts spell the import path:
