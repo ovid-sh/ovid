@@ -104,3 +104,11 @@ func capture(pid int, sig syscall.Signal, r *procResult) {
 		bp = next
 	}
 }
+
+// signalHint explains a death by a signal only confinement sends.
+func signalHint(sig syscall.Signal) string {
+	if sig == syscall.SIGSYS {
+		return confineHint
+	}
+	return ""
+}

@@ -42,6 +42,10 @@ const (
 	auditArchX8664     = 0xc000003e
 )
 
+// confineSupported: programs are linux/amd64 binaries, and so are the
+// seccomp filter and Landlock that confine them.
+const confineSupported = true
+
 // landlockAvailable reports whether this kernel has Landlock: the ABI query
 // succeeds.
 func landlockAvailable() bool {
@@ -119,7 +123,8 @@ func confineAndExec(c *confineSpec, bin string, argv []string) {
 }
 
 // restrictFS makes the file system read-only for this process except under
-// dir. It reports whether the kernel took the rules.
+// dir, or everywhere when dir is "". It reports whether the kernel took the
+// rules.
 func restrictFS(dir string) bool {
 	abi := landlockABI()
 	if abi <= 0 {
@@ -131,19 +136,21 @@ func restrictFS(dir string) bool {
 	if e != 0 {
 		return false
 	}
-	fd, err := syscall.Open(dir, oPath|syscall.O_CLOEXEC|syscall.O_DIRECTORY, 0)
-	if err != nil {
-		return false
-	}
-	// struct landlock_path_beneath_attr is packed: 8 bytes of rights, then
-	// a 4-byte descriptor.
-	var pb [12]byte
-	*(*uint64)(unsafe.Pointer(&pb[0])) = rights
-	*(*int32)(unsafe.Pointer(&pb[8])) = int32(fd)
-	_, _, e = syscall.RawSyscall6(sysLandlockAddRule, rs, landlockRulePathBeneath, uintptr(unsafe.Pointer(&pb[0])), 0, 0, 0)
-	syscall.Close(fd)
-	if e != 0 {
-		return false
+	if dir != "" {
+		fd, err := syscall.Open(dir, oPath|syscall.O_CLOEXEC|syscall.O_DIRECTORY, 0)
+		if err != nil {
+			return false
+		}
+		// struct landlock_path_beneath_attr is packed: 8 bytes of rights,
+		// then a 4-byte descriptor.
+		var pb [12]byte
+		*(*uint64)(unsafe.Pointer(&pb[0])) = rights
+		*(*int32)(unsafe.Pointer(&pb[8])) = int32(fd)
+		_, _, e = syscall.RawSyscall6(sysLandlockAddRule, rs, landlockRulePathBeneath, uintptr(unsafe.Pointer(&pb[0])), 0, 0, 0)
+		syscall.Close(fd)
+		if e != 0 {
+			return false
+		}
 	}
 	_, _, e = syscall.RawSyscall(sysLandlockRestrictSelf, rs, 0, 0)
 	syscall.Close(int(rs))

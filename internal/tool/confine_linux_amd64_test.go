@@ -38,7 +38,7 @@ func TestRunConfine(t *testing.T) {
 	dir := mkmod(t, demo(writerProg))
 	leak := filepath.Join(dir, "demo", "leak.txt")
 	var b bytes.Buffer
-	if code := RunWith(dir, []string{leak}, RunOpts{JSON: true, Confine: true}, &b); code != 0 {
+	if code := RunWith(dir, []string{leak}, RunOpts{JSON: true}, &b); code != 0 {
 		t.Fatalf("run: %s", b.String())
 	}
 	r := last(t, b.String())
@@ -118,7 +118,7 @@ func TestWrite(io *ovid/io.Cap) i64 {
 }
 `})
 	var b bytes.Buffer
-	if code := TestWith(dir, TestOpts{Confine: true}, &b); code != 0 {
+	if code := TestWith(dir, TestOpts{}, &b); code != 0 {
 		t.Fatalf("test: %s", b.String())
 	}
 	sum := last(t, b.String())
@@ -174,5 +174,48 @@ func TestLauncherNeverRunsTests(t *testing.T) {
 		if code != c.code || out != c.out || took > 5*time.Second {
 			t.Fatalf("%q %v: exit %d in %v with %q, want %d and %q, and no tests run", c.env, c.args, code, took, out, c.code, c.out)
 		}
+	}
+}
+
+// TestConfineWritableDir: the writable directory is kept only when the
+// program left something in it, and when there is nowhere to make one the
+// program still runs, with nowhere to write.
+func TestConfineWritableDir(t *testing.T) {
+	needExec(t)
+	count := func() int {
+		n, _ := filepath.Glob(filepath.Join(os.TempDir(), "ovid-writable-*"))
+		return len(n)
+	}
+	quiet := mkmod(t, demo("package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  return 0\n}\n"))
+	before := count()
+	var b bytes.Buffer
+	if code := RunWith(quiet, nil, RunOpts{JSON: true}, &b); code != 0 {
+		t.Fatal(b.String())
+	}
+	if r := last(t, b.String()); r["writable"] != nil || r["confined"] == nil || count() != before {
+		t.Fatalf("a program that wrote nothing: %v, %d directories left (had %d)", r, count(), before)
+	}
+	b.Reset()
+	if code := Test(quiet, "", false, &b); code != 0 || last(t, b.String())["writable"] != nil || count() != before {
+		t.Fatalf("test, nothing written: %s", b.String())
+	}
+
+	// No temporary directory: the program runs, and may write nowhere.
+	if !landlockAvailable() {
+		t.Skip("without Landlock the program would write into the working directory")
+	}
+	writer := mkmod(t, demo(writerProg))
+	leak := filepath.Join(writer, "demo", "leak.txt")
+	t.Setenv("TMPDIR", filepath.Join(writer, "missing"))
+	b.Reset()
+	if code := RunWith(writer, []string{leak}, RunOpts{JSON: true}, &b); code != 0 {
+		t.Fatal(b.String())
+	}
+	r := last(t, b.String())
+	if r["exit"] != float64(0) || r["stdout"] != "cwd -1 module -1\n" || r["writable"] != nil {
+		t.Fatalf("with nowhere to write: %v", r)
+	}
+	if _, err := os.Stat(leak); err == nil {
+		t.Fatal("the program wrote into its module")
 	}
 }

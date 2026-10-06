@@ -41,10 +41,11 @@ func Test(dir, filter string, list bool, w io.Writer) int {
 type TestOpts struct {
 	Filter string // only tests whose name or id contains it
 	List   bool   // name the tests and run none
-	// Confine runs every test under a seccomp filter of the program's own
+	// NoConfine runs the tests with the caller's own rights. By default, on
+	// Linux x86-64, each runs under a seccomp filter of the program's own
 	// system calls and, where the kernel has Landlock, a file system it can
-	// write only in a fresh directory, its working directory.
-	Confine bool
+	// write only in one fresh directory, its working directory.
+	NoConfine bool
 }
 
 // TestWith is Test with options.
@@ -110,12 +111,10 @@ func TestWith(dir string, o TestOpts, w io.Writer) int {
 	}
 	exe, marks := out.Bin, out.Marks
 	var confine *confineSpec
-	if o.Confine {
-		writable, err := os.MkdirTemp("", "ovid-writable-")
-		if err != nil {
-			return fail(w, "run", err.Error(), tmpHint)
-		}
-		confine = newConfine(out.Syscalls, writable, "test")
+	if !o.NoConfine && confineSupported {
+		confine = newConfine(out.Syscalls, writableDir(), "test")
+		// Whatever happens next, an empty writable directory is not left.
+		defer confine.keepWritable()
 	}
 	// A missing temporary directory is not fatal yet: stage may still hold
 	// the program in memory.
@@ -209,7 +208,10 @@ func TestWith(dir string, o TestOpts, w io.Writer) int {
 	}
 	sum := map[string]any{"fact": "summary", "ok": failed == 0, "passed": passed, "failed": failed}
 	if confine != nil {
-		sum["confined"], sum["writable"] = confine.applied(), confine.writable
+		sum["confined"] = confine.applied()
+		if dir := confine.keepWritable(); dir != "" {
+			sum["writable"] = dir
+		}
 	}
 	// A test is a program that can write files, its own module's among
 	// them. What was tested is then no longer what is on disk.

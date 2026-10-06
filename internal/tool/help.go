@@ -30,7 +30,7 @@ Start here:
   ovid init <dir>              new module with a hello-world entry and a test
   ovid check                   errors with file:line:col, expected/got, hint
   ovid run [-- args]           build to a temp file and run it
-  ovid run --json [--timeout 5s] [--confine]
+  ovid run --json [--timeout 5s]
                                the same, with exit, signal, and output as JSON
   ovid test [--run Name]       run Test* funcs, one process each
 
@@ -179,20 +179,20 @@ ovid run [--] [args...]      program stdio and exit code pass through;
   {"ok":false,"error":"killed",signal,exit,at,stack,fault_addr,hint}, with
   at/stack (the statement and its callers) for a fault on Linux.
   --timeout D (5s, 500ms) ends the program: "signal":"timeout", exit 124.
-  --confine (Linux x86-64) runs the program under a seccomp filter of the
-  system calls its build receipt lists (any other kills it: "signal":
-  "bad system call") and, where the kernel has Landlock, lets it write only
-  in a fresh directory, which is its working directory; everything else is
+  On Linux x86-64 the program is confined unless --no-confine: a seccomp
+  filter of the system calls its build receipt lists (any other kills it:
+  "signal":"bad system call") and, where the kernel has Landlock, writes
+  only in a fresh directory, its working directory; everything else is
   read-only, its module included. The record (run --json, test's summary)
-  adds "confined":["seccomp","landlock"] and "writable":DIR. The directory
-  is kept.
-ovid run --json [--timeout D] [--max-output N] [--confine] [--] [args...]
+  adds "confined":["seccomp","landlock"] and, if the program wrote there,
+  "writable":DIR, which is kept. Reads are not restricted.
+ovid run --json [--timeout D] [--max-output N] [--no-confine] [--] [args...]
   captures the output; one last line, and ovid exits 0 if the program ran:
   {"ok":true,"exit":N,"ms",stdout,stderr}; a signal or timeout gives
   "signal" (with at/stack) in place of "exit". Each stream keeps N bytes
   (65536); past that "truncated":true and stdout_bytes/stderr_bytes.
   A build that fails ends {"ok":false,"errors":N}, exit 125.
-ovid test [--run substr] [--list] [--confine]
+ovid test [--run substr] [--list] [--no-confine]
   {"fact":"test",id,ok,exit,ms,output} per test; a failure that returned a
   value adds "returned_by": the return statements that can produce it;
   if !ovid/test.Eq(io, got, want) { return 1 } also puts "got X, want Y"

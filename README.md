@@ -47,8 +47,8 @@ Every command prints JSON lines and the last line has `"ok"`. Exit codes:
 | `ovid init <dir>` | new module with a main and a test |
 | `ovid check [--facts]` | errors, then a summary with the module revision |
 | `ovid build [-o out]` / `ovid run [-- args]` | compile, leaving out `_test.ov` files; run passes stdio and the exit code through and reports a death by signal on stderr, on Linux with the statement and call stack |
-| `ovid run --json [--timeout 5s] [--max-output N] [--confine]` | run with the output captured: one last line with `exit` or `signal`, `stdout`, `stderr`, and `truncated`; `--confine` (Linux) allows only the program's own system calls and writes only in a fresh directory |
-| `ovid test [--run substr] [--list] [--confine]` | each `TestX(io *ovid/io.Cap) i64` in its own process; 0 passes; a failure names the `return` that produced it, a crash its signal (on Linux, the statement and call stack) |
+| `ovid run --json [--timeout 5s] [--max-output N]` | run with the output captured: one last line with `exit` or `signal`, `stdout`, `stderr`, and `truncated` |
+| `ovid test [--run substr] [--list]` | each `TestX(io *ovid/io.Cap) i64` in its own process; 0 passes; a failure names the `return` that produced it, a crash its signal (on Linux, the statement and call stack) |
 | `ovid outline [--pkg P]` | packages, or a package's decls with signature, doc, struct size, lines, hash |
 | `ovid show <id\|name>... [--plain] [--exprs]` | source of a node (a decl with its doc comment), each statement line tagged with its id; a statement's expressions listed with ids and hashes |
 | `ovid refs <id\|name>` | every use the checker resolves to a func, type, field, const, param, or local |

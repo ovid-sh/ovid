@@ -56,7 +56,9 @@ func (pio procIO) command(bin string, args []string) *exec.Cmd {
 		}
 		cmd = exec.Command(self, append([]string{"--", bin}, args...)...)
 		cmd.Env = []string{confineEnv + "=" + c.encode(), "GODEBUG=asyncpreemptoff=1"}
-		cmd.Dir = c.writable
+		if c.writable != "" {
+			cmd.Dir = c.writable
+		}
 	} else {
 		cmd = exec.Command(bin, args...)
 		// An empty environment, not ovid's own: the kernel puts the
@@ -157,8 +159,8 @@ func describeCrash(m *module.Module, exe []byte, marks []compile.Mark, pr procRe
 	if pr.signal == syscall.SIGFPE {
 		r["hint"] = "an integer / or % by zero (or the most negative i64 / -1)"
 	}
-	if pr.signal == syscall.SIGSYS {
-		r["hint"] = confineHint
+	if h := signalHint(pr.signal); h != "" {
+		r["hint"] = h
 	}
 	if pr.hasAddr {
 		r["fault_addr"] = fmt.Sprintf("%#x", pr.addr)

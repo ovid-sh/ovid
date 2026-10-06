@@ -226,10 +226,11 @@ type RunOpts struct {
 	// MaxOutput is how many bytes of stdout, and of stderr, the JSON record
 	// keeps; 0 is DefaultRunOutput.
 	MaxOutput int
-	// Confine runs the program under a seccomp filter of its own system
+	// NoConfine runs the program with the caller's own rights. By default,
+	// on Linux x86-64, it runs under a seccomp filter of its own system
 	// calls and, where the kernel has Landlock, a file system it can write
-	// only in a fresh directory, its working directory. Linux x86-64 only.
-	Confine bool
+	// only in a fresh directory, its working directory.
+	NoConfine bool
 }
 
 // DefaultRunOutput is how much of each output stream run --json keeps.
@@ -285,15 +286,10 @@ func RunWith(dir string, args []string, o RunOpts, w io.Writer) int {
 	if st.extra != nil {
 		pio.extra = []*os.File{st.extra}
 	}
-	if o.Confine {
-		// The one directory the program may write in. It is kept: what the
-		// program wrote is the point of running it.
-		writable, err := os.MkdirTemp("", "ovid-writable-")
-		if err != nil {
-			fail(w, "run", err.Error(), tmpHint)
-			return ExitBuild
-		}
-		pio.confine = newConfine(out.Syscalls, writable, name)
+	if !o.NoConfine && confineSupported {
+		pio.confine = newConfine(out.Syscalls, writableDir(), name)
+		// Whatever happens next, an empty writable directory is not left.
+		defer pio.confine.keepWritable()
 	}
 	var outc, errc *pipeCapture
 	if o.JSON {
@@ -345,7 +341,10 @@ func RunWith(dir string, args []string, o RunOpts, w io.Writer) int {
 		cut("stdout", stdout, outN)
 		cut("stderr", stderr, errN)
 		if pio.confine != nil {
-			r["confined"], r["writable"] = pio.confine.applied(), pio.confine.writable
+			r["confined"] = pio.confine.applied()
+			if dir := pio.confine.keepWritable(); dir != "" {
+				r["writable"] = dir
+			}
 		}
 		// ok still says the program ran; that it changed its own module is
 		// reported beside it for the caller to weigh.

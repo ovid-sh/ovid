@@ -67,7 +67,7 @@ func TestF_WritesElsewhere(io *ovid/io.Cap) i64 {
 }
 
 // TestTestReportsAChangedModule: a test can write files, its own module's
-// among them. When the module on disk is no longer the one that was tested,
+// among them (run unconfined here: confinement is what stops that). When the module on disk is no longer the one that was tested,
 // the summary says so, names the files, and is not ok, though every test
 // passed. Writing anywhere else is nobody's concern.
 func TestTestReportsAChangedModule(t *testing.T) {
@@ -77,7 +77,7 @@ func TestTestReportsAChangedModule(t *testing.T) {
 		t.Helper()
 		dir := writerMod(t, t.TempDir())
 		var b bytes.Buffer
-		code := Test(dir, filter, false, &b)
+		code := TestWith(dir, TestOpts{Filter: filter, NoConfine: true}, &b)
 		rs := lines(t, b.String())
 		for _, r := range rs[:len(rs)-1] {
 			if r["ok"] != true {
@@ -143,11 +143,11 @@ func TestRunReportsAChangedModule(t *testing.T) {
 	}
 	before := rev()
 	var b bytes.Buffer
-	if code := RunWith(dir, nil, RunOpts{JSON: true}, &b); code != 0 || last(t, b.String())["module_changed"] != nil {
+	if code := RunWith(dir, nil, RunOpts{JSON: true, NoConfine: true}, &b); code != 0 || last(t, b.String())["module_changed"] != nil {
 		t.Fatalf("a program that writes nothing: %s", b.String())
 	}
 	b.Reset()
-	code := RunWith(dir, []string{"write"}, RunOpts{JSON: true}, &b)
+	code := RunWith(dir, []string{"write"}, RunOpts{JSON: true, NoConfine: true}, &b)
 	r := last(t, b.String())
 	if code != 0 || r["ok"] != true || r["exit"] != float64(0) || r["module_changed"] != true || !reflect.DeepEqual(r["changed_files"], []any{"demo/gen.ov"}) {
 		t.Fatalf("exit %d: %s", code, b.String())
@@ -166,7 +166,7 @@ func TestChangedModuleEdgeCases(t *testing.T) {
 	summary := func(dir string) (map[string]any, int) {
 		t.Helper()
 		var b bytes.Buffer
-		code := Test(dir, "", false, &b)
+		code := TestWith(dir, TestOpts{NoConfine: true}, &b)
 		return last(t, b.String()), code
 	}
 	testFile := func(body string) string {

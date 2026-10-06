@@ -25,9 +25,36 @@ type confineSpec struct {
 const confineEnv = "OVID_CONFINE"
 
 // newConfine describes how to confine a program with the given system
-// calls to the directory writable.
+// calls to the directory writable; "" means it may write nowhere.
 func newConfine(syscalls []int64, writable, argv0 string) *confineSpec {
 	return &confineSpec{syscalls: syscalls, writable: writable, landlock: landlockAvailable(), argv0: argv0}
+}
+
+// writableDir makes the one directory a confined program may write in, or
+// returns "" when there is nowhere to make it (no temporary directory):
+// the program then runs with nowhere to write, and still runs.
+func writableDir() string {
+	dir, err := os.MkdirTemp("", "ovid-writable-")
+	if err != nil {
+		return ""
+	}
+	return dir
+}
+
+// keepWritable returns the writable directory if the program left anything
+// in it, and removes it and returns "" otherwise: what a program wrote is
+// the point of running it, and an empty directory for every run is not.
+// Once removed, it stays "".
+func (c *confineSpec) keepWritable() string {
+	if c.writable == "" {
+		return ""
+	}
+	if ents, err := os.ReadDir(c.writable); err == nil && len(ents) == 0 {
+		os.Remove(c.writable)
+		c.writable = ""
+		return ""
+	}
+	return c.writable
 }
 
 // applied names what the kernel will enforce, for the record.
