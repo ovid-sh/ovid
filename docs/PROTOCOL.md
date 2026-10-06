@@ -3,7 +3,7 @@
 What a program driving `ovid` can rely on. `ovid help commands` lists each
 command's fields; this file is the contract they share. It describes the Go
 toolchain (`cmd/ovid`); the self-hosted compiler in `prog/` implements only
-`check`, `build`, and `dump`.
+`check`, `build`, `dump`, and `refs` (text only, no paging).
 
 ## Output
 

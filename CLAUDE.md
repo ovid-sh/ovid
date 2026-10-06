@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Ovid is a small compiled language whose toolchain is built for agents: commands answer in JSON lines (except `help`, plain `show`, and a running program's own output under `run`), and source can be edited through id-addressed, hash-guarded edits. The compiler emits static Linux x86-64 ELF binaries with no libc. It exists twice:
 
 - **Go toolchain** (`cmd/ovid`, `internal/`): the full toolchain, including the agent commands (`outline`, `show`, `refs`, `grep`, `edit`, `rename`, `move`, `test`).
-- **Self-hosted compiler** (`prog/`, written in Ovid): only `check`, `build`, and `dump`. It needs `--std <dir>` because only the Go binary embeds the standard library.
+- **Self-hosted compiler** (`prog/`, written in Ovid): only `check`, `build`, `dump`, and `refs` (its checker records the uses it resolves, as the Go checker's `Result.Uses` does). It needs `--std <dir>` because only the Go binary embeds the standard library.
 
 ## Commands
 
