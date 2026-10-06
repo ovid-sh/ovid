@@ -20,7 +20,7 @@ func opReceipt(t *testing.T, dir string, op EditOp) (map[string]any, map[string]
 	r := last(t, b.String())
 	o := r["ops"].([]any)[0].(map[string]any)
 	var ob bytes.Buffer
-	Outline(dir, "app", false, false, Page{}, &ob)
+	Outline(dir, "app", false, false, false, true, Page{}, &ob)
 	hs := map[string]string{}
 	for _, d := range lines(t, ob.String()) {
 		if id, ok := d["id"].(string); ok {

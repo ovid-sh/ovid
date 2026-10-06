@@ -36,7 +36,7 @@ func readFile(t *testing.T, dir, rel string) string {
 func copyHashes(t *testing.T, dir, id string) map[string]string {
 	t.Helper()
 	var b bytes.Buffer
-	if code := Outline(dir, "app", false, false, Page{}, &b); code != ExitOK {
+	if code := Outline(dir, "app", false, false, false, true, Page{}, &b); code != ExitOK {
 		t.Fatalf("outline %d %s", code, b.String())
 	}
 	out := map[string]string{}
@@ -57,7 +57,7 @@ func TestDuplicateIDOutlineShow(t *testing.T) {
 		t.Fatalf("check %d %s", code, b.String())
 	}
 	b.Reset()
-	Outline(dir, "app", false, false, Page{}, &b)
+	Outline(dir, "app", false, false, false, true, Page{}, &b)
 	var fs []map[string]any
 	for _, r := range lines(t, b.String()) {
 		if r["id"] == "fn:app.F" {
@@ -103,7 +103,7 @@ func TestDuplicateIDOutlineShow(t *testing.T) {
 	}
 	// grep places a match in b.ov in b.ov's copy.
 	b.Reset()
-	Grep(dir, "return 2", "", false, 0, 0, &b)
+	Grep(dir, "return 2", "", false, true, 0, 0, &b)
 	if r := lines(t, b.String())[0]; r["decl"] != "fn:app.F" || r["stmt"] != "st:app.F:1" {
 		t.Fatalf("grep %v", r)
 	}
@@ -215,7 +215,7 @@ func TestDuplicateIDIdentical(t *testing.T) {
 func TestDuplicateIDRefsRenameMove(t *testing.T) {
 	dir := dupMod(t, dupB)
 	for name, run := range map[string]func(*bytes.Buffer) int{
-		"refs":   func(b *bytes.Buffer) int { return Refs(dir, "F", Page{}, b) },
+		"refs":   func(b *bytes.Buffer) int { return Refs(dir, "F", true, Page{}, b) },
 		"rename": func(b *bytes.Buffer) int { return Rename(dir, "fn:app.F", "G", false, b) },
 		"move":   func(b *bytes.Buffer) int { return Move(dir, "F", "app/util", "", false, b) },
 	} {

@@ -38,8 +38,8 @@ func TestModuleRelativePaths(t *testing.T) {
 		}
 		var b bytes.Buffer
 		Check(dir, false, &b)
-		Outline(dir, "demo", false, false, Page{}, &b)
-		Grep(dir, "func Alloc", "", true, 0, GrepLimit, &b)
+		Outline(dir, "demo", false, false, false, true, Page{}, &b)
+		Grep(dir, "func Alloc", "", true, true, 0, GrepLimit, &b)
 		Rename(dir, "Two", "Deux", true, &b)
 		var keep []string
 		for _, ln := range strings.Split(b.String(), "\n") {

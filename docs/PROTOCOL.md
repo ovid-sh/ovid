@@ -7,12 +7,14 @@ toolchain (`cmd/ovid`); the self-hosted compiler in `prog/` implements only
 
 ## Output
 
-Every command except `run` without `--json`, `help`, and `show` without `--json` writes JSON
-lines to stdout, one object per line, and nothing else. `show` prints the
-source with an id comment on each line; its failures are JSON like any
-other. The **last line**
-always has a boolean `"ok"`; earlier lines are records (a diagnostic, a
-match, a test result, a decl). Key order is not significant. A consumer
+Every command writes JSON lines to stdout, one object per line, and
+nothing else, except `help`, `run` without `--json`, and the four read
+commands without `--json`: `outline`, `show`, `refs`, and `grep` print
+source and listings as text, since an agent reads them in place of `cat`
+and `grep`, and pay for no more bytes than those print; their failures,
+and (all but `show`) their last line, are JSON like any other. The
+**last line** always has a boolean `"ok"`; earlier lines are records (a
+diagnostic, a match, a test result, a decl). Key order is not significant. A consumer
 should read every line, take the last as the result, and ignore keys it does
 not know: new keys are added without notice, existing ones keep their
 meaning (the one exception so far is `refs`'s `count`; see Paging).
