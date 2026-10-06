@@ -45,3 +45,25 @@ jobs:
         with:
           go-version: stable
       - run: go test -count=1 ./...
+
+  # The flake (#151): nix flake check on each system it builds here. On
+  # Linux that includes a NixOS VM test, which needs KVM: install-nix-action
+  # opens /dev/kvm to the runner user (enable_kvm, on by default) before it
+  # installs Nix, and the features below let the VM test build.
+  nix:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    # It takes under 2 minutes. A VM that hangs at start (seen once: QEMU
+    # never came up) would otherwise hold the runner for the test driver's
+    # hour, or the job's six.
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            system-features = nixos-test benchmark big-parallel kvm
+      - run: nix flake check -L
