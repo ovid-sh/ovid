@@ -2,7 +2,6 @@ package tool
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 
 	"ovid/internal/ir"
@@ -10,15 +9,12 @@ import (
 	"ovid/internal/syntax"
 )
 
-// servePkg is the package that holds the stdio host the toolchain writes
-// for an entry package that has handle and no main.
-const servePkg = "ovid/servemain"
-
-const serveSrc = `package ovid/servemain
-
-import ovid/io
-import ovid/http
-import %[1]s
+// serveSrc is the stdio host the toolchain writes for an entry package
+// that has handle and no main. Its main joins the entry package itself, so
+// it cannot collide with a package of the module's, and the imports it
+// needs, ovid/io and ovid/http, are ones handle's signature already made
+// the package declare.
+const serveSrc = `package %s
 
 func main(io *ovid/io.Cap) i64 {
   var req *ovid/http.Request = ovid/http.ReadStdio(io)
@@ -26,32 +22,31 @@ func main(io *ovid/io.Cap) i64 {
   if ovid/http.Err(req) != 0 {
     return ovid/http.WriteStdio(io, req, res, 0)
   }
-  return ovid/http.WriteStdio(io, req, res, %[1]s.handle(io, req, res))
+  return ovid/http.WriteStdio(io, req, res, handle(io, req, res))
 }
 `
 
-// serveProgram returns p with the stdio host as its entry when the entry
-// package has handle and no main; otherwise p itself.
+// serveProgram returns p with the stdio host's main added to the entry
+// package, after its own funcs, when that package has handle and no main;
+// otherwise p itself.
 func serveProgram(p *ir.Program) *ir.Program {
-	var entry *ir.Package
+	at := -1
 	for i := range p.Packages {
 		if p.Packages[i].Path == p.Entry {
-			entry = &p.Packages[i]
+			at = i
 		}
 	}
-	if entry == nil || hasFunc(entry, "main") || !hasFunc(entry, "handle") {
+	if at < 0 || hasFunc(&p.Packages[at], "main") || !hasFunc(&p.Packages[at], "handle") {
 		return p
 	}
-	pkg, err := syntax.ParseFile(-1, []byte(fmt.Sprintf(serveSrc, p.Entry)))
+	host, err := syntax.ParseFile(-1, []byte(fmt.Sprintf(serveSrc, p.Entry)))
 	if err != nil {
 		panic("serve host: " + err.Msg)
 	}
-	// In path order, as the packages are, so that both compilers lay the
-	// program out the same.
 	q := *p
-	q.Entry = servePkg
-	at := sort.Search(len(p.Packages), func(i int) bool { return p.Packages[i].Path >= servePkg })
-	q.Packages = append(append(append([]ir.Package{}, p.Packages[:at]...), *pkg), p.Packages[at:]...)
+	q.Packages = append([]ir.Package{}, p.Packages...)
+	entry := &q.Packages[at]
+	entry.Funcs = append(append([]ir.Func{}, entry.Funcs...), host.Funcs...)
 	return &q
 }
 
