@@ -219,6 +219,19 @@ func (p *parser) peekKw(k string) bool {
 	return id == k
 }
 
+// peekLen reports whether the next tokens are len(: len is a keyword only
+// there, so a variable may still be named len.
+func (p *parser) peekLen() bool {
+	if !p.peekKw("len") {
+		return false
+	}
+	m := p.save()
+	p.ident()
+	open := p.peekByte('(')
+	p.restore(m)
+	return open
+}
+
 func (p *parser) kw(k string) bool {
 	if !p.peekKw(k) {
 		return false
@@ -292,6 +305,10 @@ func (p *parser) expectEnd() {
 func (p *parser) parseConst(s int) {
 	name := p.ident()
 	ns := p.tok(name)
+	if p.peekByte('[') {
+		p.parseTable(s, name, ns)
+		return
+	}
 	typ, _ := p.parseType()
 	p.expect('=')
 	ex := p.parseExpr()
@@ -304,6 +321,44 @@ func (p *parser) parseConst(s int) {
 	}
 	p.pkg.Consts = append(p.pkg.Consts, ir.Const{
 		ID: "cn:" + p.pkg.Path + "." + name, Name: name, Type: "i64", Value: v, Span: p.span(s), NameSpan: ns,
+	})
+	p.expectEnd()
+}
+
+// parseTable reads the rest of const Name [N]i64 = {e, ...}: N elements,
+// each a constant expression, which may run over several lines.
+func (p *parser) parseTable(s int, name string, ns ir.Span) {
+	p.expect('[')
+	if !p.isNum() {
+		p.errorf("expected the table's length")
+	}
+	n := p.number().Int
+	p.expect(']')
+	p.expectKw("i64")
+	p.expect('=')
+	p.expect('{')
+	var vals []int64
+	for !p.peekByte('}') {
+		if p.eof() {
+			p.errorf("unclosed table")
+		}
+		ex := p.parseExpr()
+		v, ok := p.evalConst(ex)
+		if !ok {
+			p.errorf("element %d of table %s is not a constant integer expression", len(vals), name)
+		}
+		vals = append(vals, v)
+		if !p.peekByte('}') {
+			p.expect(',')
+		}
+	}
+	p.expect('}')
+	if int64(len(vals)) != n {
+		p.errorf("table %s is declared [%d]i64 but has %d elements", name, n, len(vals))
+	}
+	p.pkg.Consts = append(p.pkg.Consts, ir.Const{
+		ID: "cn:" + p.pkg.Path + "." + name, Name: name, Type: fmt.Sprintf("[%d]i64", n), Table: true, Values: vals,
+		Span: p.span(s), NameSpan: ns,
 	})
 	p.expectEnd()
 }
@@ -321,7 +376,7 @@ func (p *parser) evalConst(n *ir.Node) (int64, bool) {
 		}
 		for _, c := range p.pkg.Consts {
 			if c.Name == n.Name {
-				return c.Value, true
+				return c.Value, !c.Table
 			}
 		}
 		return 0, false
@@ -743,6 +798,17 @@ func (p *parser) postfix() *ir.Node {
 			e = &ir.Node{ID: p.eid(), Op: "cast", Type: t, Arg: e, Span: ir.Span{File: p.file, Off: e.Span.Off, End: p.last}, TypeSpan: ts}
 			continue
 		}
+		if p.peekByte('[') {
+			// Name[i] reads a table; the name node is replaced, not kept.
+			if e.Op != "name" {
+				p.errorf("only a table can be indexed")
+			}
+			p.expect('[')
+			i := p.parseExpr()
+			p.expect(']')
+			e = &ir.Node{ID: p.eid(), Op: "index", Name: e.Name, Pkg: e.Pkg, Arg: i, Span: ir.Span{File: p.file, Off: e.Span.Off, End: p.last}, NameSpan: e.NameSpan}
+			continue
+		}
 		return e
 	}
 }
@@ -779,6 +845,16 @@ func (p *parser) primary0() *ir.Node {
 	case p.peekKw("syscall"):
 		p.ident()
 		return p.callArgs("syscall", "", "", ir.Span{})
+	case p.peekLen():
+		// len(Table), a compile-time constant.
+		p.ident()
+		p.expect('(')
+		t := p.primary()
+		if t.Op != "name" {
+			p.errorf("len takes a table")
+		}
+		p.expect(')')
+		return &ir.Node{ID: p.eid(), Op: "len", Name: t.Name, Pkg: t.Pkg, NameSpan: t.NameSpan}
 	case p.peekKw("ushr"), p.peekKw("umulhi"), p.peekKw("ult"), p.peekKw("udiv"), p.peekKw("urem"):
 		// The unsigned operations are binary operators spelled as calls.
 		op := p.ident()

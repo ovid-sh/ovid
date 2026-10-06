@@ -48,13 +48,17 @@ type Import struct {
 	Span Span   `json:"-"`
 }
 
+// Const is a const, or a table: a const whose Values are its elements,
+// read with Name[i] and len(Name). A table's Type is [N]i64 and its Value 0.
 type Const struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	Type     string `json:"type"`
-	Value    int64  `json:"value"`
-	Span     Span   `json:"-"`
-	NameSpan Span   `json:"-"`
+	ID       string  `json:"id"`
+	Name     string  `json:"name"`
+	Type     string  `json:"type"`
+	Value    int64   `json:"value"`
+	Table    bool    `json:"table,omitempty"`
+	Values   []int64 `json:"values,omitempty"`
+	Span     Span    `json:"-"`
+	NameSpan Span    `json:"-"`
 }
 
 type TypeDecl struct {

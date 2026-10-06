@@ -1144,6 +1144,50 @@ func TestFine(io *ovid/io.Cap) i64 {
 	}
 }
 
+// TestTableBounds: an index one past a table's end, or negative, traps
+// with an illegal instruction and the crash names the statement.
+func TestTableBounds(t *testing.T) {
+	dir := mkmod(t, map[string]string{
+		"demo/main.ov": "package demo\nimport ovid/io\nconst T [3]i64 = {4, 5, 6}\nfunc main(io *ovid/io.Cap) i64 {\n  return 0\n}\n",
+		"demo/main_test.ov": `package demo
+import ovid/io
+func At(i i64) i64 {
+  return T[i]
+}
+func TestPastEnd(io *ovid/io.Cap) i64 {
+  return At(len(T))
+}
+func TestNegative(io *ovid/io.Cap) i64 {
+  return At(0 - 1)
+}
+func TestEdges(io *ovid/io.Cap) i64 {
+  return At(0) + At(len(T) - 1) - 10
+}
+`,
+	})
+	needExec(t)
+	var b bytes.Buffer
+	if code := Test(dir, "", false, &b); code != ExitFail {
+		t.Fatalf("code %d %s", code, b.String())
+	}
+	got := map[string]map[string]any{}
+	for _, r := range lines(t, b.String()) {
+		if r["fact"] == "test" {
+			got[r["id"].(string)] = r
+		}
+	}
+	if got["fn:demo.TestEdges"]["ok"] != true {
+		t.Fatalf("edges %v", got["fn:demo.TestEdges"])
+	}
+	for _, name := range []string{"TestPastEnd", "TestNegative"} {
+		r := got["fn:demo."+name]
+		at, _ := r["at"].(map[string]any)
+		if r["signal"] != "illegal instruction" || at["source"] != "  return T[i]" {
+			t.Fatalf("%s: %v", name, r)
+		}
+	}
+}
+
 func TestTestCommand(t *testing.T) {
 	dir := mkmod(t, map[string]string{
 		"demo/main.ov": "package demo\nimport ovid/io\nfunc Two() i64 {\n  return 2\n}\nfunc main(io *ovid/io.Cap) i64 {\n  return 0\n}\n",

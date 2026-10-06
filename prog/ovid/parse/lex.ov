@@ -68,6 +68,10 @@ func EW(p *P, s i64, n i64) i64 {
   return ovid/mem.WBytes(p.io, p.emsg, s, n)
 }
 
+func EWInt(p *P, v i64) i64 {
+  return WInt(p.io, p.emsg, v)
+}
+
 // ErrEnd finishes the message begun by ErrBegin: "expected ..." messages get
 // ", found <token>", and the offset points at the end of the line when the
 // next token is on a later line.
@@ -256,6 +260,19 @@ func Ident(p *P) i64 {
 // A statement tries many keywords at one position, so the end of the word
 // there is kept: kwat is that position + 1, kwend the word's end (the
 // position itself when no identifier starts there).
+// PeekLen reports whether the next tokens are len(: len is a keyword only
+// there, so a variable may still be named len.
+func PeekLen(p *P) bool {
+  if !PeekKw(p, strptr("len"), 3) {
+    return false
+  }
+  var e i64 = p.kwend
+  while e < p.n && (At(p, e) == 32 || At(p, e) == 9) {
+    e = e + 1
+  }
+  return e < p.n && At(p, e) == 40
+}
+
 func PeekKw(p *P, lit i64, n i64) bool {
   Skip(p)
   if p.kwat != p.i + 1 {

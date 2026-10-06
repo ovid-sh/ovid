@@ -68,7 +68,7 @@ Decl ids (`fn:pkg.Name`, `ty:`, `cn:`, `fld:`, `pa:`, `pkg:`, `im:`) are names a
 
 ## Writing Ovid (for `prog/`, `std/`, `tests/`)
 
-Only `i64`, `bool`, and `*Struct`; every struct field is 8 bytes. No struct values, globals, function pointers, methods, or generics; at most six parameters and one result. Strings exist only as `strptr("…")`/`strlen("…")`, so string data is passed as pointer + length pairs of `i64`. Memory is `load8/16/32/64`, `store8/16/32/64`, `bswap16/32/64`, and `ovid/io.Alloc` (returns zeroed memory). `io *ovid/io.Cap` is the capability for argv, heap, and syscalls and is threaded through explicitly; `syscall` is only allowed inside `ovid/io`. Cross-package names spell the import path: `ovid/mem.Copy(d, s, n)`. The package path is the directory path, and a file may not sit in the module root.
+Only `i64`, `bool`, and `*Struct`; every struct field is 8 bytes. No struct values, globals, function pointers, methods, or generics; at most six parameters and one result. A `const Name [N]i64 = {...}` is a read-only table in rodata, read as `Name[i]` (bounds-checked, a failed check traps) and `len(Name)`. Strings exist only as `strptr("…")`/`strlen("…")`, so string data is passed as pointer + length pairs of `i64`. Memory is `load8/16/32/64`, `store8/16/32/64`, `bswap16/32/64`, and `ovid/io.Alloc` (returns zeroed memory). `io *ovid/io.Cap` is the capability for argv, heap, and syscalls and is threaded through explicitly; `syscall` is only allowed inside `ovid/io`. Cross-package names spell the import path: `ovid/mem.Copy(d, s, n)`. The package path is the directory path, and a file may not sit in the module root.
 
 ## Scope
 

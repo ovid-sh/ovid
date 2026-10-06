@@ -3,6 +3,7 @@
 package compile
 
 import (
+	"encoding/binary"
 	"fmt"
 	"math/bits"
 	"sort"
@@ -80,6 +81,7 @@ func compileProg(p *ir.Program) ([]byte, *cg, error) {
 	c := &cg{
 		prog:      p,
 		strs:      map[string]int{},
+		tables:    map[string]tableRef{},
 		funcLabel: map[string]int{},
 		sigs:      map[string]sig{},
 		pkgs:      map[string]*ir.Package{},
@@ -139,6 +141,7 @@ type cg struct {
 	b          asm.Buf
 	ro         []byte
 	strs       map[string]int
+	tables     map[string]tableRef
 	funcLabel  map[string]int
 	sigs       map[string]sig
 	pkgs       map[string]*ir.Package
@@ -176,6 +179,39 @@ func (c *cg) mark(id string) {
 	}
 	c.marks = append(c.marks, Mark{len(c.b.Code), id})
 }
+
+// table places the elements of the table path.Name in rodata on first use
+// and returns their offset and count.
+func (c *cg) table(n *ir.Node) (int, int, error) {
+	path := n.Pkg
+	if path == "" {
+		path = c.pkg.Path
+	}
+	key := path + "." + n.Name
+	if t, ok := c.tables[key]; ok {
+		return t.off, t.n, nil
+	}
+	pkg := c.pkgs[path]
+	if pkg == nil {
+		return 0, 0, fmt.Errorf("table %s", key)
+	}
+	for i := range pkg.Consts {
+		cn := &pkg.Consts[i]
+		if cn.Name != n.Name || !cn.Table {
+			continue
+		}
+		off := len(c.ro)
+		for _, v := range cn.Values {
+			c.ro = binary.LittleEndian.AppendUint64(c.ro, uint64(v))
+		}
+		c.tables[key] = tableRef{off, len(cn.Values)}
+		return off, len(cn.Values), nil
+	}
+	return 0, 0, fmt.Errorf("table %s", key)
+}
+
+// tableRef is where a table's elements sit in rodata, and how many.
+type tableRef struct{ off, n int }
 
 func (c *cg) intern(s string) int {
 	if off, ok := c.strs[s]; ok {
@@ -705,8 +741,10 @@ func exprMax(n *ir.Node, lv int) int {
 		return -1
 	}
 	switch n.Op {
-	case "int", "bool", "name", "strptr", "strlen", "sizeof":
+	case "int", "bool", "name", "strptr", "strlen", "sizeof", "len":
 		return -1
+	case "index":
+		return exprMax(n.Arg, lv)
 	case "add", "sub", "mul", "div", "mod", "and", "or", "xor", "shl", "shr", "ushr", "umulhi", "udiv", "urem", "ult", "eq", "ne", "lt", "le", "gt", "ge":
 		return max2(exprMax(n.Left, lv), exprMax(n.Right, lv+1), lv)
 	case "land", "lor":
@@ -1663,6 +1701,32 @@ func (c *cg) emitExpr(n *ir.Node, lv int) error {
 		c.b.MovRegImm64(asm.RAX, 0)
 		c.b.AbsImmLabel(off)
 		return nil
+	case "len":
+		_, cnt, err := c.table(n)
+		if err != nil {
+			return err
+		}
+		c.b.MovRegImm(asm.RAX, int64(cnt))
+		return nil
+	case "index":
+		// rax = table[rax], after an unsigned check of rax against the
+		// length, so a negative index trips it too; ud2 is the trap.
+		off, cnt, err := c.table(n)
+		if err != nil {
+			return err
+		}
+		if err := c.emitExpr(n.Arg, lv); err != nil {
+			return err
+		}
+		c.b.MovRegImm64(asm.RCX, 0)
+		c.b.AbsImmLabel(off)
+		c.b.AluRegImm(aluCmp, asm.RAX, int32(cnt))
+		ok := c.b.NewLabel()
+		c.b.Jcc(0x82, ok)
+		c.b.Ud2()
+		c.b.Mark(ok)
+		c.b.LoadMem(64, asm.RCX, asm.RAX|3<<4, 0)
+		return nil
 	case "strlen":
 		c.b.MovRegImm(asm.RAX, int64(len(n.Str)))
 		return nil
@@ -1862,7 +1926,7 @@ func (c *cg) typeOf(n *ir.Node) string {
 		return "invalid"
 	}
 	switch n.Op {
-	case "int", "strptr", "strlen", "sizeof", "add", "sub", "mul", "div", "mod", "and", "or", "xor", "shl", "shr", "ushr", "umulhi", "udiv", "urem", "neg", "bnot", "load8", "load16", "load32", "load64", "bswap16", "bswap32", "bswap64", "syscall":
+	case "int", "strptr", "strlen", "sizeof", "add", "sub", "mul", "div", "mod", "and", "or", "xor", "shl", "shr", "ushr", "umulhi", "udiv", "urem", "neg", "bnot", "index", "len", "load8", "load16", "load32", "load64", "bswap16", "bswap32", "bswap64", "syscall":
 		return "i64"
 	case "bool", "eq", "ne", "lt", "le", "gt", "ge", "ult", "land", "lor", "not":
 		return "bool"
