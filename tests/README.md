@@ -25,9 +25,10 @@ compared; elsewhere it is only built.
 // exit: 3            the exit code (default 0)
 // stdout: "two\n"    a Go-quoted string; several lines are concatenated
 // args: one two      command-line arguments, split on spaces
+// stdin: "GET /\r\n" a Go-quoted string; several lines are concatenated
 ```
 
-Each sits alone on its line. stdout defaults to empty, and stderr is not
+Each sits alone on its line. stdout and stdin default to empty, and stderr is not
 compared (it is shown when the case fails).
 
 ## `fail/`: programs that must be rejected
