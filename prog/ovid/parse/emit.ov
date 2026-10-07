@@ -13,8 +13,8 @@ type E struct {
   fn bytes
 }
 
-func WL(e *E, s i64, n i64) i64 {
-  return ovid/mem.WBytes(e.io, e.b, bytes(s, n))
+func WL(e *E, s bytes) i64 {
+  return ovid/mem.WBytes(e.io, e.b, s)
 }
 
 func WC(e *E, c i64) i64 {
@@ -30,11 +30,11 @@ func WInt(io *ovid/io.Cap, b *ovid/mem.Buf, v i64) i64 {
   return ovid/mem.WBytes(io, b, bytes(tmp, n))
 }
 
-// ValidUtf8 reports whether p[0:n] is all valid UTF-8.
-func ValidUtf8(p i64, n i64) bool {
+// ValidUtf8 reports whether s is all valid UTF-8.
+func ValidUtf8(s bytes) bool {
   var i i64 = 0
-  while i < n {
-    var sz i64 = Utf8Len(p + i, n - i)
+  while i < len(s) {
+    var sz i64 = Utf8Len(s[i:len(s)])
     if sz == 0 {
       return false
     }
@@ -43,26 +43,26 @@ func ValidUtf8(p i64, n i64) bool {
   return true
 }
 
-// WStr writes p[0:n] as a JSON string. Valid UTF-8 passes through as is;
+// WStr writes s as a JSON string. Valid UTF-8 passes through as is;
 // each byte that is not part of it becomes \ufffd, as Go's encoder does, so
 // the output is always valid JSON.
-func WStr(io *ovid/io.Cap, b *ovid/mem.Buf, p i64, n i64) i64 {
+func WStr(io *ovid/io.Cap, b *ovid/mem.Buf, text bytes) i64 {
   ovid/mem.WByte(io, b, 34)
   var i i64 = 0
   var s i64 = 0
-  while i < n {
-    var c i64 = load8(p + i)
+  while i < len(text) {
+    var c i64 = load8(ptr(text) + i)
     var sz i64 = 1
     if c >= 128 {
-      sz = Utf8Len(p + i, n - i)
+      sz = Utf8Len(text[i:len(text)])
       if sz == 0 {
-        ovid/mem.WBytes(io, b, bytes(p + s, i - s))
+        ovid/mem.WBytes(io, b, text[s:i])
         ovid/mem.WBytes(io, b, bytes(strptr("\\ufffd"), 6))
         s = i + 1
         sz = 1
       }
     } else if c == 34 || c == 92 || c < 32 {
-      ovid/mem.WBytes(io, b, bytes(p + s, i - s))
+      ovid/mem.WBytes(io, b, text[s:i])
       ovid/mem.WByte(io, b, 92)
       if c == 34 || c == 92 {
         ovid/mem.WByte(io, b, c)
@@ -82,230 +82,230 @@ func WStr(io *ovid/io.Cap, b *ovid/mem.Buf, p i64, n i64) i64 {
     }
     i = i + sz
   }
-  ovid/mem.WBytes(io, b, bytes(p + s, n - s))
+  ovid/mem.WBytes(io, b, text[s:len(text)])
   ovid/mem.WByte(io, b, 34)
   return 0
 }
 
-func WS(e *E, p i64, n i64) i64 {
-  return WStr(e.io, e.b, p, n)
+func WS(e *E, s bytes) i64 {
+  return WStr(e.io, e.b, s)
 }
 
 // IdOpen writes `"id":"` plus a prefix.
-func IdOpen(e *E, pre i64, pren i64) i64 {
-  WL(e, strptr("\"id\":\""), 6)
-  return WL(e, pre, pren)
+func IdOpen(e *E, pre bytes) i64 {
+  WL(e, bytes(strptr("\"id\":\""), 6))
+  return WL(e, pre)
 }
 
 func WOp(e *E, op i64) i64 {
   if op == OP_VAR {
-    return WL(e, strptr("var"), 3)
+    return WL(e, "var")
   }
   if op == OP_VAR2 {
-    return WL(e, strptr("var2"), 4)
+    return WL(e, "var2")
   }
   if op == OP_ASSIGN2 {
-    return WL(e, strptr("assign2"), 7)
+    return WL(e, "assign2")
   }
   if op == OP_ASSIGN {
-    return WL(e, strptr("assign"), 6)
+    return WL(e, "assign")
   }
   if op == OP_SETFIELD {
-    return WL(e, strptr("setfield"), 8)
+    return WL(e, "setfield")
   }
   if op == OP_STORE8 {
-    return WL(e, strptr("store8"), 6)
+    return WL(e, "store8")
   }
   if op == OP_STORE16 {
-    return WL(e, strptr("store16"), 7)
+    return WL(e, "store16")
   }
   if op == OP_STORE32 {
-    return WL(e, strptr("store32"), 7)
+    return WL(e, "store32")
   }
   if op == OP_STORE64 {
-    return WL(e, strptr("store64"), 7)
+    return WL(e, "store64")
   }
   if op == OP_RETURN {
-    return WL(e, strptr("return"), 6)
+    return WL(e, "return")
   }
   if op == OP_IF {
-    return WL(e, strptr("if"), 2)
+    return WL(e, "if")
   }
   if op == OP_WHILE {
-    return WL(e, strptr("while"), 5)
+    return WL(e, "while")
   }
   if op == OP_EXPR {
-    return WL(e, strptr("expr"), 4)
+    return WL(e, "expr")
   }
   if op == OP_INT {
-    return WL(e, strptr("int"), 3)
+    return WL(e, "int")
   }
   if op == OP_BOOL {
-    return WL(e, strptr("bool"), 4)
+    return WL(e, "bool")
   }
   if op == OP_NAME {
-    return WL(e, strptr("name"), 4)
+    return WL(e, "name")
   }
   if op == OP_CALL {
-    return WL(e, strptr("call"), 4)
+    return WL(e, "call")
   }
   if op == OP_SYSCALL {
-    return WL(e, strptr("syscall"), 7)
+    return WL(e, "syscall")
   }
   if op == OP_FIELD {
-    return WL(e, strptr("field"), 5)
+    return WL(e, "field")
   }
   if op == OP_CAST {
-    return WL(e, strptr("cast"), 4)
+    return WL(e, "cast")
   }
   if op == OP_NOT {
-    return WL(e, strptr("not"), 3)
+    return WL(e, "not")
   }
   if op == OP_NEG {
-    return WL(e, strptr("neg"), 3)
+    return WL(e, "neg")
   }
   if op == OP_BNOT {
-    return WL(e, strptr("bnot"), 4)
+    return WL(e, "bnot")
   }
   if op == OP_LOAD8 {
-    return WL(e, strptr("load8"), 5)
+    return WL(e, "load8")
   }
   if op == OP_LOAD16 {
-    return WL(e, strptr("load16"), 6)
+    return WL(e, "load16")
   }
   if op == OP_LOAD32 {
-    return WL(e, strptr("load32"), 6)
+    return WL(e, "load32")
   }
   if op == OP_BSWAP16 {
-    return WL(e, strptr("bswap16"), 7)
+    return WL(e, "bswap16")
   }
   if op == OP_BSWAP32 {
-    return WL(e, strptr("bswap32"), 7)
+    return WL(e, "bswap32")
   }
   if op == OP_BSWAP64 {
-    return WL(e, strptr("bswap64"), 7)
+    return WL(e, "bswap64")
   }
   if op == OP_USHR {
-    return WL(e, strptr("ushr"), 4)
+    return WL(e, "ushr")
   }
   if op == OP_UMULHI {
-    return WL(e, strptr("umulhi"), 6)
+    return WL(e, "umulhi")
   }
   if op == OP_UDIV {
-    return WL(e, strptr("udiv"), 4)
+    return WL(e, "udiv")
   }
   if op == OP_UREM {
-    return WL(e, strptr("urem"), 4)
+    return WL(e, "urem")
   }
   if op == OP_ULT {
-    return WL(e, strptr("ult"), 3)
+    return WL(e, "ult")
   }
   if op == OP_INDEX {
-    return WL(e, strptr("index"), 5)
+    return WL(e, "index")
   }
   if op == OP_SETBYTE {
-    return WL(e, strptr("setbyte"), 7)
+    return WL(e, "setbyte")
   }
   if op == OP_STR {
-    return WL(e, strptr("str"), 3)
+    return WL(e, "str")
   }
   if op == OP_BYTES {
-    return WL(e, strptr("bytes"), 5)
+    return WL(e, "bytes")
   }
   if op == OP_BYTE {
-    return WL(e, strptr("byte"), 4)
+    return WL(e, "byte")
   }
   if op == OP_SLICE {
-    return WL(e, strptr("slice"), 5)
+    return WL(e, "slice")
   }
   if op == OP_BLEN {
-    return WL(e, strptr("blen"), 4)
+    return WL(e, "blen")
   }
   if op == OP_PTR {
-    return WL(e, strptr("ptr"), 3)
+    return WL(e, "ptr")
   }
   if op == OP_LEN {
-    return WL(e, strptr("len"), 3)
+    return WL(e, "len")
   }
   if op == OP_LOAD64 {
-    return WL(e, strptr("load64"), 6)
+    return WL(e, "load64")
   }
   if op == OP_STRPTR {
-    return WL(e, strptr("strptr"), 6)
+    return WL(e, "strptr")
   }
   if op == OP_STRLEN {
-    return WL(e, strptr("strlen"), 6)
+    return WL(e, "strlen")
   }
   if op == OP_SIZEOF {
-    return WL(e, strptr("sizeof"), 6)
+    return WL(e, "sizeof")
   }
   if op == OP_LOR {
-    return WL(e, strptr("lor"), 3)
+    return WL(e, "lor")
   }
   if op == OP_LAND {
-    return WL(e, strptr("land"), 4)
+    return WL(e, "land")
   }
   if op == OP_EQ {
-    return WL(e, strptr("eq"), 2)
+    return WL(e, "eq")
   }
   if op == OP_NE {
-    return WL(e, strptr("ne"), 2)
+    return WL(e, "ne")
   }
   if op == OP_LT {
-    return WL(e, strptr("lt"), 2)
+    return WL(e, "lt")
   }
   if op == OP_LE {
-    return WL(e, strptr("le"), 2)
+    return WL(e, "le")
   }
   if op == OP_GT {
-    return WL(e, strptr("gt"), 2)
+    return WL(e, "gt")
   }
   if op == OP_GE {
-    return WL(e, strptr("ge"), 2)
+    return WL(e, "ge")
   }
   if op == OP_ADD {
-    return WL(e, strptr("add"), 3)
+    return WL(e, "add")
   }
   if op == OP_SUB {
-    return WL(e, strptr("sub"), 3)
+    return WL(e, "sub")
   }
   if op == OP_OR {
-    return WL(e, strptr("or"), 2)
+    return WL(e, "or")
   }
   if op == OP_XOR {
-    return WL(e, strptr("xor"), 3)
+    return WL(e, "xor")
   }
   if op == OP_MUL {
-    return WL(e, strptr("mul"), 3)
+    return WL(e, "mul")
   }
   if op == OP_DIV {
-    return WL(e, strptr("div"), 3)
+    return WL(e, "div")
   }
   if op == OP_MOD {
-    return WL(e, strptr("mod"), 3)
+    return WL(e, "mod")
   }
   if op == OP_AND {
-    return WL(e, strptr("and"), 3)
+    return WL(e, "and")
   }
   if op == OP_SHL {
-    return WL(e, strptr("shl"), 3)
+    return WL(e, "shl")
   }
-  return WL(e, strptr("shr"), 3)
+  return WL(e, "shr")
 }
 
-func ESub(e *E, key i64, kn i64, n *Node) i64 {
+func ESub(e *E, key bytes, n *Node) i64 {
   if n == 0 as *Node {
     return 0
   }
-  WL(e, key, kn)
+  WL(e, key)
   return ENode(e, n)
 }
 
-func EList(e *E, key i64, kn i64, n *Node) i64 {
+func EList(e *E, key bytes, n *Node) i64 {
   if n == 0 as *Node {
     return 0
   }
-  WL(e, key, kn)
+  WL(e, key)
   while n != 0 as *Node {
     ENode(e, n)
     n = n.next
@@ -320,58 +320,58 @@ func EList(e *E, key i64, kn i64, n *Node) i64 {
 func ENode(e *E, n *Node) i64 {
   WC(e, 123)
   if IsStmt(n.op) {
-    IdOpen(e, strptr("st:"), 3)
+    IdOpen(e, "st:")
   } else {
-    IdOpen(e, strptr("ex:"), 3)
+    IdOpen(e, "ex:")
   }
-  WL(e, ptr(e.pkg), len(e.pkg))
+  WL(e, e.pkg)
   WC(e, 46)
-  WL(e, ptr(e.fn), len(e.fn))
+  WL(e, e.fn)
   WC(e, 58)
   WInt(e.io, e.b, n.num)
   WC(e, 34)
-  WL(e, strptr(",\"op\":\""), 7)
+  WL(e, bytes(strptr(",\"op\":\""), 7))
   WOp(e, n.op)
   WC(e, 34)
   if len(n.name) != 0 {
-    WL(e, strptr(",\"name\":"), 8)
-    WS(e, ptr(n.name), len(n.name))
+    WL(e, bytes(strptr(",\"name\":"), 8))
+    WS(e, n.name)
   }
   if len(n.typ) != 0 {
-    WL(e, strptr(",\"type\":"), 8)
-    WS(e, ptr(n.typ), len(n.typ))
+    WL(e, bytes(strptr(",\"type\":"), 8))
+    WS(e, n.typ)
   }
   if len(n.name2) != 0 {
-    WL(e, strptr(",\"name2\":"), strlen(",\"name2\":"))
-    WS(e, ptr(n.name2), len(n.name2))
+    WL(e, ",\"name2\":")
+    WS(e, n.name2)
   }
   if len(n.typ2) != 0 {
-    WL(e, strptr(",\"type2\":"), strlen(",\"type2\":"))
-    WS(e, ptr(n.typ2), len(n.typ2))
+    WL(e, ",\"type2\":")
+    WS(e, n.typ2)
   }
   if len(n.pkg) != 0 {
-    WL(e, strptr(",\"pkg\":"), 7)
-    WS(e, ptr(n.pkg), len(n.pkg))
+    WL(e, bytes(strptr(",\"pkg\":"), 7))
+    WS(e, n.pkg)
   }
   if len(n.fn) != 0 {
-    WL(e, strptr(",\"func\":"), 8)
-    WS(e, ptr(n.fn), len(n.fn))
+    WL(e, bytes(strptr(",\"func\":"), 8))
+    WS(e, n.fn)
   }
   if n.valk == 1 {
-    WL(e, strptr(",\"value\":"), 9)
+    WL(e, bytes(strptr(",\"value\":"), 9))
     WInt(e.io, e.b, n.ival)
   } else if n.valk == 2 {
     if n.ival != 0 {
-      WL(e, strptr(",\"value\":true"), 13)
+      WL(e, bytes(strptr(",\"value\":true"), 13))
     } else {
-      WL(e, strptr(",\"value\":false"), 14)
+      WL(e, bytes(strptr(",\"value\":false"), 14))
     }
-  } else if n.valk == 3 && ValidUtf8(ptr(n.str), len(n.str)) {
-    WL(e, strptr(",\"value\":"), 9)
-    WS(e, ptr(n.str), len(n.str))
+  } else if n.valk == 3 && ValidUtf8(n.str) {
+    WL(e, bytes(strptr(",\"value\":"), 9))
+    WS(e, n.str)
   } else if n.valk == 3 {
     // Bytes JSON cannot carry: hex, so nothing is lost.
-    WL(e, strptr(",\"value_hex\":\""), 14)
+    WL(e, bytes(strptr(",\"value_hex\":\""), 14))
     var hx i64 = ovid/io.Alloc(e.io, 8)
     var i i64 = 0
     while i < len(n.str) {
@@ -379,56 +379,56 @@ func ENode(e *E, n *Node) i64 {
       ovid/mem.WBytes(e.io, e.b, bytes(hx, 2))
       i = i + 1
     }
-    WL(e, strptr("\""), 1)
+    WL(e, bytes(strptr("\""), 1))
   }
-  ESub(e, strptr(",\"left\":"), 8, n.left)
-  ESub(e, strptr(",\"right\":"), 9, n.right)
-  ESub(e, strptr(",\"arg\":"), 7, n.arg)
-  ESub(e, strptr(",\"base\":"), 8, n.base)
-  ESub(e, strptr(",\"addr\":"), 8, n.addr)
-  ESub(e, strptr(",\"val\":"), 7, n.val)
-  ESub(e, strptr(",\"val2\":"), strlen(",\"val2\":"), n.val2)
-  ESub(e, strptr(",\"cond\":"), 8, n.cond)
-  EList(e, strptr(",\"args\":["), 9, n.args)
-  EList(e, strptr(",\"then\":["), 9, n.then)
-  EList(e, strptr(",\"else\":["), 9, n.els)
-  EList(e, strptr(",\"body\":["), 9, n.body)
+  ESub(e, bytes(strptr(",\"left\":"), 8), n.left)
+  ESub(e, bytes(strptr(",\"right\":"), 9), n.right)
+  ESub(e, bytes(strptr(",\"arg\":"), 7), n.arg)
+  ESub(e, bytes(strptr(",\"base\":"), 8), n.base)
+  ESub(e, bytes(strptr(",\"addr\":"), 8), n.addr)
+  ESub(e, bytes(strptr(",\"val\":"), 7), n.val)
+  ESub(e, ",\"val2\":", n.val2)
+  ESub(e, bytes(strptr(",\"cond\":"), 8), n.cond)
+  EList(e, bytes(strptr(",\"args\":["), 9), n.args)
+  EList(e, bytes(strptr(",\"then\":["), 9), n.then)
+  EList(e, bytes(strptr(",\"else\":["), 9), n.els)
+  EList(e, bytes(strptr(",\"body\":["), 9), n.body)
   WC(e, 125)
   return 0
 }
 
 // EDeclId writes "id":"<pre><pkg>.<name>" for decl d.
-func EDeclId(e *E, pre i64, pren i64, d *Decl) i64 {
-  IdOpen(e, pre, pren)
-  WL(e, ptr(e.pkg), len(e.pkg))
+func EDeclId(e *E, pre bytes, d *Decl) i64 {
+  IdOpen(e, pre)
+  WL(e, e.pkg)
   WC(e, 46)
-  WL(e, ptr(d.name), len(d.name))
+  WL(e, d.name)
   WC(e, 34)
-  WL(e, strptr(",\"name\":"), 8)
-  WS(e, ptr(d.name), len(d.name))
+  WL(e, bytes(strptr(",\"name\":"), 8))
+  WS(e, d.name)
   return 0
 }
 
 func EPkg(e *E, k *Pkg) i64 {
   e.pkg = k.path
   WC(e, 123)
-  IdOpen(e, strptr("pkg:"), 4)
-  WL(e, ptr(k.path), len(k.path))
+  IdOpen(e, "pkg:")
+  WL(e, k.path)
   WC(e, 34)
-  WL(e, strptr(",\"path\":"), 8)
-  WS(e, ptr(k.path), len(k.path))
+  WL(e, bytes(strptr(",\"path\":"), 8))
+  WS(e, k.path)
   var d *Decl = k.ims
   if d != 0 as *Decl {
-    WL(e, strptr(",\"imports\":["), 12)
+    WL(e, bytes(strptr(",\"imports\":["), 12))
     while d != 0 as *Decl {
       WC(e, 123)
-      IdOpen(e, strptr("im:"), 3)
-      WL(e, ptr(k.path), len(k.path))
+      IdOpen(e, "im:")
+      WL(e, k.path)
       WC(e, 58)
-      WL(e, ptr(d.name), len(d.name))
+      WL(e, d.name)
       WC(e, 34)
-      WL(e, strptr(",\"path\":"), 8)
-      WS(e, ptr(d.name), len(d.name))
+      WL(e, bytes(strptr(",\"path\":"), 8))
+      WS(e, d.name)
       WC(e, 125)
       d = d.next
       if d != 0 as *Decl {
@@ -439,17 +439,17 @@ func EPkg(e *E, k *Pkg) i64 {
   }
   d = k.cs
   if d != 0 as *Decl {
-    WL(e, strptr(",\"consts\":["), 11)
+    WL(e, bytes(strptr(",\"consts\":["), 11))
     while d != 0 as *Decl {
       WC(e, 123)
-      EDeclId(e, strptr("cn:"), 3, d)
+      EDeclId(e, "cn:", d)
       if d.istab != 0 {
-        WL(e, strptr(",\"type\":\"["), 10)
+        WL(e, bytes(strptr(",\"type\":\"["), 10))
         WInt(e.io, e.b, d.tabn)
-        WL(e, strptr("]i64\",\"value\":0,\"table\":true"), strlen("]i64\",\"value\":0,\"table\":true"))
+        WL(e, "]i64\",\"value\":0,\"table\":true")
         // An empty table has no values key, as the Go dump omits it.
         if d.tabn > 0 {
-          WL(e, strptr(",\"values\":["), strlen(",\"values\":["))
+          WL(e, ",\"values\":[")
           var vi i64 = 0
           while vi < d.tabn {
             if vi > 0 {
@@ -461,7 +461,7 @@ func EPkg(e *E, k *Pkg) i64 {
           WC(e, 93)
         }
       } else {
-        WL(e, strptr(",\"type\":\"i64\",\"value\":"), 22)
+        WL(e, bytes(strptr(",\"type\":\"i64\",\"value\":"), 22))
         WInt(e.io, e.b, d.val)
       }
       WC(e, 125)
@@ -474,29 +474,29 @@ func EPkg(e *E, k *Pkg) i64 {
   }
   d = k.ts
   if d != 0 as *Decl {
-    WL(e, strptr(",\"types\":["), 10)
+    WL(e, bytes(strptr(",\"types\":["), 10))
     while d != 0 as *Decl {
       WC(e, 123)
-      EDeclId(e, strptr("ty:"), 3, d)
-      WL(e, strptr(",\"fields\":"), 10)
+      EDeclId(e, "ty:", d)
+      WL(e, bytes(strptr(",\"fields\":"), 10))
       var f *Decl = d.sub
       if f == 0 as *Decl {
-        WL(e, strptr("null"), 4)
+        WL(e, "null")
       } else {
         WC(e, 91)
         while f != 0 as *Decl {
           WC(e, 123)
-          IdOpen(e, strptr("fld:"), 4)
-          WL(e, ptr(k.path), len(k.path))
+          IdOpen(e, "fld:")
+          WL(e, k.path)
           WC(e, 46)
-          WL(e, ptr(d.name), len(d.name))
+          WL(e, d.name)
           WC(e, 46)
-          WL(e, ptr(f.name), len(f.name))
+          WL(e, f.name)
           WC(e, 34)
-          WL(e, strptr(",\"name\":"), 8)
-          WS(e, ptr(f.name), len(f.name))
-          WL(e, strptr(",\"type\":"), 8)
-          WS(e, ptr(f.typ), len(f.typ))
+          WL(e, bytes(strptr(",\"name\":"), 8))
+          WS(e, f.name)
+          WL(e, bytes(strptr(",\"type\":"), 8))
+          WS(e, f.typ)
           WC(e, 125)
           f = f.next
           if f != 0 as *Decl {
@@ -515,26 +515,26 @@ func EPkg(e *E, k *Pkg) i64 {
   }
   d = k.fs
   if d != 0 as *Decl {
-    WL(e, strptr(",\"funcs\":["), 10)
+    WL(e, bytes(strptr(",\"funcs\":["), 10))
     while d != 0 as *Decl {
       WC(e, 123)
-      EDeclId(e, strptr("fn:"), 3, d)
+      EDeclId(e, "fn:", d)
       var pa *Decl = d.sub
       if pa != 0 as *Decl {
-        WL(e, strptr(",\"params\":["), 11)
+        WL(e, bytes(strptr(",\"params\":["), 11))
         while pa != 0 as *Decl {
           WC(e, 123)
-          IdOpen(e, strptr("pa:"), 3)
-          WL(e, ptr(k.path), len(k.path))
+          IdOpen(e, "pa:")
+          WL(e, k.path)
           WC(e, 46)
-          WL(e, ptr(d.name), len(d.name))
+          WL(e, d.name)
           WC(e, 46)
-          WL(e, ptr(pa.name), len(pa.name))
+          WL(e, pa.name)
           WC(e, 34)
-          WL(e, strptr(",\"name\":"), 8)
-          WS(e, ptr(pa.name), len(pa.name))
-          WL(e, strptr(",\"type\":"), 8)
-          WS(e, ptr(pa.typ), len(pa.typ))
+          WL(e, bytes(strptr(",\"name\":"), 8))
+          WS(e, pa.name)
+          WL(e, bytes(strptr(",\"type\":"), 8))
+          WS(e, pa.typ)
           WC(e, 125)
           pa = pa.next
           if pa != 0 as *Decl {
@@ -543,14 +543,14 @@ func EPkg(e *E, k *Pkg) i64 {
         }
         WC(e, 93)
       }
-      WL(e, strptr(",\"result\":"), 10)
-      WS(e, ptr(d.typ), len(d.typ))
+      WL(e, bytes(strptr(",\"result\":"), 10))
+      WS(e, d.typ)
       if len(d.typ2) != 0 {
-        WL(e, strptr(",\"result2\":"), strlen(",\"result2\":"))
-        WS(e, ptr(d.typ2), len(d.typ2))
+        WL(e, ",\"result2\":")
+        WS(e, d.typ2)
       }
       e.fn = d.name
-      EList(e, strptr(",\"body\":["), 9, d.body)
+      EList(e, bytes(strptr(",\"body\":["), 9), d.body)
       WC(e, 125)
       d = d.next
       if d != 0 as *Decl {
@@ -570,16 +570,16 @@ func Emit(m *Mod) i64 {
   e.m = m
   e.b = ovid/mem.New(m.io, 1 << 20)
   m.json = e.b
-  WL(e, strptr("{\"revision\":\""), 13)
-  WL(e, Revision(m), 16)
-  WL(e, strptr("\",\"module\":"), 11)
-  WS(e, ptr(m.name), len(m.name))
-  WL(e, strptr(",\"entry\":"), 9)
-  WS(e, ptr(m.entry), len(m.entry))
-  WL(e, strptr(",\"packages\":"), 12)
+  WL(e, bytes(strptr("{\"revision\":\""), 13))
+  WL(e, bytes(Revision(m), 16))
+  WL(e, bytes(strptr("\",\"module\":"), 11))
+  WS(e, m.name)
+  WL(e, bytes(strptr(",\"entry\":"), 9))
+  WS(e, m.entry)
+  WL(e, bytes(strptr(",\"packages\":"), 12))
   var k *Pkg = m.pkgs
   if k == 0 as *Pkg {
-    WL(e, strptr("null"), 4)
+    WL(e, "null")
   } else {
     WC(e, 91)
     while k != 0 as *Pkg {
@@ -591,7 +591,7 @@ func Emit(m *Mod) i64 {
     }
     WC(e, 93)
   }
-  WL(e, strptr("}\n"), 2)
+  WL(e, bytes(strptr("}\n"), 2))
   return 0
 }
 
@@ -612,12 +612,12 @@ func WPos(io *ovid/io.Cap, b *ovid/mem.Buf, f *File, off i64) i64 {
     le = le + 1
   }
   ovid/mem.WBytes(io, b, bytes(strptr(",\"file\":"), 8))
-  WStr(io, b, ptr(f.disp), len(f.disp))
+  WStr(io, b, f.disp)
   ovid/mem.WBytes(io, b, bytes(strptr(",\"line\":"), 8))
   WInt(io, b, line)
   ovid/mem.WBytes(io, b, bytes(strptr(",\"col\":"), 7))
   WInt(io, b, (off - ls) + 1)
   ovid/mem.WBytes(io, b, bytes(strptr(",\"source\":"), 10))
-  WStr(io, b, ptr(f.src) + ls, le - ls)
+  WStr(io, b, f.src[ls:le])
   return 0
 }

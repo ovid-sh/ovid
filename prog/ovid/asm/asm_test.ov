@@ -4,8 +4,8 @@ import ovid/io
 import ovid/mem
 
 // BytesAre reports whether c holds exactly the n bytes at want.
-func BytesAre(io *ovid/io.Cap, c *Code, want i64, n i64) bool {
-  if ovid/mem.Eq(bytes(c.data, c.len), bytes(want, n)) {
+func BytesAre(io *ovid/io.Cap, c *Code, want bytes) bool {
+  if ovid/mem.Eq(bytes(c.data, c.len), want) {
     return true
   }
   var h i64 = ovid/io.Alloc(io, 2)
@@ -24,12 +24,12 @@ func BytesAre(io *ovid/io.Cap, c *Code, want i64, n i64) bool {
 func TestMovRegImm(io *ovid/io.Cap) i64 {
   var c *Code = New(io)
   MovRegImm64(c, 0, 1)
-  if !BytesAre(io, c, strptr("\x48\xb8\x01\x00\x00\x00\x00\x00\x00\x00"), 10) {
+  if !BytesAre(io, c, bytes(strptr("\x48\xb8\x01\x00\x00\x00\x00\x00\x00\x00"), 10)) {
     return 1
   }
   c = New(io)
   MovRegImm64(c, 9, -1)
-  if !BytesAre(io, c, strptr("\x49\xb9\xff\xff\xff\xff\xff\xff\xff\xff"), 10) {
+  if !BytesAre(io, c, bytes(strptr("\x49\xb9\xff\xff\xff\xff\xff\xff\xff\xff"), 10)) {
     return 2
   }
   return 0
@@ -44,7 +44,7 @@ func TestJmpPatch(io *ovid/io.Cap) i64 {
   Ret(c)
   Mark(c, fwd)
   Patch(c)
-  if !BytesAre(io, c, strptr("\xe9\x01\x00\x00\x00\xc3"), 6) {
+  if !BytesAre(io, c, bytes(strptr("\xe9\x01\x00\x00\x00\xc3"), 6)) {
     return 1
   }
   c = New(io)
@@ -52,7 +52,7 @@ func TestJmpPatch(io *ovid/io.Cap) i64 {
   Mark(c, back)
   Jmp(c, back)
   Patch(c)
-  if !BytesAre(io, c, strptr("\xe9\xfb\xff\xff\xff"), 5) {
+  if !BytesAre(io, c, bytes(strptr("\xe9\xfb\xff\xff\xff"), 5)) {
     return 2
   }
   return 0
@@ -65,7 +65,7 @@ func TestDivConstOps(io *ovid/io.Cap) i64 {
   ShrRegImm(c, 2, 5)
   ImulRcx(c)
   Int3(c)
-  if !BytesAre(io, c, strptr("\x48\xc1\xf9\x3f\x48\xc1\xea\x05\x48\xf7\xe9\xcc"), 12) {
+  if !BytesAre(io, c, bytes(strptr("\x48\xc1\xf9\x3f\x48\xc1\xea\x05\x48\xf7\xe9\xcc"), 12)) {
     return 1
   }
   return 0
@@ -83,7 +83,7 @@ func TestScaledIndex(io *ovid/io.Cap) i64 {
   StoreMemImm(c, 8, 12, 1, 0, 7)
   LoadMem(c, 64, 4, 0 - 1, 8)
   var want i64 = strptr("\x4a\x8b\x04\xe3\x49\x0f\xb6\x44\x75\x88\x42\x8b\x84\x88\x00\x10\x00\x00\x4f\x89\x54\xf7\x08\x40\x88\x34\xdf\x4a\xc7\x44\xc0\x10\xff\xff\xff\xff\x41\xc6\x04\x0c\x07\x48\x8b\x44\x24\x08")
-  if !BytesAre(io, c, want, 46) {
+  if !BytesAre(io, c, bytes(want, 46)) {
     return 1
   }
   return 0

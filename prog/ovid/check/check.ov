@@ -29,8 +29,7 @@ type Ch struct {
   nenv i64
   mark i64
   nmark i64
-  typ i64
-  tyn i64
+  typ bytes
   path bytes
   fn bytes
   tab i64
@@ -40,8 +39,7 @@ type Ch struct {
   pkg *ovid/parse.Pkg
   fd *ovid/parse.Decl
   nfunc i64
-  resp i64
-  resn i64
+  res bytes
   hk i64
   hpk *ovid/parse.Pkg
   hd *ovid/parse.Decl
@@ -59,16 +57,16 @@ type Ch struct {
   quiet bool
 }
 
-// NewUse records a use of kind at the name token tokp[0:tokn], spelled by
+// NewUse records a use of kind at the name token tok, spelled by
 // node (or, for a decl's own type, by the decl the caller sets as udecl)
 // inside in, and returns it for the caller to name the target.
-func NewUse(c *Ch, kind i64, node *ovid/parse.Node, in *ovid/parse.Decl, tokp i64, tokn i64) *ovid/parse.Use {
+func NewUse(c *Ch, kind i64, node *ovid/parse.Node, in *ovid/parse.Decl, tok bytes) *ovid/parse.Use {
   var m *ovid/parse.Mod = c.mod
   var u *ovid/parse.Use = ovid/io.Alloc(c.io, sizeof(ovid/parse.Use)) as *ovid/parse.Use
   u.kind = kind
   u.node = node
   u.in = in
-  u.tok = bytes(tokp, tokn)
+  u.tok = tok
   if m.usest == 0 as *ovid/parse.Use {
     m.uses = u
   } else {
@@ -80,34 +78,34 @@ func NewUse(c *Ch, kind i64, node *ovid/parse.Node, in *ovid/parse.Decl, tokp i6
 }
 
 // UseLocal records a use of the local or param in the scope record rec.
-func UseLocal(c *Ch, kind i64, rec i64, node *ovid/parse.Node, tokp i64, tokn i64) i64 {
-  var u *ovid/parse.Use = NewUse(c, kind, node, c.fd, tokp, tokn)
+func UseLocal(c *Ch, kind i64, rec i64, node *ovid/parse.Node, tok bytes) i64 {
+  var u *ovid/parse.Use = NewUse(c, kind, node, c.fd, tok)
   u.vnode = load64(rec + 32) as *ovid/parse.Node
   u.vsecond = load64(rec + 48)
   u.decl = load64(rec + 40) as *ovid/parse.Decl
   return 0
 }
 
-// UseType records a use of the struct type named by tp[0:tn] at tok, if it
+// UseType records a use of the struct type named by t at tok, if it
 // is one that exists: in's own type (udecl) when node is 0.
-func UseType(c *Ch, kind i64, tp i64, tn i64, tok i64, in *ovid/parse.Decl) *ovid/parse.Use {
-  var t *ovid/parse.Decl = TypeDecl(c, tp, tn)
+func UseType(c *Ch, kind i64, ts bytes, tok i64, in *ovid/parse.Decl) *ovid/parse.Use {
+  var t *ovid/parse.Decl = TypeDecl(c, ts)
   if t == 0 as *ovid/parse.Decl || tok == 0 {
     return 0 as *ovid/parse.Use
   }
-  var u *ovid/parse.Use = NewUse(c, kind, 0 as *ovid/parse.Node, in, tok, len(t.name))
+  var u *ovid/parse.Use = NewUse(c, kind, 0 as *ovid/parse.Node, in, bytes(tok, len(t.name)))
   u.decl = t
   return u
 }
 
-func WLit(c *Ch, p i64, n i64) i64 {
-  return ovid/mem.WBytes(c.io, c.b, bytes(p, n))
+func WLit(c *Ch, s bytes) i64 {
+  return ovid/mem.WBytes(c.io, c.b, s)
 }
 
-func WRaw(c *Ch, p i64, n i64) i64 {
+func WRaw(c *Ch, s bytes) i64 {
   var i i64 = 0
-  while i < n {
-    var ch i64 = load8(p + i)
+  while i < len(s) {
+    var ch i64 = load8(ptr(s) + i)
     if ch == 34 || ch == 92 {
       ovid/mem.WByte(c.io, c.b, 92)
       ovid/mem.WByte(c.io, c.b, ch)
@@ -124,9 +122,9 @@ func WRaw(c *Ch, p i64, n i64) i64 {
   return 0
 }
 
-func WStr(c *Ch, p i64, n i64) i64 {
+func WStr(c *Ch, s bytes) i64 {
   ovid/mem.WByte(c.io, c.b, 34)
-  WRaw(c, p, n)
+  WRaw(c, s)
   ovid/mem.WByte(c.io, c.b, 34)
   return 0
 }
@@ -219,7 +217,7 @@ func WHerePos(c *Ch) i64 {
 // call the builtin's type (bool for ult), so nothing else is reported.
 func BuiltinArity(c *Ch, n *ovid/parse.Node, isBool bool) i64 {
   Here(c, n)
-  Err(c, strptr("arity"), strlen("arity"), strptr("wrong number of arguments to a builtin"), strlen("wrong number of arguments to a builtin"))
+  Err(c, "arity", "wrong number of arguments to a builtin")
   var a *ovid/parse.Node = n.args
   while a != 0 as *ovid/parse.Node {
     CheckExpr(c, a)
@@ -233,24 +231,24 @@ func BuiltinArity(c *Ch, n *ovid/parse.Node, isBool bool) i64 {
 
 // Err prints one error line: code, message, the id it is about, and that
 // id's source position.
-func Err(c *Ch, code i64, coden i64, detail i64, dn i64) i64 {
+func Err(c *Ch, code bytes, detail bytes) i64 {
   c.errs = c.errs + 1
-  WLit(c, strptr("{\"fact\":\"error\",\"code\":"), strlen("{\"fact\":\"error\",\"code\":"))
-  WStr(c, code, coden)
-  WLit(c, strptr(",\"message\":"), strlen(",\"message\":"))
-  WStr(c, detail, dn)
+  WLit(c, "{\"fact\":\"error\",\"code\":")
+  WStr(c, code)
+  WLit(c, ",\"message\":")
+  WStr(c, detail)
   if c.hk != H_NONE {
-    WLit(c, strptr(",\"id\":\""), strlen(",\"id\":\""))
+    WLit(c, ",\"id\":\"")
     WId(c, c.b)
     ovid/mem.WByte(c.io, c.b, 34)
   }
   if len(c.path) != 0 {
-    WLit(c, strptr(",\"pkg\":"), strlen(",\"pkg\":"))
-    WStr(c, ptr(c.path), len(c.path))
+    WLit(c, ",\"pkg\":")
+    WStr(c, c.path)
   }
   if len(c.fn) != 0 {
-    WLit(c, strptr(",\"func\":"), strlen(",\"func\":"))
-    WStr(c, ptr(c.fn), len(c.fn))
+    WLit(c, ",\"func\":")
+    WStr(c, c.fn)
   }
   if c.hk != H_NONE {
     WHerePos(c)
@@ -279,11 +277,11 @@ func HereDecl(c *Ch, kind i64, k *ovid/parse.Pkg, d *ovid/parse.Decl, o *ovid/pa
   return 0
 }
 
-func HashStr(p i64, n i64) i64 {
+func HashStr(s bytes) i64 {
   var h i64 = 5381
   var i i64 = 0
-  while i < n {
-    h = ((h << 5) + h) + load8(p + i)
+  while i < len(s) {
+    h = ((h << 5) + h) + load8(ptr(s) + i)
     i = i + 1
   }
   return h
@@ -297,7 +295,7 @@ func Claim(c *Ch) i64 {
   WId(c, c.ib)
   var n i64 = c.ib.len
   var p i64 = c.ib.data
-  var idx i64 = HashStr(p, n) & c.tabmask
+  var idx i64 = HashStr(bytes(p, n)) & c.tabmask
   while true {
     var rec i64 = c.tab + (idx * 16)
     var sp i64 = load64(rec)
@@ -319,7 +317,7 @@ func Claim(c *Ch) i64 {
 
 func Push(c *Ch) i64 {
   if c.nmark >= 256 {
-    Err(c, strptr("scope"), strlen("scope"), strptr("too deep"), strlen("too deep"))
+    Err(c, "scope", "too deep")
     return 0
   }
   store64(c.mark + (c.nmark * 8), c.nenv)
@@ -336,11 +334,11 @@ func Pop(c *Ch) i64 {
   return 0
 }
 
-func Lookup(c *Ch, np i64, nn i64) i64 {
+func Lookup(c *Ch, name bytes) i64 {
   var i i64 = c.nenv - 1
   while i >= 0 {
     var rec i64 = c.env + (i * 56)
-    if ovid/mem.Eq(bytes(load64(rec), load64(rec + 8)), bytes(np, nn)) {
+    if ovid/mem.Eq(bytes(load64(rec), load64(rec + 8)), name) {
       return rec
     }
     i = i - 1
@@ -353,7 +351,7 @@ func ParamWords(ps *ovid/parse.Decl) i64 {
   var w i64 = 0
   while ps != 0 as *ovid/parse.Decl {
     w = w + 1
-    if TyEq(ptr(ps.typ), len(ps.typ), strptr("bytes"), strlen("bytes")) {
+    if TyEq(ps.typ, "bytes") {
       w = w + 1
     }
     ps = ps.next
@@ -361,24 +359,24 @@ func ParamWords(ps *ovid/parse.Decl) i64 {
   return w
 }
 
-func Define(c *Ch, np i64, nn i64, tp i64, tn i64) i64 {
-  if Lookup(c, np, nn) != 0 {
-    Err(c, strptr("duplicate_name"), strlen("duplicate_name"), np, nn)
+func Define(c *Ch, name bytes, t bytes) i64 {
+  if Lookup(c, name) != 0 {
+    Err(c, "duplicate_name", name)
   }
-  return Bind(c, np, nn, tp, tn)
+  return Bind(c, name, t)
 }
 
-// Bind puts np[0:nn] of type tp[0:tn] in scope, without Define's check
+// Bind puts name of type t in scope, without Define's check
 // for a name already there.
-func Bind(c *Ch, np i64, nn i64, tp i64, tn i64) i64 {
+func Bind(c *Ch, name bytes, t bytes) i64 {
   if c.nenv >= 4096 {
     return 0
   }
   var rec i64 = c.env + (c.nenv * 56)
-  store64(rec, np)
-  store64(rec + 8, nn)
-  store64(rec + 16, tp)
-  store64(rec + 24, tn)
+  store64(rec, ptr(name))
+  store64(rec + 8, len(name))
+  store64(rec + 16, ptr(t))
+  store64(rec + 24, len(t))
   store64(rec + 32, 0)
   store64(rec + 40, 0)
   store64(rec + 48, 0)
@@ -399,55 +397,54 @@ func Own(c *Ch, vn *ovid/parse.Node, second i64, d *ovid/parse.Decl) i64 {
   return 0
 }
 
-func SetTy(c *Ch, p i64, n i64) i64 {
-  c.typ = p
-  c.tyn = n
+func SetTy(c *Ch, s bytes) i64 {
+  c.typ = s
   return 0
 }
 
 func SetI64(c *Ch) i64 {
-  return SetTy(c, strptr("i64"), strlen("i64"))
+  return SetTy(c, "i64")
 }
 
 func SetBool(c *Ch) i64 {
-  return SetTy(c, strptr("bool"), strlen("bool"))
+  return SetTy(c, "bool")
 }
 
 func SetBad(c *Ch) i64 {
-  return SetTy(c, strptr("invalid"), strlen("invalid"))
+  return SetTy(c, "invalid")
 }
 
 func SetBytes(c *Ch) i64 {
-  return SetTy(c, strptr("bytes"), strlen("bytes"))
+  return SetTy(c, "bytes")
 }
 
-func NeedBytes(c *Ch, msg i64, msgn i64) i64 {
-  return NeedTy(c, strptr("bytes"), strlen("bytes"), msg, msgn)
+func NeedBytes(c *Ch, msg bytes) i64 {
+  return NeedTy(c, "bytes", msg)
 }
 
-func IsTy(c *Ch, p i64, n i64) bool {
-  return ovid/mem.Eq(bytes(c.typ, c.tyn), bytes(p, n))
+func IsTy(c *Ch, s bytes) bool {
+  return ovid/mem.Eq(c.typ, s)
 }
 
 func Bad(c *Ch) bool {
-  return IsTy(c, strptr("invalid"), strlen("invalid"))
+  return IsTy(c, "invalid")
 }
 
-func TyEq(p i64, n i64, q i64, m i64) bool {
-  return ovid/mem.Eq(bytes(p, n), bytes(q, m))
+func TyEq(s bytes, q bytes) bool {
+  return ovid/mem.Eq(s, q)
 }
 
-// FindPkg returns the package of path pp[0:pn], the first loaded if two
+// FindPkg returns the package of path path, the first loaded if two
 // share it, or 0. It looks in c.ptab, the open-addressed table IndexPkgs
 // fills.
-func FindPkg(c *Ch, pp i64, pn i64) *ovid/parse.Pkg {
-  var idx i64 = HashStr(pp, pn) & c.pmask
+func FindPkg(c *Ch, path bytes) *ovid/parse.Pkg {
+  var idx i64 = HashStr(path) & c.pmask
   while true {
     var k *ovid/parse.Pkg = load64(c.ptab + (idx * 8)) as *ovid/parse.Pkg
     if k == 0 as *ovid/parse.Pkg {
       return k
     }
-    if ovid/mem.Eq(k.path, bytes(pp, pn)) {
+    if ovid/mem.Eq(k.path, path) {
       return k
     }
     idx = (idx + 1) & c.pmask
@@ -472,8 +469,8 @@ func IndexPkgs(c *Ch) i64 {
   c.ptab = ovid/io.Alloc(c.io, sz * 8)
   k = c.mod.pkgs
   while k != 0 as *ovid/parse.Pkg {
-    if FindPkg(c, ptr(k.path), len(k.path)) == 0 as *ovid/parse.Pkg {
-      var idx i64 = HashStr(ptr(k.path), len(k.path)) & c.pmask
+    if FindPkg(c, k.path) == 0 as *ovid/parse.Pkg {
+      var idx i64 = HashStr(k.path) & c.pmask
       while load64(c.ptab + (idx * 8)) != 0 {
         idx = (idx + 1) & c.pmask
       }
@@ -485,31 +482,31 @@ func IndexPkgs(c *Ch) i64 {
 }
 
 // CheckPkgConst types a reference pkg.NAME to another package's const.
-func CheckPkgConst(c *Ch, n *ovid/parse.Node, pkp i64, pkn i64, np i64, nn i64) i64 {
+func CheckPkgConst(c *Ch, n *ovid/parse.Node, pk bytes, name bytes) i64 {
   // The use is recorded whether or not the name is used rightly, or the
   // package imported, as the Go checker records it.
-  var k *ovid/parse.Pkg = FindPkg(c, pkp, pkn)
+  var k *ovid/parse.Pkg = FindPkg(c, pk)
   var cd *ovid/parse.Decl = 0 as *ovid/parse.Decl
   if k != 0 as *ovid/parse.Pkg {
-    cd = ovid/parse.FindDecl(k.cs, np, nn)
+    cd = ovid/parse.FindDecl(k.cs, name)
     if cd != 0 as *ovid/parse.Decl {
-      NewUse(c, ovid/parse.USE_NAME, n, c.fd, np, nn).decl = cd
+      NewUse(c, ovid/parse.USE_NAME, n, c.fd, name).decl = cd
     }
   }
-  if !Imported(c, pkp, pkn) {
-    Err(c, strptr("unknown_package"), strlen("unknown_package"), pkp, pkn)
+  if !Imported(c, pk) {
+    Err(c, "unknown_package", pk)
     return SetBad(c)
   }
   if k != 0 as *ovid/parse.Pkg {
     if cd != 0 as *ovid/parse.Decl {
       if cd.istab != 0 {
-        Err(c, strptr("bad_type"), strlen("bad_type"), strptr("a table is not a value"), strlen("a table is not a value"))
+        Err(c, "bad_type", "a table is not a value")
         return SetBad(c)
       }
       return SetI64(c)
     }
   }
-  Err(c, strptr("unknown_name"), strlen("unknown_name"), np, nn)
+  Err(c, "unknown_name", name)
   return SetBad(c)
 }
 
@@ -522,40 +519,40 @@ func Table(c *Ch, n *ovid/parse.Node) *ovid/parse.Decl {
     pp = ptr(n.pkg)
     pn = len(n.pkg)
   }
-  var k *ovid/parse.Pkg = FindPkg(c, pp, pn)
+  var k *ovid/parse.Pkg = FindPkg(c, bytes(pp, pn))
   if k != 0 as *ovid/parse.Pkg {
-    var cd *ovid/parse.Decl = ovid/parse.FindDecl(k.cs, ptr(n.name), len(n.name))
+    var cd *ovid/parse.Decl = ovid/parse.FindDecl(k.cs, n.name)
     if cd != 0 as *ovid/parse.Decl {
-      NewUse(c, ovid/parse.USE_NAME, n, c.fd, ptr(n.name), len(n.name)).decl = cd
+      NewUse(c, ovid/parse.USE_NAME, n, c.fd, n.name).decl = cd
       if cd.istab == 0 {
-        Err(c, strptr("bad_type"), strlen("bad_type"), strptr("a const is not a table"), strlen("a const is not a table"))
+        Err(c, "bad_type", "a const is not a table")
         return 0 as *ovid/parse.Decl
       }
       return cd
     }
   }
-  Err(c, strptr("unknown_name"), strlen("unknown_name"), ptr(n.name), len(n.name))
+  Err(c, "unknown_name", n.name)
   return 0 as *ovid/parse.Decl
 }
 
-func Imported(c *Ch, pp i64, pn i64) bool {
-  if ovid/mem.Eq(c.path, bytes(pp, pn)) {
+func Imported(c *Ch, path bytes) bool {
+  if ovid/mem.Eq(c.path, path) {
     return true
   }
-  return ovid/parse.FindDecl(c.pkg.ims, pp, pn) != 0 as *ovid/parse.Decl
+  return ovid/parse.FindDecl(c.pkg.ims, path) != 0 as *ovid/parse.Decl
 }
 
-// FieldTy sets the current type to that of field fp[0:fn] of the pointer
-// type tp[0:tn] (*pkg.Type), or returns -1.
-func FieldTy(c *Ch, tp i64, tn i64, fp i64, fn i64) i64 {
-  if tn < 2 {
+// FieldTy sets the current type to that of field f of the pointer
+// type t (*pkg.Type), or returns -1.
+func FieldTy(c *Ch, ts bytes, fs bytes) i64 {
+  if len(ts) < 2 {
     return -1
   }
-  if load8(tp) != 42 {
+  if load8(ptr(ts)) != 42 {
     return -1
   }
-  var p i64 = tp + 1
-  var n i64 = tn - 1
+  var p i64 = ptr(ts) + 1
+  var n i64 = len(ts) - 1
   var dot i64 = -1
   var i i64 = 0
   while i < n {
@@ -567,32 +564,32 @@ func FieldTy(c *Ch, tp i64, tn i64, fp i64, fn i64) i64 {
   if dot < 1 {
     return -1
   }
-  var k *ovid/parse.Pkg = FindPkg(c, p, dot)
+  var k *ovid/parse.Pkg = FindPkg(c, bytes(p, dot))
   if k == 0 as *ovid/parse.Pkg {
     return -1
   }
-  var t *ovid/parse.Decl = ovid/parse.FindDecl(k.ts, (p + dot) + 1, (n - dot) - 1)
+  var t *ovid/parse.Decl = ovid/parse.FindDecl(k.ts, bytes((p + dot) + 1, (n - dot) - 1))
   if t == 0 as *ovid/parse.Decl {
     return -1
   }
-  var f *ovid/parse.Decl = ovid/parse.FindDecl(t.sub, fp, fn)
+  var f *ovid/parse.Decl = ovid/parse.FindDecl(t.sub, fs)
   if f == 0 as *ovid/parse.Decl {
     return -1
   }
   c.lastf = f
-  SetTy(c, ptr(f.typ), len(f.typ))
+  SetTy(c, f.typ)
   return 0
 }
 
-// TypeDecl is the struct type that tp[0:tn] (pkg.T or *pkg.T) names, or
+// TypeDecl is the struct type that t (pkg.T or *pkg.T) names, or
 // nil for i64, bool, invalid, or a type that does not exist.
-func TypeDecl(c *Ch, tp i64, tn i64) *ovid/parse.Decl {
+func TypeDecl(c *Ch, t bytes) *ovid/parse.Decl {
   var star i64 = 0
-  if tn > 0 && load8(tp) == 42 {
+  if len(t) > 0 && load8(ptr(t)) == 42 {
     star = 1
   }
-  var p i64 = tp + star
-  var n i64 = tn - star
+  var p i64 = ptr(t) + star
+  var n i64 = len(t) - star
   var dot i64 = -1
   var i i64 = 0
   while i < n {
@@ -604,26 +601,26 @@ func TypeDecl(c *Ch, tp i64, tn i64) *ovid/parse.Decl {
   if dot < 1 {
     return 0 as *ovid/parse.Decl
   }
-  var k *ovid/parse.Pkg = FindPkg(c, p, dot)
+  var k *ovid/parse.Pkg = FindPkg(c, bytes(p, dot))
   if k == 0 as *ovid/parse.Pkg {
     return 0 as *ovid/parse.Decl
   }
-  return ovid/parse.FindDecl(k.ts, (p + dot) + 1, (n - dot) - 1)
+  return ovid/parse.FindDecl(k.ts, bytes((p + dot) + 1, (n - dot) - 1))
 }
 
-// TyKind classifies the type tp[0:tn] as the parser wrote it (i64, bool,
+// TyKind classifies the type t as the parser wrote it (i64, bool,
 // pkg.T, or *pkg.T): 0 for i64, bool, or a pointer to a struct that exists,
 // 1 for such a struct by value, -1 when the package or struct is unknown.
-func TyKind(c *Ch, tp i64, tn i64) i64 {
-  if TyEq(tp, tn, strptr("i64"), strlen("i64")) || TyEq(tp, tn, strptr("bool"), strlen("bool")) || TyEq(tp, tn, strptr("bytes"), strlen("bytes")) {
+func TyKind(c *Ch, t bytes) i64 {
+  if TyEq(t, "i64") || TyEq(t, "bool") || TyEq(t, "bytes") {
     return 0
   }
   var star i64 = 0
-  if tn > 0 && load8(tp) == 42 {
+  if len(t) > 0 && load8(ptr(t)) == 42 {
     star = 1
   }
-  var p i64 = tp + star
-  var n i64 = tn - star
+  var p i64 = ptr(t) + star
+  var n i64 = len(t) - star
   var dot i64 = -1
   var i i64 = 0
   while i < n {
@@ -635,11 +632,11 @@ func TyKind(c *Ch, tp i64, tn i64) i64 {
   if dot < 1 {
     return -1
   }
-  var k *ovid/parse.Pkg = FindPkg(c, p, dot)
+  var k *ovid/parse.Pkg = FindPkg(c, bytes(p, dot))
   if k == 0 as *ovid/parse.Pkg {
     return -1
   }
-  if ovid/parse.FindDecl(k.ts, (p + dot) + 1, (n - dot) - 1) == 0 as *ovid/parse.Decl {
+  if ovid/parse.FindDecl(k.ts, bytes((p + dot) + 1, (n - dot) - 1)) == 0 as *ovid/parse.Decl {
     return -1
   }
   return 1 - star
@@ -648,7 +645,7 @@ func TyKind(c *Ch, tp i64, tn i64) i64 {
 // DeclUse records the use of a struct type by d's own type: a field's or
 // param's (kind type) or a func's result (kind result), inside in.
 func DeclUse(c *Ch, kind i64, d *ovid/parse.Decl, in *ovid/parse.Decl) i64 {
-  var u *ovid/parse.Use = UseType(c, kind, ptr(d.typ), len(d.typ), d.tytok, in)
+  var u *ovid/parse.Use = UseType(c, kind, d.typ, d.tytok, in)
   if u != 0 as *ovid/parse.Use {
     u.udecl = d
   }
@@ -658,36 +655,36 @@ func DeclUse(c *Ch, kind i64, d *ovid/parse.Decl, in *ovid/parse.Decl) i64 {
 // DeclTy checks the type of the field, param, or func result d, which the
 // checker is at. An unknown type becomes invalid, so its uses stay quiet.
 func DeclTy(c *Ch, d *ovid/parse.Decl) i64 {
-  var kind i64 = TyKind(c, ptr(d.typ), len(d.typ))
+  var kind i64 = TyKind(c, d.typ)
   if kind < 0 {
-    Err(c, strptr("bad_type"), strlen("bad_type"), ptr(d.typ), len(d.typ))
+    Err(c, "bad_type", d.typ)
     d.typ = "invalid"
   } else if kind == 1 {
-    Err(c, strptr("struct_value"), strlen("struct_value"), ptr(d.typ), len(d.typ))
+    Err(c, "struct_value", d.typ)
   }
   return 0
 }
 
 // NeedTy reports a type_mismatch saying msg unless the current type is
-// tp[0:tn], or either of them is invalid.
-func NeedTy(c *Ch, tp i64, tn i64, msg i64, msgn i64) i64 {
-  if TyEq(tp, tn, strptr("invalid"), strlen("invalid")) {
+// t, or either of them is invalid.
+func NeedTy(c *Ch, t bytes, msg bytes) i64 {
+  if TyEq(t, "invalid") {
     return 0
   }
   if !Bad(c) {
-    if !IsTy(c, tp, tn) {
-      Err(c, strptr("type_mismatch"), strlen("type_mismatch"), msg, msgn)
+    if !IsTy(c, t) {
+      Err(c, "type_mismatch", msg)
     }
   }
   return 0
 }
 
-func NeedI64(c *Ch, msg i64, msgn i64) i64 {
-  return NeedTy(c, strptr("i64"), strlen("i64"), msg, msgn)
+func NeedI64(c *Ch, msg bytes) i64 {
+  return NeedTy(c, "i64", msg)
 }
 
-func NeedBool(c *Ch, msg i64, msgn i64) i64 {
-  return NeedTy(c, strptr("bool"), strlen("bool"), msg, msgn)
+func NeedBool(c *Ch, msg bytes) i64 {
+  return NeedTy(c, "bool", msg)
 }
 
 // CheckExpr types expression n, leaving the checker at n, so that an error
@@ -695,7 +692,7 @@ func NeedBool(c *Ch, msg i64, msgn i64) i64 {
 // not at whatever node inside it was typed last.
 func CheckExpr(c *Ch, n *ovid/parse.Node) i64 {
   if n == 0 as *ovid/parse.Node {
-    Err(c, strptr("missing_expr"), strlen("missing_expr"), strptr("empty"), strlen("empty"))
+    Err(c, "missing_expr", "empty")
     return SetBad(c)
   }
   CheckExprIn(c, n)
@@ -710,10 +707,10 @@ func CheckExprIn(c *Ch, n *ovid/parse.Node) i64 {
     return SetI64(c)
   }
   if op == ovid/parse.OP_SIZEOF {
-    if TyKind(c, ptr(n.typ), len(n.typ)) != 1 {
-      Err(c, strptr("bad_type"), strlen("bad_type"), ptr(n.typ), len(n.typ))
+    if TyKind(c, n.typ) != 1 {
+      Err(c, "bad_type", n.typ)
     }
-    var su *ovid/parse.Use = UseType(c, ovid/parse.USE_TYPE, ptr(n.typ), len(n.typ), n.tytok, c.fd)
+    var su *ovid/parse.Use = UseType(c, ovid/parse.USE_TYPE, n.typ, n.tytok, c.fd)
     if su != 0 as *ovid/parse.Use {
       su.node = n
     }
@@ -724,23 +721,23 @@ func CheckExprIn(c *Ch, n *ovid/parse.Node) i64 {
   }
   if op == ovid/parse.OP_NAME {
     if len(n.pkg) != 0 {
-      return CheckPkgConst(c, n, ptr(n.pkg), len(n.pkg), ptr(n.name), len(n.name))
+      return CheckPkgConst(c, n, n.pkg, n.name)
     }
-    var loc i64 = Lookup(c, ptr(n.name), len(n.name))
+    var loc i64 = Lookup(c, n.name)
     if loc != 0 {
-      UseLocal(c, ovid/parse.USE_NAME, loc, n, ptr(n.name), len(n.name))
-      return SetTy(c, load64(loc + 16), load64(loc + 24))
+      UseLocal(c, ovid/parse.USE_NAME, loc, n, n.name)
+      return SetTy(c, bytes(load64(loc + 16), load64(loc + 24)))
     }
-    var cd *ovid/parse.Decl = ovid/parse.FindDecl(c.pkg.cs, ptr(n.name), len(n.name))
+    var cd *ovid/parse.Decl = ovid/parse.FindDecl(c.pkg.cs, n.name)
     if cd != 0 as *ovid/parse.Decl {
-      NewUse(c, ovid/parse.USE_NAME, n, c.fd, ptr(n.name), len(n.name)).decl = cd
+      NewUse(c, ovid/parse.USE_NAME, n, c.fd, n.name).decl = cd
       if cd.istab != 0 {
-        Err(c, strptr("bad_type"), strlen("bad_type"), strptr("a table is not a value"), strlen("a table is not a value"))
+        Err(c, "bad_type", "a table is not a value")
         return SetBad(c)
       }
       return SetI64(c)
     }
-    Err(c, strptr("unknown_name"), strlen("unknown_name"), ptr(n.name), len(n.name))
+    Err(c, "unknown_name", n.name)
     return SetBad(c)
   }
   if op == ovid/parse.OP_STR {
@@ -752,9 +749,9 @@ func CheckExprIn(c *Ch, n *ovid/parse.Node) i64 {
       return SetBytes(c)
     }
     CheckExpr(c, n.left)
-    NeedI64(c, strptr("address of bytes"), strlen("address of bytes"))
+    NeedI64(c, "address of bytes")
     CheckExpr(c, n.right)
-    NeedI64(c, strptr("length of bytes"), strlen("length of bytes"))
+    NeedI64(c, "length of bytes")
     return SetBytes(c)
   }
   if op == ovid/parse.OP_PTR {
@@ -762,28 +759,28 @@ func CheckExprIn(c *Ch, n *ovid/parse.Node) i64 {
       return BuiltinArity(c, n, false)
     }
     CheckExpr(c, n.arg)
-    NeedBytes(c, strptr("operand of ptr"), strlen("operand of ptr"))
+    NeedBytes(c, "operand of ptr")
     return SetI64(c)
   }
   if op == ovid/parse.OP_BYTE {
     CheckExpr(c, n.base)
-    NeedBytes(c, strptr("indexed value"), strlen("indexed value"))
+    NeedBytes(c, "indexed value")
     CheckExpr(c, n.arg)
-    NeedI64(c, strptr("index"), strlen("index"))
+    NeedI64(c, "index")
     return SetI64(c)
   }
   if op == ovid/parse.OP_SLICE {
     CheckExpr(c, n.base)
-    NeedBytes(c, strptr("sliced value"), strlen("sliced value"))
+    NeedBytes(c, "sliced value")
     CheckExpr(c, n.left)
-    NeedI64(c, strptr("low bound"), strlen("low bound"))
+    NeedI64(c, "low bound")
     CheckExpr(c, n.right)
-    NeedI64(c, strptr("high bound"), strlen("high bound"))
+    NeedI64(c, "high bound")
     return SetBytes(c)
   }
   if op == ovid/parse.OP_BLEN {
     CheckExpr(c, n.base)
-    NeedBytes(c, strptr("operand of len"), strlen("operand of len"))
+    NeedBytes(c, "operand of len")
     return SetI64(c)
   }
   if op == ovid/parse.OP_INDEX || op == ovid/parse.OP_LEN {
@@ -791,30 +788,30 @@ func CheckExprIn(c *Ch, n *ovid/parse.Node) i64 {
     var td *ovid/parse.Decl = 0 as *ovid/parse.Decl
     var vloc i64 = 0
     if len(n.pkg) == 0 {
-      vloc = Lookup(c, ptr(n.name), len(n.name))
+      vloc = Lookup(c, n.name)
     }
-    if vloc != 0 && TyEq(load64(vloc + 16), load64(vloc + 24), strptr("bytes"), strlen("bytes")) {
+    if vloc != 0 && TyEq(bytes(load64(vloc + 16), load64(vloc + 24)), "bytes") {
       // b[i] or len(b) on a bytes local: the node becomes the bytes
       // form, with the parsed name node as its base.
-      UseLocal(c, ovid/parse.USE_NAME, vloc, n, ptr(n.name), len(n.name))
+      UseLocal(c, ovid/parse.USE_NAME, vloc, n, n.name)
       if op == ovid/parse.OP_INDEX {
         n.op = ovid/parse.OP_BYTE
         CheckExpr(c, n.arg)
-        NeedI64(c, strptr("index"), strlen("index"))
+        NeedI64(c, "index")
         return SetI64(c)
       }
       n.op = ovid/parse.OP_BLEN
       return SetI64(c)
     }
     if vloc != 0 {
-      UseLocal(c, ovid/parse.USE_NAME, vloc, n, ptr(n.name), len(n.name))
-      Err(c, strptr("bad_type"), strlen("bad_type"), strptr("a variable is not a table"), strlen("a variable is not a table"))
+      UseLocal(c, ovid/parse.USE_NAME, vloc, n, n.name)
+      Err(c, "bad_type", "a variable is not a table")
     } else {
       td = Table(c, n)
     }
     if op == ovid/parse.OP_INDEX {
       CheckExpr(c, n.arg)
-      NeedI64(c, strptr("index"), strlen("index"))
+      NeedI64(c, "index")
     }
     if td == 0 as *ovid/parse.Decl {
       return SetBad(c)
@@ -826,9 +823,9 @@ func CheckExprIn(c *Ch, n *ovid/parse.Node) i64 {
       return BuiltinArity(c, n, op == ovid/parse.OP_ULT)
     }
     CheckExpr(c, n.left)
-    NeedI64(c, strptr("unsigned argument 1"), strlen("unsigned argument 1"))
+    NeedI64(c, "unsigned argument 1")
     CheckExpr(c, n.right)
-    NeedI64(c, strptr("unsigned argument 2"), strlen("unsigned argument 2"))
+    NeedI64(c, "unsigned argument 2")
     if op == ovid/parse.OP_ULT {
       return SetBool(c)
     }
@@ -839,24 +836,23 @@ func CheckExprIn(c *Ch, n *ovid/parse.Node) i64 {
   // right side.
   if op >= ovid/parse.OP_ADD && op <= ovid/parse.OP_SHR {
     CheckExpr(c, n.left)
-    NeedI64(c, strptr("arith needs i64"), strlen("arith needs i64"))
+    NeedI64(c, "arith needs i64")
     CheckExpr(c, n.right)
-    NeedI64(c, strptr("arith needs i64"), strlen("arith needs i64"))
+    NeedI64(c, "arith needs i64")
     return SetI64(c)
   }
   if op == ovid/parse.OP_EQ || op == ovid/parse.OP_NE {
     CheckExpr(c, n.left)
-    var lp i64 = c.typ
-    var ln i64 = c.tyn
+    var t bytes = c.typ
     var lb bool = Bad(c)
     CheckExpr(c, n.right)
     if !lb {
       if !Bad(c) {
-        if !TyEq(lp, ln, c.typ, c.tyn) {
-          Err(c, strptr("type_mismatch"), strlen("type_mismatch"), strptr("comparison types differ"), strlen("comparison types differ"))
-        } else if TyEq(lp, ln, strptr("bytes"), strlen("bytes")) {
+        if !TyEq(t, c.typ) {
+          Err(c, "type_mismatch", "comparison types differ")
+        } else if TyEq(t, "bytes") {
           Here(c, n)
-          Err(c, strptr("bad_type"), strlen("bad_type"), strptr("bytes cannot be compared"), strlen("bytes cannot be compared"))
+          Err(c, "bad_type", "bytes cannot be compared")
         }
       }
     }
@@ -864,21 +860,21 @@ func CheckExprIn(c *Ch, n *ovid/parse.Node) i64 {
   }
   if op >= ovid/parse.OP_LT && op <= ovid/parse.OP_GE {
     CheckExpr(c, n.left)
-    NeedI64(c, strptr("order needs i64"), strlen("order needs i64"))
+    NeedI64(c, "order needs i64")
     CheckExpr(c, n.right)
-    NeedI64(c, strptr("order needs i64"), strlen("order needs i64"))
+    NeedI64(c, "order needs i64")
     return SetBool(c)
   }
   if op == ovid/parse.OP_LAND || op == ovid/parse.OP_LOR {
     CheckExpr(c, n.left)
-    NeedBool(c, strptr("logic needs bool"), strlen("logic needs bool"))
+    NeedBool(c, "logic needs bool")
     CheckExpr(c, n.right)
-    NeedBool(c, strptr("logic needs bool"), strlen("logic needs bool"))
+    NeedBool(c, "logic needs bool")
     return SetBool(c)
   }
   if op == ovid/parse.OP_NOT {
     CheckExpr(c, n.arg)
-    NeedBool(c, strptr("not needs bool"), strlen("not needs bool"))
+    NeedBool(c, "not needs bool")
     return SetBool(c)
   }
   if op == ovid/parse.OP_NEG || op == ovid/parse.OP_BNOT || ovid/parse.BswapOp(op) {
@@ -886,7 +882,7 @@ func CheckExprIn(c *Ch, n *ovid/parse.Node) i64 {
       return BuiltinArity(c, n, false)
     }
     CheckExpr(c, n.arg)
-    NeedI64(c, strptr("unary needs i64"), strlen("unary needs i64"))
+    NeedI64(c, "unary needs i64")
     return SetI64(c)
   }
   if ovid/parse.LoadOp(op) {
@@ -894,57 +890,57 @@ func CheckExprIn(c *Ch, n *ovid/parse.Node) i64 {
       return BuiltinArity(c, n, false)
     }
     CheckExpr(c, n.arg)
-    NeedI64(c, strptr("load needs i64"), strlen("load needs i64"))
+    NeedI64(c, "load needs i64")
     return SetI64(c)
   }
   if op == ovid/parse.OP_CAST {
-    var ck i64 = TyKind(c, ptr(n.typ), len(n.typ))
+    var ck i64 = TyKind(c, n.typ)
     if ck < 0 {
-      Err(c, strptr("bad_type"), strlen("bad_type"), ptr(n.typ), len(n.typ))
+      Err(c, "bad_type", n.typ)
       return SetBad(c)
     }
-    var cu *ovid/parse.Use = UseType(c, ovid/parse.USE_TYPE, ptr(n.typ), len(n.typ), n.tytok, c.fd)
+    var cu *ovid/parse.Use = UseType(c, ovid/parse.USE_TYPE, n.typ, n.tytok, c.fd)
     if cu != 0 as *ovid/parse.Use {
       cu.node = n
     }
-    if Opaque(c, ptr(n.typ), len(n.typ)) {
+    if Opaque(c, n.typ) {
       Here(c, n)
-      Err(c, strptr("opaque_type"), strlen("opaque_type"), ptr(n.typ), len(n.typ))
+      Err(c, "opaque_type", n.typ)
     }
     CheckExpr(c, n.arg)
-    if TyEq(ptr(n.typ), len(n.typ), strptr("bytes"), strlen("bytes")) || IsTy(c, strptr("bytes"), strlen("bytes")) {
+    if TyEq(n.typ, "bytes") || IsTy(c, "bytes") {
       Here(c, n)
-      Err(c, strptr("bad_type"), strlen("bad_type"), strptr("a bytes cannot be cast"), strlen("a bytes cannot be cast"))
-      return SetTy(c, ptr(n.typ), len(n.typ))
+      Err(c, "bad_type", "a bytes cannot be cast")
+      return SetTy(c, n.typ)
     }
-    if !Bad(c) && Opaque(c, c.typ, c.tyn) {
+    if !Bad(c) && Opaque(c, c.typ) {
       Here(c, n)
-      Err(c, strptr("opaque_type"), strlen("opaque_type"), c.typ, c.tyn)
+      Err(c, "opaque_type", c.typ)
     }
     if ck == 1 {
       if !Bad(c) {
         Here(c, n)
-        Err(c, strptr("type_mismatch"), strlen("type_mismatch"), strptr("cast needs i64, bool, or a pointer type"), strlen("cast needs i64, bool, or a pointer type"))
+        Err(c, "type_mismatch", "cast needs i64, bool, or a pointer type")
       }
     }
-    return SetTy(c, ptr(n.typ), len(n.typ))
+    return SetTy(c, n.typ)
   }
   if op == ovid/parse.OP_FIELD {
     CheckExpr(c, n.base)
     if Bad(c) {
       return SetBad(c)
     }
-    if Opaque(c, c.typ, c.tyn) {
+    if Opaque(c, c.typ) {
       Here(c, n)
-      Err(c, strptr("opaque_type"), strlen("opaque_type"), ptr(n.name), len(n.name))
+      Err(c, "opaque_type", n.name)
       return SetBad(c)
     }
-    if FieldTy(c, c.typ, c.tyn, ptr(n.name), len(n.name)) != 0 {
+    if FieldTy(c, c.typ, n.name) != 0 {
       Here(c, n)
-      Err(c, strptr("unknown_field"), strlen("unknown_field"), ptr(n.name), len(n.name))
+      Err(c, "unknown_field", n.name)
       return SetBad(c)
     }
-    NewUse(c, ovid/parse.USE_FIELD, n, c.fd, ptr(n.name), len(n.name)).decl = c.lastf
+    NewUse(c, ovid/parse.USE_FIELD, n, c.fd, n.name).decl = c.lastf
     return 0
   }
   if op == ovid/parse.OP_CALL {
@@ -954,21 +950,21 @@ func CheckExprIn(c *Ch, n *ovid/parse.Node) i64 {
     if len(n.pkg) != 0 {
       pp = ptr(n.pkg)
       pn = len(n.pkg)
-      if !Imported(c, pp, pn) {
-        Err(c, strptr("missing_import"), strlen("missing_import"), pp, pn)
+      if !Imported(c, bytes(pp, pn)) {
+        Err(c, "missing_import", bytes(pp, pn))
         // A package nothing imports is not loaded, so whether it has the
         // func is unknown; the missing import is the whole report.
-        unloaded = FindPkg(c, pp, pn) == 0 as *ovid/parse.Pkg
+        unloaded = FindPkg(c, bytes(pp, pn)) == 0 as *ovid/parse.Pkg
       }
     }
-    var fn *ovid/parse.Decl = ovid/parse.FindFunc(c.mod, pp, pn, ptr(n.fn), len(n.fn))
+    var fn *ovid/parse.Decl = ovid/parse.FindFunc(c.mod, bytes(pp, pn), n.fn)
     var a *ovid/parse.Node = n.args
     if fn != 0 as *ovid/parse.Decl {
       if fn.dup != 0 {
         // The index holds a repeat. Call the first func of the name; if
         // that one repeats a const or type, the call is not checked.
-        var fk *ovid/parse.Pkg = FindPkg(c, pp, pn)
-        fn = ovid/parse.FindDecl(fk.fs, ptr(n.fn), len(n.fn))
+        var fk *ovid/parse.Pkg = FindPkg(c, bytes(pp, pn))
+        fn = ovid/parse.FindDecl(fk.fs, n.fn)
         if fn.dup != 0 {
           while a != 0 as *ovid/parse.Node {
             CheckExpr(c, a)
@@ -980,7 +976,7 @@ func CheckExprIn(c *Ch, n *ovid/parse.Node) i64 {
     }
     if fn == 0 as *ovid/parse.Decl {
       if !unloaded {
-        Err(c, strptr("unknown_name"), strlen("unknown_name"), ptr(n.fn), len(n.fn))
+        Err(c, "unknown_name", n.fn)
       }
       while a != 0 as *ovid/parse.Node {
         CheckExpr(c, a)
@@ -988,84 +984,84 @@ func CheckExprIn(c *Ch, n *ovid/parse.Node) i64 {
       }
       return SetBad(c)
     }
-    NewUse(c, ovid/parse.USE_CALL, n, c.fd, ptr(n.fn), len(n.fn)).decl = fn
+    NewUse(c, ovid/parse.USE_CALL, n, c.fd, n.fn).decl = fn
     if len(fn.typ2) != 0 && !c.recv {
-      Err(c, strptr("unused_result"), strlen("unused_result"), strptr("a value and an error code are returned; receive both"), strlen("a value and an error code are returned; receive both"))
+      Err(c, "unused_result", "a value and an error code are returned; receive both")
     }
     c.recv = false
     if ovid/parse.CountNodes(a) != ovid/parse.CountDecls(fn.sub) {
-      Err(c, strptr("arity"), strlen("arity"), ptr(n.fn), len(n.fn))
+      Err(c, "arity", n.fn)
     }
     var p *ovid/parse.Decl = fn.sub
     while a != 0 as *ovid/parse.Node {
       CheckExpr(c, a)
       if p != 0 as *ovid/parse.Decl {
-        NeedTy(c, ptr(p.typ), len(p.typ), ptr(n.fn), len(n.fn))
+        NeedTy(c, p.typ, n.fn)
         p = p.next
       }
       a = a.next
     }
-    return SetTy(c, ptr(fn.typ), len(fn.typ))
+    return SetTy(c, fn.typ)
   }
   if op == ovid/parse.OP_SYSCALL {
     // The path alone is not enough: the package must have come from the
     // standard library, which a module cannot supply.
     if !ovid/mem.Eq(c.path, "ovid/io") || c.pkg.std == 0 {
-      Err(c, strptr("syscall_forbidden"), strlen("syscall_forbidden"), strptr("only ovid/io"), strlen("only ovid/io"))
+      Err(c, "syscall_forbidden", "only ovid/io")
     }
     var a *ovid/parse.Node = n.args
     if ovid/parse.CountNodes(a) != 7 {
-      Err(c, strptr("arity"), strlen("arity"), strptr("syscall"), strlen("syscall"))
+      Err(c, "arity", "syscall")
     }
     while a != 0 as *ovid/parse.Node {
       CheckExpr(c, a)
-      NeedI64(c, strptr("syscall arg"), strlen("syscall arg"))
+      NeedI64(c, "syscall arg")
       a = a.next
     }
     return SetI64(c)
   }
-  Err(c, strptr("bad_op"), strlen("bad_op"), strptr("expr"), strlen("expr"))
+  Err(c, "bad_op", "expr")
   return SetBad(c)
 }
 
-// RecvTy is the type a var2 or assign2 gives the name np[0:nn]: the declared
-// type tp[0:tn] for a var2 (checked, and the name must be new), or the
+// RecvTy is the type a var2 or assign2 gives the name name: the declared
+// type t for a var2 (checked, and the name must be new), or the
 // local's for an assign2 (which must exist). It is left in c.typ.
-func RecvTy(c *Ch, s *ovid/parse.Node, np i64, nn i64, tp i64, tn i64) i64 {
+func RecvTy(c *Ch, s *ovid/parse.Node, name bytes, t bytes) i64 {
   if s.op == ovid/parse.OP_VAR2 {
-    var kind i64 = TyKind(c, tp, tn)
+    var kind i64 = TyKind(c, t)
     if kind < 0 {
-      Err(c, strptr("bad_type"), strlen("bad_type"), tp, tn)
+      Err(c, "bad_type", t)
     } else if kind == 1 {
-      Err(c, strptr("struct_value"), strlen("struct_value"), np, nn)
+      Err(c, "struct_value", name)
     }
     var tok i64 = s.tytok
-    if np == ptr(s.name2) {
+    if ptr(name) == ptr(s.name2) {
       tok = s.ty2tok
     }
-    var tu *ovid/parse.Use = UseType(c, ovid/parse.USE_TYPE, tp, tn, tok, c.fd)
+    var tu *ovid/parse.Use = UseType(c, ovid/parse.USE_TYPE, t, tok, c.fd)
     if tu != 0 as *ovid/parse.Use {
       tu.node = s
     }
-    if Lookup(c, np, nn) != 0 {
-      Err(c, strptr("duplicate_name"), strlen("duplicate_name"), np, nn)
+    if Lookup(c, name) != 0 {
+      Err(c, "duplicate_name", name)
     }
     if kind < 0 {
       SetBad(c)
     } else {
-      SetTy(c, tp, tn)
+      SetTy(c, t)
     }
-    return c.typ
+    return ptr(c.typ)
   }
-  var loc i64 = Lookup(c, np, nn)
+  var loc i64 = Lookup(c, name)
   if loc == 0 {
-    Err(c, strptr("unknown_name"), strlen("unknown_name"), np, nn)
+    Err(c, "unknown_name", name)
     SetBad(c)
-    return c.typ
+    return ptr(c.typ)
   }
-  UseLocal(c, ovid/parse.USE_ASSIGN, loc, s, np, nn)
-  SetTy(c, load64(loc + 16), load64(loc + 24))
-  return c.typ
+  UseLocal(c, ovid/parse.USE_ASSIGN, loc, s, name)
+  SetTy(c, bytes(load64(loc + 16), load64(loc + 24)))
+  return ptr(c.typ)
 }
 
 // CallTwo is the func n calls when n is a call to a func with two results,
@@ -1083,15 +1079,15 @@ func CallTwo(c *Ch, n *ovid/parse.Node) *ovid/parse.Decl {
     pp = ptr(n.pkg)
     pn = len(n.pkg)
   }
-  var fn *ovid/parse.Decl = ovid/parse.FindFunc(c.mod, pp, pn, ptr(n.fn), len(n.fn))
+  var fn *ovid/parse.Decl = ovid/parse.FindFunc(c.mod, bytes(pp, pn), n.fn)
   if fn == 0 as *ovid/parse.Decl {
     return fn
   }
   if fn.dup != 0 {
     // The index holds a repeat; the call goes to the first func of the
     // name, as the call case does, or nowhere if that repeats too.
-    var fk *ovid/parse.Pkg = FindPkg(c, pp, pn)
-    fn = ovid/parse.FindDecl(fk.fs, ptr(n.fn), len(n.fn))
+    var fk *ovid/parse.Pkg = FindPkg(c, bytes(pp, pn))
+    fn = ovid/parse.FindDecl(fk.fs, n.fn)
     if fn.dup != 0 {
       return 0 as *ovid/parse.Decl
     }
@@ -1135,27 +1131,27 @@ func CheckStmt(c *Ch, s *ovid/parse.Node) i64 {
   if op == ovid/parse.OP_VAR {
     var tp i64 = ptr(s.typ)
     var tn i64 = len(s.typ)
-    var kind i64 = TyKind(c, tp, tn)
+    var kind i64 = TyKind(c, bytes(tp, tn))
     if kind < 0 {
-      Err(c, strptr("bad_type"), strlen("bad_type"), tp, tn)
+      Err(c, "bad_type", bytes(tp, tn))
       tp = strptr("invalid")
       tn = strlen("invalid")
     } else if kind == 1 {
-      Err(c, strptr("struct_value"), strlen("struct_value"), ptr(s.name), len(s.name))
+      Err(c, "struct_value", s.name)
     }
-    if Lookup(c, ptr(s.name), len(s.name)) != 0 {
-      Err(c, strptr("duplicate_name"), strlen("duplicate_name"), ptr(s.name), len(s.name))
+    if Lookup(c, s.name) != 0 {
+      Err(c, "duplicate_name", s.name)
     }
     // The value is checked before the name is in scope, as in codegen.
-    var vu *ovid/parse.Use = UseType(c, ovid/parse.USE_TYPE, ptr(s.typ), len(s.typ), s.tytok, c.fd)
+    var vu *ovid/parse.Use = UseType(c, ovid/parse.USE_TYPE, s.typ, s.tytok, c.fd)
     if vu != 0 as *ovid/parse.Use {
       vu.node = s
     }
     if s.val != 0 as *ovid/parse.Node {
       CheckExpr(c, s.val)
-      NeedTy(c, tp, tn, ptr(s.name), len(s.name))
+      NeedTy(c, bytes(tp, tn), s.name)
     }
-    Bind(c, ptr(s.name), len(s.name), tp, tn)
+    Bind(c, s.name, bytes(tp, tn))
     Own(c, s, 0, 0 as *ovid/parse.Decl)
     return 0
   }
@@ -1166,16 +1162,16 @@ func CheckStmt(c *Ch, s *ovid/parse.Node) i64 {
     var t1n i64 = -1
     var t2p i64 = 0
     var t2n i64 = -1
-    if !ovid/parse.IsBlank(ptr(s.name), len(s.name)) {
-      t1p = RecvTy(c, s, ptr(s.name), len(s.name), ptr(s.typ), len(s.typ))
-      t1n = c.tyn
+    if !ovid/parse.IsBlank(s.name) {
+      t1p = RecvTy(c, s, s.name, s.typ)
+      t1n = len(c.typ)
     }
-    if !ovid/parse.IsBlank(ptr(s.name2), len(s.name2)) {
+    if !ovid/parse.IsBlank(s.name2) {
       if ovid/mem.Eq(s.name, s.name2) {
-        Err(c, strptr("duplicate_name"), strlen("duplicate_name"), ptr(s.name2), len(s.name2))
+        Err(c, "duplicate_name", s.name2)
       }
-      t2p = RecvTy(c, s, ptr(s.name2), len(s.name2), ptr(s.typ2), len(s.typ2))
-      t2n = c.tyn
+      t2p = RecvTy(c, s, s.name2, s.typ2)
+      t2n = len(c.typ)
     }
     // Only a call that is the whole value is received; a two-result call
     // nested in an expression is used as one value.
@@ -1185,40 +1181,40 @@ func CheckStmt(c *Ch, s *ovid/parse.Node) i64 {
     var callee *ovid/parse.Decl = CallTwo(c, s.val)
     if callee == 0 as *ovid/parse.Decl {
       if !Bad(c) {
-        Err(c, strptr("arity"), strlen("arity"), strptr("two names receive one value"), strlen("two names receive one value"))
+        Err(c, "arity", "two names receive one value")
       }
     } else {
       // A callee whose result type is unknown was reported at its decl.
-      var known bool = !TyEq(ptr(callee.typ), len(callee.typ), strptr("invalid"), strlen("invalid"))
-      if known && t1n >= 0 && !TyEq(t1p, t1n, strptr("invalid"), strlen("invalid")) && !TyEq(t1p, t1n, ptr(callee.typ), len(callee.typ)) {
-        Err(c, strptr("type_mismatch"), strlen("type_mismatch"), strptr("first result"), strlen("first result"))
+      var known bool = !TyEq(callee.typ, "invalid")
+      if known && t1n >= 0 && !TyEq(bytes(t1p, t1n), "invalid") && !TyEq(bytes(t1p, t1n), callee.typ) {
+        Err(c, "type_mismatch", "first result")
       }
-      if t2n >= 0 && !TyEq(t2p, t2n, strptr("invalid"), strlen("invalid")) && !TyEq(t2p, t2n, strptr("i64"), strlen("i64")) {
-        Err(c, strptr("type_mismatch"), strlen("type_mismatch"), strptr("second result"), strlen("second result"))
+      if t2n >= 0 && !TyEq(bytes(t2p, t2n), "invalid") && !TyEq(bytes(t2p, t2n), "i64") {
+        Err(c, "type_mismatch", "second result")
       }
     }
     if op == ovid/parse.OP_VAR2 {
       if t1n >= 0 {
-        Bind(c, ptr(s.name), len(s.name), t1p, t1n)
+        Bind(c, s.name, bytes(t1p, t1n))
         Own(c, s, 0, 0 as *ovid/parse.Decl)
       }
       if t2n >= 0 {
-        Bind(c, ptr(s.name2), len(s.name2), t2p, t2n)
+        Bind(c, s.name2, bytes(t2p, t2n))
         Own(c, s, 1, 0 as *ovid/parse.Decl)
       }
     }
     return 0
   }
   if op == ovid/parse.OP_ASSIGN {
-    var loc i64 = Lookup(c, ptr(s.name), len(s.name))
+    var loc i64 = Lookup(c, s.name)
     if loc == 0 {
-      Err(c, strptr("unknown_name"), strlen("unknown_name"), ptr(s.name), len(s.name))
+      Err(c, "unknown_name", s.name)
       CheckExpr(c, s.val)
       return 0
     }
-    UseLocal(c, ovid/parse.USE_ASSIGN, loc, s, ptr(s.name), len(s.name))
+    UseLocal(c, ovid/parse.USE_ASSIGN, loc, s, s.name)
     CheckExpr(c, s.val)
-    NeedTy(c, load64(loc + 16), load64(loc + 24), ptr(s.name), len(s.name))
+    NeedTy(c, bytes(load64(loc + 16), load64(loc + 24)), s.name)
     return 0
   }
   if op == ovid/parse.OP_SETFIELD {
@@ -1226,25 +1222,25 @@ func CheckStmt(c *Ch, s *ovid/parse.Node) i64 {
     var was bool = Bad(c)
     var fp i64 = 0
     var fn i64 = 0
-    if !was && Opaque(c, c.typ, c.tyn) {
+    if !was && Opaque(c, c.typ) {
       Here(c, s)
-      Err(c, strptr("opaque_type"), strlen("opaque_type"), ptr(s.name), len(s.name))
+      Err(c, "opaque_type", s.name)
       was = true
     }
     if !was {
-      if FieldTy(c, c.typ, c.tyn, ptr(s.name), len(s.name)) != 0 {
+      if FieldTy(c, c.typ, s.name) != 0 {
         Here(c, s)
-        Err(c, strptr("unknown_field"), strlen("unknown_field"), ptr(s.name), len(s.name))
+        Err(c, "unknown_field", s.name)
         was = true
       } else {
-        NewUse(c, ovid/parse.USE_SETFIELD, s, c.fd, ptr(s.name), len(s.name)).decl = c.lastf
-        fp = c.typ
-        fn = c.tyn
+        NewUse(c, ovid/parse.USE_SETFIELD, s, c.fd, s.name).decl = c.lastf
+        fp = ptr(c.typ)
+        fn = len(c.typ)
       }
     }
     CheckExpr(c, s.val)
     if !was {
-      NeedTy(c, fp, fn, ptr(s.name), len(s.name))
+      NeedTy(c, bytes(fp, fn), s.name)
     }
     return 0
   }
@@ -1252,10 +1248,10 @@ func CheckStmt(c *Ch, s *ovid/parse.Node) i64 {
     CheckExpr(c, s.base)
     if s.base.op != ovid/parse.OP_BYTE && !Bad(c) {
       Here(c, s.base)
-      Err(c, strptr("bad_type"), strlen("bad_type"), strptr("only a byte of a bytes can be assigned"), strlen("only a byte of a bytes can be assigned"))
+      Err(c, "bad_type", "only a byte of a bytes can be assigned")
     }
     CheckExpr(c, s.val)
-    NeedI64(c, strptr("stored byte"), strlen("stored byte"))
+    NeedI64(c, "stored byte")
     return 0
   }
   if ovid/parse.StoreOp(op) {
@@ -1264,9 +1260,9 @@ func CheckStmt(c *Ch, s *ovid/parse.Node) i64 {
       return 0
     }
     CheckExpr(c, s.addr)
-    NeedI64(c, strptr("store address"), strlen("store address"))
+    NeedI64(c, "store address")
     CheckExpr(c, s.val)
-    NeedI64(c, strptr("store value"), strlen("store value"))
+    NeedI64(c, "store value")
     return 0
   }
   if op == ovid/parse.OP_EXPR {
@@ -1275,7 +1271,7 @@ func CheckStmt(c *Ch, s *ovid/parse.Node) i64 {
   }
   if op == ovid/parse.OP_RETURN {
     if s.val == 0 as *ovid/parse.Node {
-      Err(c, strptr("type_mismatch"), strlen("type_mismatch"), strptr("missing return value"), strlen("missing return value"))
+      Err(c, "type_mismatch", "missing return value")
       return 0
     }
     // return f(...) forwards both results of a two-result call.
@@ -1287,26 +1283,26 @@ func CheckStmt(c *Ch, s *ovid/parse.Node) i64 {
       }
     }
     CheckExpr(c, s.val)
-    NeedTy(c, c.resp, c.resn, strptr("return type"), strlen("return type"))
+    NeedTy(c, c.res, "return type")
     if forward {
       return 0
     }
     if s.val2 != 0 as *ovid/parse.Node && !c.two {
       Here(c, s)
-      Err(c, strptr("arity"), strlen("arity"), strptr("one value is returned"), strlen("one value is returned"))
+      Err(c, "arity", "one value is returned")
     } else if s.val2 == 0 as *ovid/parse.Node && c.two {
       Here(c, s)
-      Err(c, strptr("arity"), strlen("arity"), strptr("a value and an error code are returned"), strlen("a value and an error code are returned"))
+      Err(c, "arity", "a value and an error code are returned")
     }
     if s.val2 != 0 as *ovid/parse.Node {
       CheckExpr(c, s.val2)
-      NeedI64(c, strptr("error code"), strlen("error code"))
+      NeedI64(c, "error code")
     }
     return 0
   }
   if op == ovid/parse.OP_IF {
     CheckExpr(c, s.cond)
-    NeedBool(c, strptr("if needs bool"), strlen("if needs bool"))
+    NeedBool(c, "if needs bool")
     Push(c)
     CheckStmts(c, s.then)
     Pop(c)
@@ -1317,13 +1313,13 @@ func CheckStmt(c *Ch, s *ovid/parse.Node) i64 {
   }
   if op == ovid/parse.OP_WHILE {
     CheckExpr(c, s.cond)
-    NeedBool(c, strptr("while needs bool"), strlen("while needs bool"))
+    NeedBool(c, "while needs bool")
     Push(c)
     CheckStmts(c, s.body)
     Pop(c)
     return 0
   }
-  Err(c, strptr("bad_op"), strlen("bad_op"), strptr("stmt"), strlen("stmt"))
+  Err(c, "bad_op", "stmt")
   return 0
 }
 
@@ -1334,17 +1330,16 @@ func CheckFunc(c *Ch, fn *ovid/parse.Decl) i64 {
   c.recv = false
   c.fd = fn
   c.fn = fn.name
-  c.resp = ptr(fn.typ)
-  c.resn = len(fn.typ)
+  c.res = fn.typ
   HereDecl(c, H_FUNC, c.pkg, fn, fn)
   Push(c)
   if ParamWords(fn.sub) > 6 {
-    Err(c, strptr("arity"), strlen("arity"), strptr("more than 6 param words"), strlen("more than 6 param words"))
+    Err(c, "arity", "more than 6 param words")
   }
   var p *ovid/parse.Decl = fn.sub
   while p != 0 as *ovid/parse.Decl {
     HereDecl(c, H_PARAM, c.pkg, p, fn)
-    Define(c, ptr(p.name), len(p.name), ptr(p.typ), len(p.typ))
+    Define(c, p.name, p.typ)
     Own(c, 0 as *ovid/parse.Node, 0, p)
     p = p.next
   }
@@ -1352,7 +1347,7 @@ func CheckFunc(c *Ch, fn *ovid/parse.Decl) i64 {
   CheckStmts(c, fn.body)
   if !Paths(fn.body) {
     HereDecl(c, H_FUNC, c.pkg, fn, fn)
-    Err(c, strptr("missing_return"), strlen("missing_return"), ptr(c.fn), len(c.fn))
+    Err(c, "missing_return", c.fn)
   }
   Pop(c)
   c.nfunc = c.nfunc + 1
@@ -1361,15 +1356,15 @@ func CheckFunc(c *Ch, fn *ovid/parse.Decl) i64 {
 
 func CheckMain(c *Ch) i64 {
   var m *ovid/parse.Mod = c.mod
-  var k *ovid/parse.Pkg = FindPkg(c, ptr(m.entry), len(m.entry))
+  var k *ovid/parse.Pkg = FindPkg(c, m.entry)
   c.path = m.entry
   c.fn = bytes(0, 0)
   c.hk = H_NONE
   if k == 0 as *ovid/parse.Pkg {
-    Err(c, strptr("no_entry"), strlen("no_entry"), strptr("entry package does not exist"), strlen("entry package does not exist"))
+    Err(c, "no_entry", "entry package does not exist")
     return 0
   }
-  var fn *ovid/parse.Decl = ovid/parse.FindDecl(k.fs, strptr("main"), strlen("main"))
+  var fn *ovid/parse.Decl = ovid/parse.FindDecl(k.fs, "main")
   if fn != 0 as *ovid/parse.Decl {
     // A main that repeats an earlier name is reported and not checked.
     if fn.dup != 0 {
@@ -1379,7 +1374,7 @@ func CheckMain(c *Ch) i64 {
   if fn == 0 as *ovid/parse.Decl {
     // With no main, a handle is the entry: build writes the stdio host
     // around it (ovid/parse.ServeHost).
-    var h *ovid/parse.Decl = ovid/parse.FindDecl(k.fs, strptr("handle"), strlen("handle"))
+    var h *ovid/parse.Decl = ovid/parse.FindDecl(k.fs, "handle")
     if h != 0 as *ovid/parse.Decl {
       if h.dup != 0 {
         h = 0 as *ovid/parse.Decl
@@ -1387,13 +1382,13 @@ func CheckMain(c *Ch) i64 {
     }
     if h == 0 as *ovid/parse.Decl {
       HereDecl(c, H_PKG, k, 0 as *ovid/parse.Decl, 0 as *ovid/parse.Decl)
-      Err(c, strptr("bad_main"), strlen("bad_main"), strptr("entry package has no main"), strlen("entry package has no main"))
+      Err(c, "bad_main", "entry package has no main")
       return 0
     }
     if !HandleSig(h) {
       c.fn = "handle"
       HereDecl(c, H_FUNC, k, h, h)
-      Err(c, strptr("bad_handler"), strlen("bad_handler"), strptr("handle must be (io *ovid/io.Cap, req *ovid/http.Request, res *ovid/http.Response) i64"), strlen("handle must be (io *ovid/io.Cap, req *ovid/http.Request, res *ovid/http.Response) i64"))
+      Err(c, "bad_handler", "handle must be (io *ovid/io.Cap, req *ovid/http.Request, res *ovid/http.Response) i64")
     }
     return CheckAbi(c)
   }
@@ -1409,7 +1404,7 @@ func CheckMain(c *Ch) i64 {
   if !ok {
     c.fn = "main"
     HereDecl(c, H_FUNC, k, fn, fn)
-    Err(c, strptr("bad_main"), strlen("bad_main"), strptr("main must be (io *ovid/io.Cap) i64"), strlen("main must be (io *ovid/io.Cap) i64"))
+    Err(c, "bad_main", "main must be (io *ovid/io.Cap) i64")
   }
   return CheckAbi(c)
 }
@@ -1437,8 +1432,8 @@ func HandleSig(fn *ovid/parse.Decl) bool {
 // may do, and a handle is only worth something if it cannot be forged or
 // taken apart: so outside ovid/io one cannot be made by a cast or turned
 // into an address by one, and its fields cannot be read or written.
-func Opaque(c *Ch, tp i64, tn i64) bool {
-  if tn < strlen("*ovid/io.") || !ovid/mem.Eq(bytes(tp, strlen("*ovid/io.")), "*ovid/io.") {
+func Opaque(c *Ch, t bytes) bool {
+  if len(t) < strlen("*ovid/io.") || !ovid/mem.Eq(t[0:strlen("*ovid/io.")], "*ovid/io.") {
     return false
   }
   return !ovid/mem.Eq(c.path, "ovid/io") || c.pkg.std == 0
@@ -1449,15 +1444,15 @@ func Opaque(c *Ch, tp i64, tn i64) bool {
 func CheckAbi(c *Ch) i64 {
   c.fn = bytes(0, 0)
   c.hk = H_NONE
-  var k *ovid/parse.Pkg = FindPkg(c, strptr("ovid/io"), strlen("ovid/io"))
+  var k *ovid/parse.Pkg = FindPkg(c, "ovid/io")
   if k == 0 as *ovid/parse.Pkg {
-    Err(c, strptr("bad_abi"), strlen("bad_abi"), strptr("missing package ovid/io"), strlen("missing package ovid/io"))
+    Err(c, "bad_abi", "missing package ovid/io")
     return 0
   }
-  var t *ovid/parse.Decl = ovid/parse.FindDecl(k.ts, strptr("Cap"), strlen("Cap"))
+  var t *ovid/parse.Decl = ovid/parse.FindDecl(k.ts, "Cap")
   if t == 0 as *ovid/parse.Decl {
     HereDecl(c, H_PKG, k, 0 as *ovid/parse.Decl, 0 as *ovid/parse.Decl)
-    Err(c, strptr("bad_abi"), strlen("bad_abi"), strptr("ovid/io has no type Cap"), strlen("ovid/io has no type Cap"))
+    Err(c, "bad_abi", "ovid/io has no type Cap")
     return 0
   }
   // The names are four bytes each, five bytes apart.
@@ -1481,7 +1476,7 @@ func CheckAbi(c *Ch) i64 {
   }
   if !ok {
     HereDecl(c, H_TYPE, k, t, 0 as *ovid/parse.Decl)
-    Err(c, strptr("bad_abi"), strlen("bad_abi"), strptr("the runtime fills Cap's first six fields: argc, argv, heap, used, size, maps (all i64, in order)"), strlen("the runtime fills Cap's first six fields: argc, argv, heap, used, size, maps (all i64, in order)"))
+    Err(c, "bad_abi", "the runtime fills Cap's first six fields: argc, argv, heap, used, size, maps (all i64, in order)")
   }
   return 0
 }
@@ -1523,7 +1518,7 @@ func Before(e *ovid/parse.Decl, d *ovid/parse.Decl) bool {
   if ef == df {
     return e.off < d.off
   }
-  return ovid/parse.Cmp(ptr(ef.rel), len(ef.rel), ptr(df.rel), len(df.rel)) < 0
+  return ovid/parse.Cmp(ef.rel, df.rel) < 0
 }
 
 // Taken claims the id of the const, type, or func d, which the checker is
@@ -1534,10 +1529,10 @@ func Taken(c *Ch, d *ovid/parse.Decl, a *ovid/parse.Decl, b *ovid/parse.Decl) bo
   if Claim(c) != 0 {
     return true
   }
-  if Before(ovid/parse.FindDecl(a, ptr(d.name), len(d.name)), d) {
+  if Before(ovid/parse.FindDecl(a, d.name), d) {
     return true
   }
-  return Before(ovid/parse.FindDecl(b, ptr(d.name), len(d.name)), d)
+  return Before(ovid/parse.FindDecl(b, d.name), d)
 }
 
 // Consts claims the ids of package k's consts.
@@ -1546,7 +1541,7 @@ func Consts(c *Ch, k *ovid/parse.Pkg) i64 {
   while d != 0 as *ovid/parse.Decl {
     HereDecl(c, H_CONST, k, d, 0 as *ovid/parse.Decl)
     if Taken(c, d, k.ts, k.fs) {
-      Err(c, strptr("duplicate_name"), strlen("duplicate_name"), ptr(d.name), len(d.name))
+      Err(c, "duplicate_name", d.name)
     }
     d = d.next
   }
@@ -1560,13 +1555,13 @@ func Types(c *Ch, k *ovid/parse.Pkg) i64 {
   while t != 0 as *ovid/parse.Decl {
     HereDecl(c, H_TYPE, k, t, 0 as *ovid/parse.Decl)
     if Taken(c, t, k.cs, k.fs) {
-      Err(c, strptr("duplicate_name"), strlen("duplicate_name"), ptr(t.name), len(t.name))
+      Err(c, "duplicate_name", t.name)
     } else {
       var f *ovid/parse.Decl = t.sub
       while f != 0 as *ovid/parse.Decl {
         HereDecl(c, H_FIELD, k, f, t)
         if Claim(c) != 0 {
-          Err(c, strptr("duplicate_name"), strlen("duplicate_name"), ptr(f.name), len(f.name))
+          Err(c, "duplicate_name", f.name)
         } else {
           DeclTy(c, f)
           DeclUse(c, ovid/parse.USE_TYPE, f, t)
@@ -1587,7 +1582,7 @@ func Funcs(c *Ch, k *ovid/parse.Pkg) i64 {
   while fn != 0 as *ovid/parse.Decl {
     HereDecl(c, H_FUNC, k, fn, fn)
     if Taken(c, fn, k.cs, k.ts) {
-      Err(c, strptr("duplicate_name"), strlen("duplicate_name"), ptr(fn.name), len(fn.name))
+      Err(c, "duplicate_name", fn.name)
       fn.dup = 1
     } else {
       var pa *ovid/parse.Decl = fn.sub
@@ -1609,17 +1604,17 @@ func Funcs(c *Ch, k *ovid/parse.Pkg) i64 {
 
 // Less reports whether the bytes at a sort before those at b, as Go
 // compares strings.
-func Less(ap i64, an i64, bp i64, bn i64) bool {
+func Less(a bytes, b bytes) bool {
   var i i64 = 0
-  while i < an && i < bn {
-    var x i64 = load8(ap + i)
-    var y i64 = load8(bp + i)
+  while i < len(a) && i < len(b) {
+    var x i64 = load8(ptr(a) + i)
+    var y i64 = load8(ptr(b) + i)
     if x != y {
       return x < y
     }
     i = i + 1
   }
-  return an < bn
+  return len(a) < len(b)
 }
 
 // Walk carries CheckCycle's search into package k, pushing it on c.cpath:
@@ -1640,8 +1635,8 @@ func Walk(c *Ch, k *ovid/parse.Pkg) bool {
       c.cn = c.cn + 1
       return true
     }
-    if Less(ptr(r.path), len(r.path), ptr(im.name), len(im.name)) {
-      var t *ovid/parse.Pkg = FindPkg(c, ptr(im.name), len(im.name))
+    if Less(r.path, im.name) {
+      var t *ovid/parse.Pkg = FindPkg(c, im.name)
       if Keep(c, t) {
         if Walk(c, t) {
           return true
@@ -1698,7 +1693,7 @@ func Sccs(c *Ch, npkg i64) i64 {
       var im *ovid/parse.Decl = load64(f + 8) as *ovid/parse.Decl
       if im != 0 as *ovid/parse.Decl {
         store64(f + 8, im.next as i64)
-        var w *ovid/parse.Pkg = FindPkg(c, ptr(im.name), len(im.name))
+        var w *ovid/parse.Pkg = FindPkg(c, im.name)
         if w != 0 as *ovid/parse.Pkg {
           if w.ord == 0 {
             visited = visited + 1
@@ -1763,7 +1758,7 @@ func Sccs(c *Ch, npkg i64) i64 {
 // only, walked unpruned.
 func CheckCycle(c *Ch, r *ovid/parse.Pkg) i64 {
   c.cscc = 0
-  if FindPkg(c, ptr(r.path), len(r.path)) == r {
+  if FindPkg(c, r.path) == r {
     if load64(c.csize + (r.scc * 8)) == 1 {
       return 0
     }
@@ -1774,8 +1769,8 @@ func CheckCycle(c *Ch, r *ovid/parse.Pkg) i64 {
   var im *ovid/parse.Decl = r.ims
   while im != 0 as *ovid/parse.Decl {
     var t *ovid/parse.Pkg = 0 as *ovid/parse.Pkg
-    if Less(ptr(r.path), len(r.path), ptr(im.name), len(im.name)) {
-      t = FindPkg(c, ptr(im.name), len(im.name))
+    if Less(r.path, im.name) {
+      t = FindPkg(c, im.name)
     }
     if Keep(c, t) {
       store64(c.cpath, r as i64)
@@ -1794,7 +1789,7 @@ func CheckCycle(c *Ch, r *ovid/parse.Pkg) i64 {
         }
         HereDecl(c, H_IMPORT, r, im, im)
         c.path = r.path
-        Err(c, strptr("import_cycle"), strlen("import_cycle"), mb.data, mb.len)
+        Err(c, "import_cycle", bytes(mb.data, mb.len))
         c.path = ""
         return 1
       }
@@ -1831,7 +1826,7 @@ func RunMode(io *ovid/io.Cap, m *ovid/parse.Mod, build bool, quiet bool) i64 {
   c.tab = ovid/io.Alloc(io, sz * 16)
   IndexPkgs(c)
   if len(m.name) == 0 {
-    Err(c, strptr("bad_module"), strlen("bad_module"), strptr("ovid.mod has no module line"), strlen("ovid.mod has no module line"))
+    Err(c, "bad_module", "ovid.mod has no module line")
   }
   var npkg i64 = 0
   var k *ovid/parse.Pkg = m.pkgs
@@ -1839,18 +1834,18 @@ func RunMode(io *ovid/io.Cap, m *ovid/parse.Mod, build bool, quiet bool) i64 {
     npkg = npkg + 1
     HereDecl(c, H_PKG, k, 0 as *ovid/parse.Decl, 0 as *ovid/parse.Decl)
     if Claim(c) != 0 {
-      Err(c, strptr("duplicate_id"), strlen("duplicate_id"), c.ib.data, c.ib.len)
+      Err(c, "duplicate_id", bytes(c.ib.data, c.ib.len))
     }
     var im *ovid/parse.Decl = k.ims
     while im != 0 as *ovid/parse.Decl {
       HereDecl(c, H_IMPORT, k, im, im)
       c.path = k.path
       if Claim(c) != 0 {
-        Err(c, strptr("duplicate_name"), strlen("duplicate_name"), ptr(im.name), len(im.name))
+        Err(c, "duplicate_name", im.name)
       } else if ovid/mem.Eq(im.name, k.path) {
-        Err(c, strptr("import_self"), strlen("import_self"), ptr(im.name), len(im.name))
-      } else if FindPkg(c, ptr(im.name), len(im.name)) == 0 as *ovid/parse.Pkg {
-        Err(c, strptr("unknown_package"), strlen("unknown_package"), ptr(im.name), len(im.name))
+        Err(c, "import_self", im.name)
+      } else if FindPkg(c, im.name) == 0 as *ovid/parse.Pkg {
+        Err(c, "unknown_package", im.name)
       }
       im = im.next
     }
@@ -1884,26 +1879,26 @@ func RunMode(io *ovid/io.Cap, m *ovid/parse.Mod, build bool, quiet bool) i64 {
   }
   if build {
     if c.errs != 0 {
-      WLit(c, strptr("{\"ok\":false,\"errors\":"), strlen("{\"ok\":false,\"errors\":"))
+      WLit(c, "{\"ok\":false,\"errors\":")
       WNum(c, c.errs)
       ovid/mem.WByte(c.io, c.b, 125)
       Line(c)
     }
     return c.errs
   }
-  WLit(c, strptr("{\"fact\":\"summary\",\"ok\":"), strlen("{\"fact\":\"summary\",\"ok\":"))
+  WLit(c, "{\"fact\":\"summary\",\"ok\":")
   if c.errs == 0 {
-    WLit(c, strptr("true"), strlen("true"))
+    WLit(c, "true")
   } else {
-    WLit(c, strptr("false"), strlen("false"))
+    WLit(c, "false")
   }
-  WLit(c, strptr(",\"errors\":"), strlen(",\"errors\":"))
+  WLit(c, ",\"errors\":")
   WNum(c, c.errs)
-  WLit(c, strptr(",\"packages\":"), strlen(",\"packages\":"))
+  WLit(c, ",\"packages\":")
   WNum(c, npkg)
-  WLit(c, strptr(",\"funcs\":"), strlen(",\"funcs\":"))
+  WLit(c, ",\"funcs\":")
   WNum(c, c.nfunc)
-  WLit(c, strptr(",\"revision\":\""), strlen(",\"revision\":\""))
+  WLit(c, ",\"revision\":\"")
   ovid/mem.WBytes(c.io, c.b, bytes(ovid/parse.Revision(m), 16))
   ovid/mem.WByte(c.io, c.b, 34)
   ovid/mem.WByte(c.io, c.b, 125)

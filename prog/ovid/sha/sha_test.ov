@@ -4,10 +4,10 @@ import ovid/io
 import ovid/mem
 
 // HexIs hashes n bytes at p and compares the hex digest with want.
-func HexIs(io *ovid/io.Cap, p i64, n i64, want i64) bool {
+func HexIs(io *ovid/io.Cap, s bytes, want i64) bool {
   var raw i64 = ovid/io.Alloc(io, 32)
   var hex i64 = ovid/io.Alloc(io, 64)
-  Sum(io, p, n, raw)
+  Sum(io, s, raw)
   Hex(hex, raw)
   if ovid/mem.Eq(bytes(hex, 64), bytes(want, 64)) {
     return true
@@ -24,16 +24,16 @@ func HexIs(io *ovid/io.Cap, p i64, n i64, want i64) bool {
 // whose padding spills into a second block, and a 112-byte one that fills a
 // whole block before its tail.
 func TestSum(io *ovid/io.Cap) i64 {
-  if !HexIs(io, strptr("abc"), 3, strptr("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")) {
+  if !HexIs(io, "abc", strptr("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")) {
     return 1
   }
-  if !HexIs(io, strptr(""), 0, strptr("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")) {
+  if !HexIs(io, "", strptr("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")) {
     return 2
   }
-  if !HexIs(io, strptr("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"), 56, strptr("248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1")) {
+  if !HexIs(io, "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq", strptr("248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1")) {
     return 3
   }
-  if !HexIs(io, strptr("abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmnhijklmnoijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu"), 112, strptr("cf5b16a778af8380036ce59e7b0492370b249b11e8f07a51afac45037afee9d1")) {
+  if !HexIs(io, "abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmnhijklmnoijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu", strptr("cf5b16a778af8380036ce59e7b0492370b249b11e8f07a51afac45037afee9d1")) {
     return 4
   }
   return 0

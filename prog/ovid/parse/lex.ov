@@ -7,7 +7,7 @@ import ovid/mem
 // i is the cursor, last the end of the last consumed token, nl whether the
 // blank run before the next token holds a newline, skipped whether that run
 // was already skipped. Ident, ParsePath and ParseType return their string in
-// tp/tn. The first error sets err and moves the cursor to the end so every
+// tok. The first error sets err and moves the cursor to the end so every
 // loop stops; later errors are ignored. kwat/kwend belong to PeekKw. ttok
 // is where in the source the name of the type ParseType last read stands.
 type P struct {
@@ -62,8 +62,8 @@ func ErrBegin(p *P) bool {
   return true
 }
 
-func EW(p *P, s i64, n i64) i64 {
-  return ovid/mem.WBytes(p.io, p.emsg, bytes(s, n))
+func EW(p *P, s bytes) i64 {
+  return ovid/mem.WBytes(p.io, p.emsg, s)
 }
 
 func EWInt(p *P, v i64) i64 {
@@ -75,7 +75,7 @@ func EWInt(p *P, v i64) i64 {
 // next token is on a later line.
 func ErrEnd(p *P) i64 {
   if p.emsg.len >= 8 && ovid/mem.Eq(bytes(p.emsg.data, 8), "expected") {
-    EW(p, strptr(", found "), strlen(", found "))
+    EW(p, ", found ")
     Found(p)
   }
   var off i64 = p.i
@@ -90,19 +90,19 @@ func ErrEnd(p *P) i64 {
   return 0
 }
 
-func Errorf(p *P, s i64, n i64) i64 {
+func Errorf(p *P, s bytes) i64 {
   if ErrBegin(p) {
-    EW(p, s, n)
+    EW(p, s)
     ErrEnd(p)
   }
   return 0
 }
 
 // Errorf2 is Errorf with a formatted middle: s1 + name + s2.
-func Errorf2(p *P, s1 i64, n1 i64, mp i64, mn i64) i64 {
+func Errorf2(p *P, s1 bytes, m bytes) i64 {
   if ErrBegin(p) {
-    EW(p, s1, n1)
-    EW(p, mp, mn)
+    EW(p, s1)
+    EW(p, m)
     ErrEnd(p)
   }
   return 0
@@ -111,10 +111,10 @@ func Errorf2(p *P, s1 i64, n1 i64, mp i64, mn i64) i64 {
 // Found describes the next token the way strconv.Quote would.
 func Found(p *P) i64 {
   if p.i >= len(p.src) {
-    return EW(p, strptr("end of file"), strlen("end of file"))
+    return EW(p, "end of file")
   }
   if p.nl && p.i > 0 {
-    return EW(p, strptr("newline"), strlen("newline"))
+    return EW(p, "newline")
   }
   var e i64 = p.i
   if IsIdentStart(At(p, e)) || IsDigit(At(p, e)) {
@@ -134,17 +134,17 @@ func Found(p *P) i64 {
     } else if c >= 32 && c < 127 {
       ovid/mem.WByte(p.io, p.emsg, c)
     } else if c == 10 {
-      EW(p, strptr("\\n"), 2)
+      EW(p, bytes(strptr("\\n"), 2))
     } else if c == 9 {
-      EW(p, strptr("\\t"), 2)
+      EW(p, bytes(strptr("\\t"), 2))
     } else if c == 13 {
-      EW(p, strptr("\\r"), 2)
+      EW(p, bytes(strptr("\\r"), 2))
     } else {
       var hx i64 = ovid/io.Alloc(p.io, 8)
       store8(hx, 92)
       store8(hx + 1, 120)
       ovid/mem.HexOut(hx + 2, c, 2)
-      EW(p, hx, 4)
+      EW(p, bytes(hx, 4))
     }
     k = k + 1
   }
@@ -196,7 +196,7 @@ func Skip(p *P) i64 {
       }
       if p.i + 1 >= len(p.src) {
         p.emsg.len = 0
-        EW(p, strptr("unclosed comment"), strlen("unclosed comment"))
+        EW(p, "unclosed comment")
         ErrEnd(p)
         return 0
       }
@@ -216,7 +216,7 @@ func PeekByte(p *P, b i64) bool {
 func Expect(p *P, b i64) i64 {
   if !PeekByte(p, b) {
     if ErrBegin(p) {
-      EW(p, strptr("expected \""), strlen("expected \""))
+      EW(p, "expected \"")
       ovid/mem.WByte(p.io, p.emsg, b)
       ovid/mem.WByte(p.io, p.emsg, 34)
       ErrEnd(p)
@@ -237,8 +237,8 @@ func PeekIdent(p *P) bool {
 func Ident(p *P) i64 {
   Skip(p)
   if p.i >= len(p.src) || !IsIdentStart(At(p, p.i)) {
-    Errorf(p, strptr("expected identifier"), strlen("expected identifier"))
-    p.tok = bytes(ptr(p.src), 0)
+    Errorf(p, "expected identifier")
+    p.tok = p.src[0:0]
     return ptr(p.tok)
   }
   var s i64 = p.i
@@ -246,7 +246,7 @@ func Ident(p *P) i64 {
   while p.i < len(p.src) && IsIdentCont(At(p, p.i)) {
     p.i = p.i + 1
   }
-  p.tok = bytes(ptr(p.src) + s, p.i - s)
+  p.tok = p.src[s:p.i]
   Bump(p)
   return ptr(p.tok)
 }
@@ -260,14 +260,14 @@ func Ident(p *P) i64 {
 // and tabs between: len is a keyword only there, so a variable may still
 // be named len.
 func PeekLen(p *P) bool {
-  return PeekCall(p, strptr("len"), 3)
+  return PeekCall(p, "len")
 }
 
-// PeekCall says whether the keyword lit[0:n] is next and a ( follows it
+// PeekCall says whether the keyword lit is next and a ( follows it
 // (after spaces or tabs): len and ptr are keywords only as calls, so a
 // variable may bear either name.
-func PeekCall(p *P, lit i64, n i64) bool {
-  if !PeekKw(p, lit, n) {
+func PeekCall(p *P, lit bytes) bool {
+  if !PeekKw(p, lit) {
     return false
   }
   var e i64 = p.kwend
@@ -277,7 +277,7 @@ func PeekCall(p *P, lit i64, n i64) bool {
   return e < len(p.src) && At(p, e) == 40
 }
 
-func PeekKw(p *P, lit i64, n i64) bool {
+func PeekKw(p *P, lit bytes) bool {
   Skip(p)
   if p.kwat != p.i + 1 {
     var e i64 = p.i
@@ -290,23 +290,23 @@ func PeekKw(p *P, lit i64, n i64) bool {
     p.kwat = p.i + 1
     p.kwend = e
   }
-  if p.kwend - p.i != n {
+  if p.kwend - p.i != len(lit) {
     return false
   }
-  return ovid/mem.Eq(bytes(ptr(p.src) + p.i, n), bytes(lit, n))
+  return ovid/mem.Eq(p.src[p.i:p.kwend], lit)
 }
 
-func Kw(p *P, lit i64, n i64) bool {
-  if !PeekKw(p, lit, n) {
+func Kw(p *P, lit bytes) bool {
+  if !PeekKw(p, lit) {
     return false
   }
   Ident(p)
   return true
 }
 
-func ExpectKw(p *P, lit i64, n i64) i64 {
-  if !Kw(p, lit, n) {
-    Errorf2(p, strptr("expected "), strlen("expected "), lit, n)
+func ExpectKw(p *P, lit bytes) i64 {
+  if !Kw(p, lit) {
+    Errorf2(p, "expected ", lit)
   }
   return 0
 }
@@ -319,7 +319,7 @@ func ExpectEnd(p *P) i64 {
     return 0
   }
   if !p.nl {
-    Errorf(p, strptr("expected newline"), strlen("expected newline"))
+    Errorf(p, "expected newline")
   }
   return 0
 }
@@ -336,11 +336,11 @@ func PeekAssign(p *P) bool {
 }
 
 // Cat returns a new buffer holding a then b (length an + bn).
-func Cat(io *ovid/io.Cap, a i64, an i64, b i64, bn i64) i64 {
-  var d i64 = ovid/io.Alloc(io, an + bn + 1)
-  ovid/mem.CopyN(d, a, an)
-  ovid/mem.CopyN(d + an, b, bn)
-  store8(d + an + bn, 0)
+func Cat(io *ovid/io.Cap, a bytes, b bytes) i64 {
+  var d i64 = ovid/io.Alloc(io, len(a) + len(b) + 1)
+  ovid/mem.CopyN(d, ptr(a), len(a))
+  ovid/mem.CopyN(d + len(a), ptr(b), len(b))
+  store8(d + len(a) + len(b), 0)
   return d
 }
 
@@ -355,8 +355,8 @@ func ParsePath(p *P) i64 {
     if ptr(p.tok) == sp + sn + 1 {
       sn = sn + 1 + len(p.tok)
     } else {
-      var t i64 = Cat(p.io, sp, sn, strptr("/"), 1)
-      sp = Cat(p.io, t, sn + 1, ptr(p.tok), len(p.tok))
+      var t i64 = Cat(p.io, bytes(sp, sn), "/")
+      sp = Cat(p.io, bytes(t, sn + 1), p.tok)
       sn = sn + 1 + len(p.tok)
     }
   }
@@ -391,7 +391,7 @@ func ParseType(p *P) i64 {
   if pkgp == 0 {
     if ovid/mem.Eq(bytes(namep, namen), "i64") || ovid/mem.Eq(bytes(namep, namen), "bool") || ovid/mem.Eq(bytes(namep, namen), "bytes") {
       if star {
-        Errorf2(p, strptr("cannot use a pointer to "), strlen("cannot use a pointer to "), namep, namen)
+        Errorf2(p, "cannot use a pointer to ", bytes(namep, namen))
       }
       p.tok = bytes(namep, namen)
       return 0

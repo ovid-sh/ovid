@@ -4,22 +4,22 @@ import ovid/io
 import ovid/mem
 
 // Src wraps source text as a File named t.ov.
-func Src(io *ovid/io.Cap, p i64, n i64) *File {
+func Src(io *ovid/io.Cap, s bytes) *File {
   var f *File = ovid/io.Alloc(io, sizeof(File)) as *File
   f.rel = "t.ov"
   f.disp = f.rel
-  f.src = bytes(p, n)
+  f.src = s
   return f
 }
 
 // ErrIs parses src and reports whether the first error is msg at offset off.
-func ErrIs(io *ovid/io.Cap, src i64, n i64, msg i64, mn i64, off i64) bool {
-  var p *P = NewP(io, Src(io, src, n))
+func ErrIs(io *ovid/io.Cap, src bytes, msg bytes, off i64) bool {
+  var p *P = NewP(io, Src(io, src))
   ParseFile(p)
   if p.err == 0 {
     return false
   }
-  if !ovid/mem.Eq(bytes(p.emsg.data, p.emsg.len), bytes(msg, mn)) {
+  if !ovid/mem.Eq(bytes(p.emsg.data, p.emsg.len), msg) {
     ovid/io.Stderr(bytes(p.emsg.data, p.emsg.len))
     ovid/io.Stderr(bytes(strptr("\n"), 1))
     return false
@@ -28,13 +28,13 @@ func ErrIs(io *ovid/io.Cap, src i64, n i64, msg i64, mn i64, off i64) bool {
 }
 
 func TestCmp(io *ovid/io.Cap) i64 {
-  if Cmp(strptr("a"), 1, strptr("ab"), 2) != -1 {
+  if Cmp("a", "ab") != -1 {
     return 1
   }
-  if Cmp(strptr("b"), 1, strptr("ab"), 2) != 1 {
+  if Cmp("b", "ab") != 1 {
     return 2
   }
-  if Cmp(strptr("ab"), 2, strptr("ab"), 2) != 0 {
+  if Cmp("ab", "ab") != 0 {
     return 3
   }
   return 0
@@ -42,7 +42,7 @@ func TestCmp(io *ovid/io.Cap) i64 {
 
 func TestConsts(io *ovid/io.Cap) i64 {
   var s i64 = strptr("package a\nconst A i64 = 0x10\nconst B i64 = -9223372036854775808\nconst C i64 = 010 + ^A * 2 % 7\nconst D i64 = 1 << 70\n")
-  var p *P = NewP(io, Src(io, s, ovid/io.CLen(s)))
+  var p *P = NewP(io, Src(io, bytes(s, ovid/io.CLen(s))))
   var k *Pkg = ParseFile(p)
   if p.err != 0 {
     return 1
@@ -68,23 +68,23 @@ func TestConsts(io *ovid/io.Cap) i64 {
 
 func TestErrors(io *ovid/io.Cap) i64 {
   var a i64 = strptr("package a\nfunc F() i64 {\n  return 1 2\n}\n")
-  if !ErrIs(io, a, ovid/io.CLen(a), strptr("expected newline, found \"2\""), strlen("expected newline, found \"2\""), 36) {
+  if !ErrIs(io, bytes(a, ovid/io.CLen(a)), "expected newline, found \"2\"", 36) {
     return 1
   }
   var b i64 = strptr("package a\nfunc F() i64 {\n  return 1\n")
-  if !ErrIs(io, b, ovid/io.CLen(b), strptr("unclosed block"), strlen("unclosed block"), 35) {
+  if !ErrIs(io, bytes(b, ovid/io.CLen(b)), "unclosed block", 35) {
     return 2
   }
   var c i64 = strptr("package a\nconst X i64 = 99999999999999999999\n")
-  if !ErrIs(io, c, ovid/io.CLen(c), strptr("bad integer 99999999999999999999"), strlen("bad integer 99999999999999999999"), 44) {
+  if !ErrIs(io, bytes(c, ovid/io.CLen(c)), "bad integer 99999999999999999999", 44) {
     return 3
   }
   var d i64 = strptr("package a\nfunc F() i64 {\n  return strlen(\"\\q\")\n}\n")
-  if !ErrIs(io, d, ovid/io.CLen(d), strptr("bad escape"), strlen("bad escape"), 44) {
+  if !ErrIs(io, bytes(d, ovid/io.CLen(d)), "bad escape", 44) {
     return 4
   }
   var e i64 = strptr("package a\nfunc F() i64 {\n  var x i64 =\n}\n")
-  if !ErrIs(io, e, ovid/io.CLen(e), strptr("expected an expression, found newline"), strlen("expected an expression, found newline"), 38) {
+  if !ErrIs(io, bytes(e, ovid/io.CLen(e)), "expected an expression, found newline", 38) {
     return 5
   }
   return 0
@@ -94,7 +94,7 @@ func TestErrors(io *ovid/io.Cap) i64 {
 // post-order except unary ops, which take their id before the operand.
 func TestIds(io *ovid/io.Cap) i64 {
   var s i64 = strptr("package a\nfunc F(x i64) i64 {\n  if x > 0 {\n    return -x\n  } else if x == 0 {\n    x = 1\n  }\n  return x\n}\n")
-  var p *P = NewP(io, Src(io, s, ovid/io.CLen(s)))
+  var p *P = NewP(io, Src(io, bytes(s, ovid/io.CLen(s))))
   var k *Pkg = ParseFile(p)
   if p.err != 0 {
     return 1
@@ -122,7 +122,7 @@ func TestIds(io *ovid/io.Cap) i64 {
 
 func TestPkgConst(io *ovid/io.Cap) i64 {
   var s i64 = strptr("package a\nimport ovid/io\nfunc F() i64 {\n  return ovid/io.O_CREAT + io.X\n}\n")
-  var p *P = NewP(io, Src(io, s, ovid/io.CLen(s)))
+  var p *P = NewP(io, Src(io, bytes(s, ovid/io.CLen(s))))
   var k *Pkg = ParseFile(p)
   if p.err != 0 {
     return 1

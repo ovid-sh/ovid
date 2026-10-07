@@ -43,8 +43,7 @@ type C struct {
   cell i64
   err i64
   peak i64
-  typ i64
-  tyn i64
+  typ bytes
   opv i64
   addrd i64
   last *ovid/parse.Node
@@ -71,60 +70,60 @@ type C struct {
   adding bool
 }
 
-// Fail records the first failure. Its message is p[0:n] and whatever Add
+// Fail records the first failure. Its message is s and whatever Add
 // appends before the next Fail.
-func Fail(c *C, p i64, n i64) i64 {
+func Fail(c *C, s bytes) i64 {
   c.adding = c.err == 0
   if c.adding {
     c.err = 1
     c.msg = ovid/mem.New(c.io, 64)
-    ovid/mem.WBytes(c.io, c.msg, bytes(p, n))
+    ovid/mem.WBytes(c.io, c.msg, s)
   }
   return c.err
 }
 
-// Add appends p[0:n] to the message of the failure the last Fail recorded.
-func Add(c *C, p i64, n i64) i64 {
+// Add appends s to the message of the failure the last Fail recorded.
+func Add(c *C, s bytes) i64 {
   if c.adding {
-    ovid/mem.WBytes(c.io, c.msg, bytes(p, n))
+    ovid/mem.WBytes(c.io, c.msg, s)
   }
   return c.err
 }
 
-// AddQual appends name np[0:nn], qualified with package pp[0:pn] if any.
-func AddQual(c *C, pp i64, pn i64, np i64, nn i64) i64 {
-  if pn != 0 {
-    Add(c, pp, pn)
-    Add(c, strptr("."), 1)
+// AddQual appends name name, qualified with package path if any.
+func AddQual(c *C, path bytes, name bytes) i64 {
+  if len(path) != 0 {
+    Add(c, path)
+    Add(c, ".")
   }
-  return Add(c, np, nn)
+  return Add(c, name)
 }
 
 // FailName fails with what followed by the name n refers to.
-func FailName(c *C, what i64, whatn i64, n *ovid/parse.Node) i64 {
-  Fail(c, what, whatn)
-  return AddQual(c, ptr(n.pkg), len(n.pkg), ptr(n.name), len(n.name))
+func FailName(c *C, what bytes, n *ovid/parse.Node) i64 {
+  Fail(c, what)
+  return AddQual(c, n.pkg, n.name)
 }
 
 // FailCall fails for call node n, whose func was not found.
 func FailCall(c *C, n *ovid/parse.Node) i64 {
-  Fail(c, strptr("call "), strlen("call "))
-  return AddQual(c, ptr(n.pkg), len(n.pkg), ptr(n.fn), len(n.fn))
+  Fail(c, "call ")
+  return AddQual(c, n.pkg, n.fn)
 }
 
 // FailIn fails with what followed by the func being emitted, pkg.Name.
-func FailIn(c *C, what i64, whatn i64) i64 {
-  Fail(c, what, whatn)
-  return AddQual(c, ptr(c.path), len(c.path), ptr(c.fn.name), len(c.fn.name))
+func FailIn(c *C, what bytes) i64 {
+  Fail(c, what)
+  return AddQual(c, c.path, c.fn.name)
 }
 
-// FailField fails with "field f on T", for a field fp[0:fnn] that type
-// tp[0:tn] does not have.
-func FailField(c *C, tp i64, tn i64, fp i64, fnn i64) i64 {
-  Fail(c, strptr("field "), strlen("field "))
-  Add(c, fp, fnn)
-  Add(c, strptr(" on "), strlen(" on "))
-  return Add(c, tp, tn)
+// FailField fails with "field f on T", for a field f that type
+// t does not have.
+func FailField(c *C, t bytes, f bytes) i64 {
+  Fail(c, "field ")
+  Add(c, f)
+  Add(c, " on ")
+  return Add(c, t)
 }
 
 func Max(a i64, b i64) i64 {
@@ -147,11 +146,11 @@ func TableOf(c *C, n *ovid/parse.Node) *ovid/parse.Decl {
     pp = ptr(n.pkg)
     pn = len(n.pkg)
   }
-  var k *ovid/parse.Pkg = FindPkg(c, pp, pn)
+  var k *ovid/parse.Pkg = FindPkg(c, bytes(pp, pn))
   if k == 0 as *ovid/parse.Pkg {
     return 0 as *ovid/parse.Decl
   }
-  var d *ovid/parse.Decl = ovid/parse.FindDecl(k.cs, ptr(n.name), len(n.name))
+  var d *ovid/parse.Decl = ovid/parse.FindDecl(k.cs, n.name)
   if d == 0 as *ovid/parse.Decl {
     return d
   }
@@ -159,7 +158,7 @@ func TableOf(c *C, n *ovid/parse.Node) *ovid/parse.Decl {
     return 0 as *ovid/parse.Decl
   }
   if d.ro == 0 {
-    d.ro = ovid/asm.RoBytes(c.code, d.tab, d.tabn * 8) + 1
+    d.ro = ovid/asm.RoBytes(c.code, bytes(d.tab, d.tabn * 8)) + 1
   }
   return d
 }
@@ -183,10 +182,10 @@ func UnaryOp(op i64) bool {
   return ovid/parse.LoadOp(op) || ovid/parse.BswapOp(op)
 }
 
-func FindPkg(c *C, pp i64, pn i64) *ovid/parse.Pkg {
+func FindPkg(c *C, path bytes) *ovid/parse.Pkg {
   var k *ovid/parse.Pkg = c.mod.pkgs
   while k != 0 as *ovid/parse.Pkg {
-    if ovid/mem.Eq(k.path, bytes(pp, pn)) {
+    if ovid/mem.Eq(k.path, path) {
       return k
     }
     k = k.next
@@ -197,18 +196,18 @@ func FindPkg(c *C, pp i64, pn i64) *ovid/parse.Pkg {
 // PkgConst returns the const that name node n refers to in another
 // package (n.pkg is set), or nil.
 func PkgConst(c *C, n *ovid/parse.Node) *ovid/parse.Decl {
-  var k *ovid/parse.Pkg = FindPkg(c, ptr(n.pkg), len(n.pkg))
+  var k *ovid/parse.Pkg = FindPkg(c, n.pkg)
   if k == 0 as *ovid/parse.Pkg {
     return 0 as *ovid/parse.Decl
   }
-  return ovid/parse.FindDecl(k.cs, ptr(n.name), len(n.name))
+  return ovid/parse.FindDecl(k.cs, n.name)
 }
 
 // IndexProg gives every func its label, in program order.
 func IndexProg(c *C) i64 {
   var k *ovid/parse.Pkg = c.mod.pkgs
   if k == 0 as *ovid/parse.Pkg {
-    return Fail(c, strptr("no packages"), strlen("no packages"))
+    return Fail(c, "no packages")
   }
   c.locs = ovid/io.Alloc(c.io, MAXLOC * LOCSIZE)
   c.scope = ovid/io.Alloc(c.io, MAXLOC * 8)
@@ -240,16 +239,16 @@ func LocOf(c *C, n *ovid/parse.Node) i64 {
 // AddLoc gives the declaration s (nil for a param) a new local and puts it
 // in scope. Its slot is the number of locals in scope, so vars of sibling
 // blocks share slots.
-func AddLoc(c *C, s *ovid/parse.Node, np i64, nn i64, tp i64, tn i64) i64 {
+func AddLoc(c *C, s *ovid/parse.Node, name bytes, t bytes) i64 {
   if c.nloc >= MAXLOC {
-    return FailIn(c, strptr("too many locals in "), strlen("too many locals in "))
+    return FailIn(c, "too many locals in ")
   }
   var rec i64 = c.locs + (c.nloc * LOCSIZE)
-  store64(rec + 0, np)
-  store64(rec + 8, nn)
+  store64(rec + 0, ptr(name))
+  store64(rec + 8, len(name))
   store64(rec + 16, 0 - ((c.nscope + 1) * 8))
-  store64(rec + 24, tp)
-  store64(rec + 32, tn)
+  store64(rec + 24, ptr(t))
+  store64(rec + 32, len(t))
   store64(rec + LOC_WEIGHT, 0)
   store64(rec + LOC_REG, -1)
   store64(c.scope + (c.nscope * 8), c.nloc)
@@ -263,14 +262,14 @@ func AddLoc(c *C, s *ovid/parse.Node, np i64, nn i64, tp i64, tn i64) i64 {
 }
 
 // BindName resolves n, an assign or a name, to the innermost local called
-// np[0:nn] in scope, if there is one.
-func BindName(c *C, n *ovid/parse.Node, np i64, nn i64) i64 {
+// name in scope, if there is one.
+func BindName(c *C, n *ovid/parse.Node, name bytes) i64 {
   n.loc = 0
   var j i64 = c.nscope - 1
   while j >= 0 {
     var i i64 = load64(c.scope + (j * 8))
     var rec i64 = c.locs + (i * LOCSIZE)
-    if ovid/mem.Eq(bytes(load64(rec + 0), load64(rec + 8)), bytes(np, nn)) {
+    if ovid/mem.Eq(bytes(load64(rec + 0), load64(rec + 8)), name) {
       n.loc = i + 1
       return 0
     }
@@ -297,31 +296,31 @@ func BindStmts(c *C, s *ovid/parse.Node) i64 {
     }
     if s.op == ovid/parse.OP_VAR {
       if len(s.name) != 0 {
-        AddLoc(c, s, ptr(s.name), len(s.name), ptr(s.typ), len(s.typ))
+        AddLoc(c, s, s.name, s.typ)
       }
     } else if s.op == ovid/parse.OP_VAR2 {
       // The second name's local is loc2; _ declares nothing. A lowered
       // (bytes, i64) names a third in args, loc3.
-      if !ovid/parse.IsBlank(ptr(s.name), len(s.name)) {
-        AddLoc(c, s, ptr(s.name), len(s.name), ptr(s.typ), len(s.typ))
+      if !ovid/parse.IsBlank(s.name) {
+        AddLoc(c, s, s.name, s.typ)
       }
-      if !ovid/parse.IsBlank(ptr(s.name2), len(s.name2)) {
-        AddLoc(c, 0 as *ovid/parse.Node, ptr(s.name2), len(s.name2), ptr(s.typ2), len(s.typ2))
+      if !ovid/parse.IsBlank(s.name2) {
+        AddLoc(c, 0 as *ovid/parse.Node, s.name2, s.typ2)
         s.loc2 = c.nloc
       }
-      if s.args != 0 as *ovid/parse.Node && !ovid/parse.IsBlank(ptr(s.args.name), len(s.args.name)) {
-        AddLoc(c, 0 as *ovid/parse.Node, ptr(s.args.name), len(s.args.name), strptr("i64"), 3)
+      if s.args != 0 as *ovid/parse.Node && !ovid/parse.IsBlank(s.args.name) {
+        AddLoc(c, 0 as *ovid/parse.Node, s.args.name, "i64")
         s.loc3 = c.nloc
       }
     } else if s.op == ovid/parse.OP_ASSIGN {
-      BindName(c, s, ptr(s.name), len(s.name))
+      BindName(c, s, s.name)
     } else if s.op == ovid/parse.OP_ASSIGN2 {
-      BindName(c, s, ptr(s.name), len(s.name))
+      BindName(c, s, s.name)
       var first i64 = s.loc
-      BindName(c, s, ptr(s.name2), len(s.name2))
+      BindName(c, s, s.name2)
       s.loc2 = s.loc
       if s.args != 0 as *ovid/parse.Node {
-        BindName(c, s, ptr(s.args.name), len(s.args.name))
+        BindName(c, s, s.args.name)
         s.loc3 = s.loc
       }
       s.loc = first
@@ -340,7 +339,7 @@ func BindExpr(c *C, n *ovid/parse.Node) i64 {
     return 0
   }
   if n.op == ovid/parse.OP_NAME && len(n.pkg) == 0 {
-    BindName(c, n, ptr(n.name), len(n.name))
+    BindName(c, n, n.name)
   }
   BindExpr(c, n.left)
   BindExpr(c, n.right)
@@ -451,23 +450,21 @@ func StmtPeak(s *ovid/parse.Node) i64 {
 }
 
 func SetI64(c *C) i64 {
-  c.typ = strptr("i64")
-  c.tyn = strlen("i64")
+  c.typ = "i64"
   return 0
 }
 
 func SetBool(c *C) i64 {
-  c.typ = strptr("bool")
-  c.tyn = strlen("bool")
+  c.typ = "bool"
   return 0
 }
 
-// FindType returns the struct type pkg.T named by tp[0:tn], or nil.
-func FindType(c *C, tp i64, tn i64) *ovid/parse.Decl {
+// FindType returns the struct type pkg.T named by t, or nil.
+func FindType(c *C, t bytes) *ovid/parse.Decl {
   var dot i64 = -1
   var i i64 = 0
-  while i < tn {
-    if load8(tp + i) == 46 {
+  while i < len(t) {
+    if load8(ptr(t) + i) == 46 {
       dot = i
     }
     i = i + 1
@@ -475,60 +472,58 @@ func FindType(c *C, tp i64, tn i64) *ovid/parse.Decl {
   if dot < 1 {
     return 0 as *ovid/parse.Decl
   }
-  var k *ovid/parse.Pkg = FindPkg(c, tp, dot)
+  var k *ovid/parse.Pkg = FindPkg(c, t[0:dot])
   if k == 0 as *ovid/parse.Pkg {
     return 0 as *ovid/parse.Decl
   }
-  return ovid/parse.FindDecl(k.ts, (tp + dot) + 1, (tn - dot) - 1)
+  return ovid/parse.FindDecl(k.ts, bytes((ptr(t) + dot) + 1, (len(t) - dot) - 1))
 }
 
-// SizeOf is the byte size of struct type pkg.T (tp/tn): 8 per field.
-func SizeOf(c *C, tp i64, tn i64) i64 {
-  var t *ovid/parse.Decl = FindType(c, tp, tn)
+// SizeOf is the byte size of struct type pkg.T (t): 8 per field.
+func SizeOf(c *C, ts bytes) i64 {
+  var t *ovid/parse.Decl = FindType(c, ts)
   if t == 0 as *ovid/parse.Decl {
-    Fail(c, strptr("sizeof "), strlen("sizeof "))
-    Add(c, tp, tn)
+    Fail(c, "sizeof ")
+    Add(c, ts)
     return -1
   }
   return ovid/parse.CountDecls(t.sub) * 8
 }
 
-// OffsetOf is the byte offset of field fp[0:fnn] in the pointer type
-// tp[0:tn] (*pkg.T); it sets the current type to the field's.
-func OffsetOf(c *C, tp i64, tn i64, fp i64, fnn i64) i64 {
+// OffsetOf is the byte offset of field f in the pointer type
+// t (*pkg.T); it sets the current type to the field's.
+func OffsetOf(c *C, ts bytes, fs bytes) i64 {
   var t *ovid/parse.Decl = 0 as *ovid/parse.Decl
-  if tn >= 2 {
-    if load8(tp) == 42 {
-      t = FindType(c, tp + 1, tn - 1)
+  if len(ts) >= 2 {
+    if load8(ptr(ts)) == 42 {
+      t = FindType(c, ts[1:len(ts)])
     }
   }
   if t == 0 as *ovid/parse.Decl {
-    FailField(c, tp, tn, fp, fnn)
+    FailField(c, ts, fs)
     return -1
   }
   var k i64 = 0
   var f *ovid/parse.Decl = t.sub
   while f != 0 as *ovid/parse.Decl {
-    if ovid/mem.Eq(f.name, bytes(fp, fnn)) {
-      c.typ = ptr(f.typ)
-      c.tyn = len(f.typ)
+    if ovid/mem.Eq(f.name, fs) {
+      c.typ = f.typ
       return k * 8
     }
     k = k + 1
     f = f.next
   }
-  FailField(c, tp, tn, fp, fnn)
+  FailField(c, ts, fs)
   return -1
 }
 
-// Callee returns the func that call node n resolves to, or nil; pp/pn is
+// Callee returns the func that call node n resolves to, or nil; path is
 // the package an unqualified call resolves in.
-func Callee(c *C, n *ovid/parse.Node, pp i64, pn i64) *ovid/parse.Decl {
+func Callee(c *C, n *ovid/parse.Node, path bytes) *ovid/parse.Decl {
   if len(n.pkg) != 0 {
-    pp = ptr(n.pkg)
-    pn = len(n.pkg)
+    path = n.pkg
   }
-  return ovid/parse.FindFunc(c.mod, pp, pn, ptr(n.fn), len(n.fn))
+  return ovid/parse.FindFunc(c.mod, path, n.fn)
 }
 
 func TypeOf(c *C, n *ovid/parse.Node) i64 {
@@ -536,7 +531,7 @@ func TypeOf(c *C, n *ovid/parse.Node) i64 {
     return c.err
   }
   if n == 0 as *ovid/parse.Node {
-    return FailIn(c, strptr("nil expr in "), strlen("nil expr in "))
+    return FailIn(c, "nil expr in ")
   }
   var op i64 = n.op
   if op == ovid/parse.OP_ULT {
@@ -556,55 +551,52 @@ func TypeOf(c *C, n *ovid/parse.Node) i64 {
       if PkgConst(c, n) != 0 as *ovid/parse.Decl {
         return SetI64(c)
       }
-      return FailName(c, strptr("const "), strlen("const "), n)
+      return FailName(c, "const ", n)
     }
     var loc i64 = LocOf(c, n)
     if loc == 0 {
-      if ovid/parse.FindDecl(c.pkg.cs, ptr(n.name), len(n.name)) != 0 as *ovid/parse.Decl {
+      if ovid/parse.FindDecl(c.pkg.cs, n.name) != 0 as *ovid/parse.Decl {
         return SetI64(c)
       }
-      return FailName(c, strptr("name "), strlen("name "), n)
+      return FailName(c, "name ", n)
     }
-    c.typ = load64(loc + 24)
-    c.tyn = load64(loc + 32)
+    c.typ = bytes(load64(loc + 24), load64(loc + 32))
     return 0
   }
   if op == ovid/parse.OP_CAST {
-    c.typ = ptr(n.typ)
-    c.tyn = len(n.typ)
+    c.typ = n.typ
     return 0
   }
   if op == ovid/parse.OP_FIELD {
     if TypeOf(c, n.base) != 0 {
       return c.err
     }
-    if OffsetOf(c, c.typ, c.tyn, ptr(n.name), len(n.name)) < 0 {
+    if OffsetOf(c, c.typ, n.name) < 0 {
       return c.err
     }
     return 0
   }
   if op == ovid/parse.OP_CALL {
-    var fn *ovid/parse.Decl = Callee(c, n, ptr(c.path), len(c.path))
+    var fn *ovid/parse.Decl = Callee(c, n, c.path)
     if fn == 0 as *ovid/parse.Decl {
       return FailCall(c, n)
     }
-    c.typ = ptr(fn.typ)
-    c.tyn = len(fn.typ)
+    c.typ = fn.typ
     return 0
   }
-  return FailIn(c, strptr("no type for an expr in "), strlen("no type for an expr in "))
+  return FailIn(c, "no type for an expr in ")
 }
 
-func FieldOff(c *C, base *ovid/parse.Node, fp i64, fnn i64) i64 {
+func FieldOff(c *C, base *ovid/parse.Node, f bytes) i64 {
   if TypeOf(c, base) != 0 {
     return -1
   }
-  return OffsetOf(c, c.typ, c.tyn, fp, fnn)
+  return OffsetOf(c, c.typ, f)
 }
 
-// CapOff is the offset of field fp[0:fnn] in ovid/io.Cap.
-func CapOff(c *C, fp i64, fnn i64) i64 {
-  return OffsetOf(c, strptr("*ovid/io.Cap"), strlen("*ovid/io.Cap"), fp, fnn)
+// CapOff is the offset of field f in ovid/io.Cap.
+func CapOff(c *C, f bytes) i64 {
+  return OffsetOf(c, "*ovid/io.Cap", f)
 }
 
 func TempDisp(c *C, lv i64) i64 {
@@ -969,7 +961,7 @@ func Operand(c *C, n *ovid/parse.Node) i64 {
   } else if op == ovid/parse.OP_STRLEN {
     v = len(n.str)
   } else if op == ovid/parse.OP_SIZEOF {
-    v = SizeOf(c, ptr(n.typ), len(n.typ))
+    v = SizeOf(c, n.typ)
     if v < 0 {
       return KNONE
     }
@@ -990,7 +982,7 @@ func Operand(c *C, n *ovid/parse.Node) i64 {
         c.opv = load64(loc + 16)
         return KMEM
       }
-      var con *ovid/parse.Decl = ovid/parse.FindDecl(c.pkg.cs, ptr(n.name), len(n.name))
+      var con *ovid/parse.Decl = ovid/parse.FindDecl(c.pkg.cs, n.name)
       if con == 0 as *ovid/parse.Decl {
         return KNONE
       }
@@ -1275,7 +1267,7 @@ func ArithRcx(c *C, op i64) i64 {
     ovid/asm.MovRegReg(c.code, 0, 2)
     return 0
   }
-  return FailIn(c, strptr("bad arith op in "), strlen("bad arith op in "))
+  return FailIn(c, "bad arith op in ")
 }
 
 // EmitArith evaluates a binary arithmetic node into rax. A side that is an
@@ -1446,7 +1438,7 @@ func EmitJump(c *C, n *ovid/parse.Node, lv i64, lab i64, when bool) i64 {
   }
   n = Uncast(n)
   if n == 0 as *ovid/parse.Node {
-    return FailIn(c, strptr("nil condition in "), strlen("nil condition in "))
+    return FailIn(c, "nil condition in ")
   }
   var op i64 = n.op
   if CmpOp(op) {
@@ -1836,13 +1828,13 @@ func EmitArgs(c *C, args *ovid/parse.Node, sys bool, lv i64) i64 {
 }
 
 func EmitCall(c *C, n *ovid/parse.Node, lv i64) i64 {
-  var fn *ovid/parse.Decl = Callee(c, n, ptr(c.path), len(c.path))
+  var fn *ovid/parse.Decl = Callee(c, n, c.path)
   if fn == 0 as *ovid/parse.Decl {
     return FailCall(c, n)
   }
   if ovid/parse.CountNodes(n.args) > 6 {
-    Fail(c, strptr("arity "), strlen("arity "))
-    return Add(c, ptr(n.fn), len(n.fn))
+    Fail(c, "arity ")
+    return Add(c, n.fn)
   }
   if EmitArgs(c, n.args, false, lv) != 0 {
     return c.err
@@ -1856,7 +1848,7 @@ func EmitCall(c *C, n *ovid/parse.Node, lv i64) i64 {
 
 func EmitSys(c *C, n *ovid/parse.Node, lv i64) i64 {
   if ovid/parse.CountNodes(n.args) != 7 {
-    return Fail(c, strptr("syscall arity"), strlen("syscall arity"))
+    return Fail(c, "syscall arity")
   }
   // The number is the first argument; record it for the build receipt.
   if Operand(c, n.args) == KIMM && c.opv >= 0 && c.opv < SYSMAX {
@@ -1890,7 +1882,7 @@ func IsLoad(n *ovid/parse.Node) bool {
 func EmitLoad(c *C, n *ovid/parse.Node, lv i64, dst i64) i64 {
   n = Uncast(n)
   if n.op == ovid/parse.OP_FIELD {
-    var foff i64 = FieldOff(c, n.base, ptr(n.name), len(n.name))
+    var foff i64 = FieldOff(c, n.base, n.name)
     if foff < 0 {
       return c.err
     }
@@ -1914,7 +1906,7 @@ func EmitExpr(c *C, n *ovid/parse.Node, lv i64) i64 {
     return c.err
   }
   if n == 0 as *ovid/parse.Node {
-    return FailIn(c, strptr("nil expr in "), strlen("nil expr in "))
+    return FailIn(c, "nil expr in ")
   }
   var op i64 = n.op
   if op == ovid/parse.OP_INT {
@@ -1922,7 +1914,7 @@ func EmitExpr(c *C, n *ovid/parse.Node, lv i64) i64 {
     return 0
   }
   if op == ovid/parse.OP_SIZEOF {
-    var sz i64 = SizeOf(c, ptr(n.typ), len(n.typ))
+    var sz i64 = SizeOf(c, n.typ)
     if sz < 0 {
       return c.err
     }
@@ -1938,7 +1930,7 @@ func EmitExpr(c *C, n *ovid/parse.Node, lv i64) i64 {
     return 0
   }
   if op == ovid/parse.OP_STRPTR {
-    var off i64 = ovid/asm.Intern(c.code, ptr(n.str), len(n.str))
+    var off i64 = ovid/asm.Intern(c.code, n.str)
     ovid/asm.MovRegImm64(c.code, 0, 0)
     ovid/asm.AbsHere(c.code, off)
     return 0
@@ -1946,7 +1938,7 @@ func EmitExpr(c *C, n *ovid/parse.Node, lv i64) i64 {
   if op == ovid/parse.OP_LEN {
     var lt *ovid/parse.Decl = TableOf(c, n)
     if lt == 0 as *ovid/parse.Decl {
-      return FailIn(c, strptr("no table in "), strlen("no table in "))
+      return FailIn(c, "no table in ")
     }
     ovid/asm.MovRegImm(c.code, 0, lt.tabn)
     return 0
@@ -1978,7 +1970,7 @@ func EmitExpr(c *C, n *ovid/parse.Node, lv i64) i64 {
     // func's ud2.
     var it *ovid/parse.Decl = TableOf(c, n)
     if it == 0 as *ovid/parse.Decl {
-      return FailIn(c, strptr("no table in "), strlen("no table in "))
+      return FailIn(c, "no table in ")
     }
     if EmitExpr(c, n.arg, lv) != 0 {
       return c.err
@@ -1998,7 +1990,7 @@ func EmitExpr(c *C, n *ovid/parse.Node, lv i64) i64 {
     if len(n.pkg) != 0 {
       var pc *ovid/parse.Decl = PkgConst(c, n)
       if pc == 0 as *ovid/parse.Decl {
-        return FailName(c, strptr("const "), strlen("const "), n)
+        return FailName(c, "const ", n)
       }
       ovid/asm.MovRegImm(c.code, 0, pc.val)
       return 0
@@ -2012,12 +2004,12 @@ func EmitExpr(c *C, n *ovid/parse.Node, lv i64) i64 {
       }
       return 0
     }
-    var con *ovid/parse.Decl = ovid/parse.FindDecl(c.pkg.cs, ptr(n.name), len(n.name))
+    var con *ovid/parse.Decl = ovid/parse.FindDecl(c.pkg.cs, n.name)
     if con != 0 as *ovid/parse.Decl {
       ovid/asm.MovRegImm(c.code, 0, con.val)
       return 0
     }
-    return FailName(c, strptr("name "), strlen("name "), n)
+    return FailName(c, "name ", n)
   }
   if ArithOp(op) {
     return EmitArith(c, n, lv)
@@ -2074,7 +2066,7 @@ func EmitExpr(c *C, n *ovid/parse.Node, lv i64) i64 {
     return EmitSys(c, n, lv)
   }
   if !UnaryOp(op) {
-    return FailIn(c, strptr("bad expr op in "), strlen("bad expr op in "))
+    return FailIn(c, "bad expr op in ")
   }
   if EmitExpr(c, n.arg, lv) != 0 {
     return c.err
@@ -2115,11 +2107,11 @@ func EmitStmt(c *C, s *ovid/parse.Node) i64 {
     var loc i64 = LocOf(c, s)
     if loc == 0 {
       if op == ovid/parse.OP_VAR {
-        Fail(c, strptr("var "), strlen("var "))
+        Fail(c, "var ")
       } else {
-        Fail(c, strptr("assign "), strlen("assign "))
+        Fail(c, "assign ")
       }
-      return Add(c, ptr(s.name), len(s.name))
+      return Add(c, s.name)
     }
     if s.val == 0 as *ovid/parse.Node && op == ovid/parse.OP_VAR {
       // A declaration without a value makes the local zero, each time it
@@ -2159,7 +2151,7 @@ func EmitStmt(c *C, s *ovid/parse.Node) i64 {
     return 0
   }
   if op == ovid/parse.OP_SETFIELD {
-    var off i64 = FieldOff(c, s.base, ptr(s.name), len(s.name))
+    var off i64 = FieldOff(c, s.base, s.name)
     if off < 0 {
       return c.err
     }
@@ -2265,7 +2257,7 @@ func EmitStmt(c *C, s *ovid/parse.Node) i64 {
     ovid/asm.Mark(c.code, test)
     return EmitJump(c, s.cond, 0, top, true)
   }
-  return FailIn(c, strptr("bad stmt op in "), strlen("bad stmt op in "))
+  return FailIn(c, "bad stmt op in ")
 }
 
 func EmitFunc(c *C, fn *ovid/parse.Decl) i64 {
@@ -2278,7 +2270,7 @@ func EmitFunc(c *C, fn *ovid/parse.Decl) i64 {
   c.fn = fn
   var pa *ovid/parse.Decl = c.fn.sub
   while pa != 0 as *ovid/parse.Decl {
-    AddLoc(c, 0 as *ovid/parse.Node, ptr(pa.name), len(pa.name), ptr(pa.typ), len(pa.typ))
+    AddLoc(c, 0 as *ovid/parse.Node, pa.name, pa.typ)
     pa = pa.next
   }
   var body *ovid/parse.Node = c.fn.body
@@ -2394,45 +2386,45 @@ func LiveFrom(c *C, fn *ovid/parse.Decl) i64 {
   while c.nwork > 0 {
     c.nwork = c.nwork - 1
     var f *ovid/parse.Decl = load64(c.work + (c.nwork * 8)) as *ovid/parse.Decl
-    WalkLive(c, f.body, ptr(f.pkg.path), len(f.pkg.path))
+    WalkLive(c, f.body, f.pkg.path)
   }
   return 0
 }
 
-// WalkLive marks the callee of every call in the node list n; pp/pn is the
+// WalkLive marks the callee of every call in the node list n; path is the
 // package that unqualified calls resolve in.
-func WalkLive(c *C, n *ovid/parse.Node, pp i64, pn i64) i64 {
+func WalkLive(c *C, n *ovid/parse.Node, path bytes) i64 {
   while n != 0 as *ovid/parse.Node {
     if n.op == ovid/parse.OP_CALL {
-      var fn *ovid/parse.Decl = Callee(c, n, pp, pn)
+      var fn *ovid/parse.Decl = Callee(c, n, path)
       if fn != 0 as *ovid/parse.Decl {
         MarkLive(c, fn)
       }
     }
-    WalkLive(c, n.left, pp, pn)
-    WalkLive(c, n.right, pp, pn)
-    WalkLive(c, n.arg, pp, pn)
-    WalkLive(c, n.base, pp, pn)
-    WalkLive(c, n.addr, pp, pn)
-    WalkLive(c, n.val, pp, pn)
-    WalkLive(c, n.val2, pp, pn)
-    WalkLive(c, n.cond, pp, pn)
-    WalkLive(c, n.args, pp, pn)
-    WalkLive(c, n.then, pp, pn)
-    WalkLive(c, n.els, pp, pn)
-    WalkLive(c, n.body, pp, pn)
+    WalkLive(c, n.left, path)
+    WalkLive(c, n.right, path)
+    WalkLive(c, n.arg, path)
+    WalkLive(c, n.base, path)
+    WalkLive(c, n.addr, path)
+    WalkLive(c, n.val, path)
+    WalkLive(c, n.val2, path)
+    WalkLive(c, n.cond, path)
+    WalkLive(c, n.args, path)
+    WalkLive(c, n.then, path)
+    WalkLive(c, n.els, path)
+    WalkLive(c, n.body, path)
     n = n.next
   }
   return 0
 }
 
 func EmitStartup(c *C, mainLab i64) i64 {
-  var argcOff i64 = CapOff(c, strptr("argc"), strlen("argc"))
-  var argvOff i64 = CapOff(c, strptr("argv"), strlen("argv"))
-  var heapOff i64 = CapOff(c, strptr("heap"), strlen("heap"))
-  var usedOff i64 = CapOff(c, strptr("used"), strlen("used"))
-  var sizeOff i64 = CapOff(c, strptr("size"), strlen("size"))
-  var mapsOff i64 = CapOff(c, strptr("maps"), strlen("maps"))
+  var argcOff i64 = CapOff(c, "argc")
+  var argvOff i64 = CapOff(c, "argv")
+  var heapOff i64 = CapOff(c, "heap")
+  var usedOff i64 = CapOff(c, "used")
+  var sizeOff i64 = CapOff(c, "size")
+  var mapsOff i64 = CapOff(c, "maps")
   if argcOff < 0 {
     return c.err
   }
@@ -2515,11 +2507,11 @@ func Compile(io *ovid/io.Cap, m *ovid/parse.Mod, errp i64) *ovid/mem.Buf {
     store64(errp, c.msg as i64)
     return z as *ovid/mem.Buf
   }
-  var mainFn *ovid/parse.Decl = ovid/parse.FindFunc(m, ptr(m.entry), len(m.entry), strptr("main"), strlen("main"))
+  var mainFn *ovid/parse.Decl = ovid/parse.FindFunc(m, m.entry, "main")
   if mainFn == 0 as *ovid/parse.Decl {
-    Fail(c, strptr("missing "), strlen("missing "))
-    Add(c, ptr(m.entry), len(m.entry))
-    Add(c, strptr(".main"), strlen(".main"))
+    Fail(c, "missing ")
+    Add(c, m.entry)
+    Add(c, ".main")
     store64(errp, c.msg as i64)
     return z as *ovid/mem.Buf
   }

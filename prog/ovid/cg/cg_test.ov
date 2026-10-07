@@ -4,13 +4,13 @@ import ovid/io
 import ovid/mem
 import ovid/parse
 
-// MsgIs reports whether c failed with the message want[0:n].
-func MsgIs(io *ovid/io.Cap, c *C, want i64, n i64) bool {
+// MsgIs reports whether c failed with the message want.
+func MsgIs(io *ovid/io.Cap, c *C, want bytes) bool {
   if c.err == 0 {
     ovid/io.Eprint("no failure\n")
     return false
   }
-  if ovid/mem.Eq(bytes(c.msg.data, c.msg.len), bytes(want, n)) {
+  if ovid/mem.Eq(bytes(c.msg.data, c.msg.len), want) {
     return true
   }
   ovid/io.Eprint("got ")
@@ -23,15 +23,15 @@ func MsgIs(io *ovid/io.Cap, c *C, want i64, n i64) bool {
 func TestFailMessage(io *ovid/io.Cap) i64 {
   var c *C = ovid/io.Alloc(io, sizeof(C)) as *C
   c.io = io
-  if OffsetOf(c, strptr("i64"), strlen("i64"), strptr("a"), strlen("a")) != -1 {
+  if OffsetOf(c, "i64", "a") != -1 {
     return 1
   }
-  if !MsgIs(io, c, strptr("field a on i64"), strlen("field a on i64")) {
+  if !MsgIs(io, c, "field a on i64") {
     return 2
   }
-  Fail(c, strptr("later"), strlen("later"))
-  Add(c, strptr(" and more"), strlen(" and more"))
-  if !MsgIs(io, c, strptr("field a on i64"), strlen("field a on i64")) {
+  Fail(c, "later")
+  Add(c, " and more")
+  if !MsgIs(io, c, "field a on i64") {
     return 3
   }
   return 0
@@ -45,24 +45,24 @@ func Stmt(io *ovid/io.Cap, op i64, next *ovid/parse.Node) *ovid/parse.Node {
   return n
 }
 
-// Var declares np[0:nn] of type tp[0:tn], followed by next.
-func Var(io *ovid/io.Cap, np i64, nn i64, tp i64, tn i64, next *ovid/parse.Node) *ovid/parse.Node {
+// Var declares name of type t, followed by next.
+func Var(io *ovid/io.Cap, name bytes, t bytes, next *ovid/parse.Node) *ovid/parse.Node {
   var n *ovid/parse.Node = Stmt(io, ovid/parse.OP_VAR, next)
-  n.name = bytes(np, nn)
-  n.typ = bytes(tp, tn)
+  n.name = name
+  n.typ = t
   return n
 }
 
-// I64 declares np[0:nn] of type i64, followed by next.
-func I64(io *ovid/io.Cap, np i64, nn i64, next *ovid/parse.Node) *ovid/parse.Node {
-  return Var(io, np, nn, strptr("i64"), strlen("i64"), next)
+// I64 declares name of type i64, followed by next.
+func I64(io *ovid/io.Cap, name bytes, next *ovid/parse.Node) *ovid/parse.Node {
+  return Var(io, name, "i64", next)
 }
 
-// Use is an expression statement naming np[0:nn], followed by next.
-func Use(io *ovid/io.Cap, np i64, nn i64, next *ovid/parse.Node) *ovid/parse.Node {
+// Use is an expression statement naming name, followed by next.
+func Use(io *ovid/io.Cap, name bytes, next *ovid/parse.Node) *ovid/parse.Node {
   var n *ovid/parse.Node = Stmt(io, ovid/parse.OP_EXPR, next)
   var e *ovid/parse.Node = Stmt(io, ovid/parse.OP_NAME, 0 as *ovid/parse.Node)
-  e.name = bytes(np, nn)
+  e.name = name
   n.val = e
   return n
 }
@@ -73,26 +73,26 @@ func Use(io *ovid/io.Cap, np i64, nn i64, next *ovid/parse.Node) *ovid/parse.Nod
 // TestBind.
 func TestBind(io *ovid/io.Cap) i64 {
   var none *ovid/parse.Node = 0 as *ovid/parse.Node
-  var last *ovid/parse.Node = I64(io, strptr("f"), 1, none)
+  var last *ovid/parse.Node = I64(io, "f", none)
   var inner *ovid/parse.Node = Stmt(io, ovid/parse.OP_IF, none)
-  inner.then = I64(io, strptr("e"), 1, none)
+  inner.then = I64(io, "e", none)
   var loop *ovid/parse.Node = Stmt(io, ovid/parse.OP_WHILE, last)
-  loop.body = I64(io, strptr("d"), 1, inner)
+  loop.body = I64(io, "d", inner)
   var if2 *ovid/parse.Node = Stmt(io, ovid/parse.OP_IF, loop)
-  if2.then = I64(io, strptr("b"), 1, none)
-  var useT *ovid/parse.Node = Use(io, strptr("b"), 1, none)
-  var bT *ovid/parse.Node = Var(io, strptr("b"), 1, strptr("*T"), 2, I64(io, strptr("c"), 1, useT))
-  var useBool *ovid/parse.Node = Use(io, strptr("b"), 1, none)
-  var bBool *ovid/parse.Node = Var(io, strptr("b"), 1, strptr("bool"), 4, useBool)
+  if2.then = I64(io, "b", none)
+  var useT *ovid/parse.Node = Use(io, "b", none)
+  var bT *ovid/parse.Node = Var(io, "b", "*T", I64(io, "c", useT))
+  var useBool *ovid/parse.Node = Use(io, "b", none)
+  var bBool *ovid/parse.Node = Var(io, "b", "bool", useBool)
   var if1 *ovid/parse.Node = Stmt(io, ovid/parse.OP_IF, if2)
   if1.then = bT
   if1.els = bBool
-  var body *ovid/parse.Node = I64(io, strptr("a"), 1, if1)
+  var body *ovid/parse.Node = I64(io, "a", if1)
   var c *C = ovid/io.Alloc(io, sizeof(C)) as *C
   c.io = io
   c.locs = ovid/io.Alloc(io, MAXLOC * LOCSIZE)
   c.scope = ovid/io.Alloc(io, MAXLOC * 8)
-  AddLoc(c, none, strptr("p"), 1, strptr("i64"), 3)
+  AddLoc(c, none, "p", "i64")
   BindStmts(c, body)
   if c.nloc != 9 {
     return 1
