@@ -76,7 +76,13 @@ type Sched struct {
   mainrsp i64
   live i64
   events i64
+  free i64
+  nfree i64
 }
+
+// KEEP is how many finished tasks the scheduler keeps, stack and first heap
+// region, for new tasks to reuse rather than map and fault in afresh.
+const KEEP i64 = 1024
 
 // Group is a set of tasks to wait for together.
 type Group struct {
@@ -129,7 +135,19 @@ func push(s *Sched, t *Task) i64 {
 // newTask makes a task of fn(arg) whose Cap inherits io's arguments. With
 // a scheduler it also gets a stack laid out to start in fn.
 func newTask(io *ovid/io.Cap, s *Sched, fn i64, arg i64, parent *Task) *Task {
-  var r i64 = ovid/io.Map(HEAP)
+  var r i64 = 0
+  var st i64 = 0
+  if s != 0 as *Sched && s.free != 0 {
+    // A kept task: its region is zero but for the link and the stack.
+    r = s.free
+    s.free = load64(r)
+    st = load64(r + 8)
+    store64(r, 0)
+    store64(r + 8, 0)
+    s.nfree = s.nfree - 1
+  } else {
+    r = ovid/io.Map(HEAP)
+  }
   var t *Task = r as *Task
   var pt *Task = io as *Task
   t.argc = pt.argc
@@ -142,16 +160,37 @@ func newTask(io *ovid/io.Cap, s *Sched, fn i64, arg i64, parent *Task) *Task {
   t.parent = parent as i64
   t.ev = ovid/io.Alloc(t as *ovid/io.Cap, 16)
   if s != 0 as *Sched {
-    var st i64 = ovid/io.Map(STACK + GUARD)
-    ovid/io.Protect(st, GUARD, 0)
+    if st == 0 {
+      st = ovid/io.Map(STACK + GUARD)
+      ovid/io.Protect(st, GUARD, 0)
+    }
     t.stack = st
     t.rsp = taskinit((st + GUARD) + STACK, fn, r, arg, taskfn(exit))
   }
   return t
 }
 
-// freeTask gives back a finished task's stack and heap, the Task with it.
+// freeTask gives back a finished task's stack and heap, the Task with it,
+// or keeps them for the next task when the heap never left its first
+// region: the bytes it used are zeroed (Alloc returns zeroed memory), and
+// the rest were never touched.
 func freeTask(t *Task) i64 {
+  var s *Sched = t.sched as *Sched
+  if s != 0 as *Sched && t.maps == 0 && s.nfree < KEEP {
+    var r i64 = t as i64
+    var st i64 = t.stack
+    var n i64 = t.used
+    var i i64 = 0
+    while i < n {
+      store64(r + i, 0)
+      i = i + 8
+    }
+    store64(r, s.free)
+    store64(r + 8, st)
+    s.free = r
+    s.nfree = s.nfree + 1
+    return 0
+  }
   if t.stack != 0 {
     ovid/io.Unmap(t.stack, STACK + GUARD)
   }
