@@ -57,6 +57,7 @@ type sig struct {
 	names  []string
 	result string
 	two    bool // the func also returns an error code (i64)
+	async  bool // an async func: called only by await or spawn
 	id     string
 }
 
@@ -73,6 +74,8 @@ type checker struct {
 	dup      map[*ir.Func]bool // funcs whose name was already declared
 	dupName  map[string]bool   // those funcs, as pkg.Name
 	lean     bool              // record no Types and no Uses
+	top      *ir.Node          // the value of the statement being checked: where await and spawn may stand
+	awaited  *ir.Node          // the call an await or spawn applies to: where an async func may be called
 }
 
 func (c *checker) issue(is Issue) { c.r.Issues = append(c.r.Issues, is) }
@@ -263,7 +266,11 @@ func run(p *ir.Program, lean bool) *Result {
 				c.err(fn.ID, "struct_value", "result must be i64, bool, or a pointer; write *"+rt)
 			}
 			c.useType(rt, fn.ID, "result", fn.ID, fn.ResultSpan)
-			c.sigs[pkg.Path+"."+fn.Name] = sig{params: ps, names: names, result: rt, two: fn.Result2 != "", id: fn.ID}
+			c.sigs[pkg.Path+"."+fn.Name] = sig{params: ps, names: names, result: rt, two: fn.Result2 != "", async: fn.Async, id: fn.ID}
+			if fn.Async && fn.Result2 != "" {
+				c.issue(Issue{Code: "bad_async", ID: fn.ID, Message: fn.Name + ": an async func returns one value",
+					Hint: "return a negated error code in the one result instead"})
+			}
 			c.r.Facts = append(c.r.Facts, Fact{"fact": "func", "id": fn.ID, "sig": Signature(pkg.Path, fn)})
 			for _, st := range fn.Body {
 				st.Walk(func(n *ir.Node) { claim(n.ID) })
@@ -547,6 +554,9 @@ func (c *checker) checkEntry(p *ir.Program) {
 // Signature renders fn the way it is written in source.
 func Signature(pkg string, fn *ir.Func) string {
 	var b strings.Builder
+	if fn.Async {
+		b.WriteString("async ")
+	}
 	b.WriteString("func ")
 	b.WriteString(fn.Name)
 	b.WriteByte('(')
@@ -725,6 +735,7 @@ func (c *checker) stmt(e *env, s *ir.Node) {
 			c.err(s.ID, "duplicate_name", s.Name+" is already declared in this function; assign with `"+s.Name+" = ...` instead")
 		}
 		if s.Val != nil {
+			c.top = s.Val
 			vt := c.expr(e, s.Val)
 			if vt != t && vt != "invalid" && t != "invalid" {
 				c.mismatch(s.Val.ID, "var "+s.Name, vt, t)
@@ -739,6 +750,7 @@ func (c *checker) stmt(e *env, s *ir.Node) {
 		} else {
 			c.use(id, s.ID, "assign", c.fn.ID, s.NameSpan)
 		}
+		c.top = s.Val
 		vt := c.expr(e, s.Val)
 		if vt != t && vt != "invalid" && t != "invalid" {
 			c.mismatch(s.Val.ID, "assign to "+s.Name, vt, t)
@@ -834,6 +846,7 @@ func (c *checker) stmt(e *env, s *ir.Node) {
 			c.mismatch(s.Val.ID, s.Op+" value", vt, "i64")
 		}
 	case "expr":
+		c.top = s.Val
 		c.expr(e, s.Val)
 	case "return":
 		if s.Val == nil {
@@ -1071,6 +1084,8 @@ func (c *checker) expr0(e *env, n *ir.Node) string {
 		return c.field(n, c.expr(e, n.Base))
 	case "call":
 		return c.call(e, n)
+	case "await", "spawn":
+		return c.await(e, n)
 	case "syscall":
 		// The path alone is not enough: the package must be the one the
 		// toolchain ships, which a module cannot supply.
@@ -1244,6 +1259,11 @@ func (c *checker) call(e *env, n *ir.Node) string {
 		return "invalid"
 	}
 	c.use(sg.id, n.ID, "call", c.fn.ID, n.NameSpan)
+	if sg.async && n != c.awaited {
+		c.issue(Issue{Code: "async_call", ID: n.ID, Message: n.Func + " is async; only await or spawn can call it",
+			Hint: "var v " + sg.result + " = await " + n.Func + "(...) in an async func, or spawn " + n.Func + "(...) to run it concurrently"})
+	}
+	c.awaited = nil
 	if sg.two && !c.recv {
 		c.issue(Issue{Code: "unused_result", ID: n.ID, Message: n.Func + " returns a value and an error code; only a var or an assignment of two names can receive them",
 			Hint: "var v " + sg.result + ", e i64 = " + n.Func + "(...), or _ for the one not needed"})
@@ -1262,6 +1282,40 @@ func (c *checker) call(e *env, n *ir.Node) string {
 		}
 	}
 	return sg.result
+}
+
+// await checks await f(...) and spawn f(...): only in an async func, only
+// as the whole value of a var, an assignment, or an expression statement,
+// and only of a call to an async func. await's type is f's result; spawn's
+// is i64, the task, which ovid/async.Join awaits.
+func (c *checker) await(e *env, n *ir.Node) string {
+	top := n == c.top
+	c.top = nil
+	if !c.fn.Async {
+		c.issue(Issue{Code: "bad_await", ID: n.ID, Message: n.Op + " is only valid in an async func",
+			Hint: "declare the func `async func " + c.fn.Name + "(...)`"})
+	} else if !top {
+		c.issue(Issue{Code: "bad_await", ID: n.ID, Message: n.Op + " must be the whole value of a var, an assignment, or a statement",
+			Hint: "var v T = " + n.Op + " f(...), then use v"})
+	}
+	if n.Arg == nil || n.Arg.Op != "call" {
+		c.issue(Issue{Code: "bad_await", ID: n.ID, Message: n.Op + " takes a call to an async func"})
+		if n.Arg != nil {
+			c.expr(e, n.Arg)
+		}
+		return "invalid"
+	}
+	sg, ok := c.callSig(n.Arg)
+	if ok && !sg.async {
+		c.issue(Issue{Code: "bad_await", ID: n.ID, Message: n.Arg.Func + " is not async; call it without " + n.Op})
+	}
+	c.awaited = n.Arg
+	t := c.expr(e, n.Arg)
+	c.awaited = nil
+	if n.Op == "spawn" {
+		return "i64"
+	}
+	return t
 }
 
 // callSig is the signature of the func a call node names, if it is a call

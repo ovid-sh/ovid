@@ -80,11 +80,14 @@ type Field struct {
 }
 
 type Func struct {
-	ID         string  `json:"id"`
-	Name       string  `json:"name"`
-	Params     []Param `json:"params,omitempty"`
-	Result     string  `json:"result"`
-	Result2    string  `json:"result2,omitempty"` // the error code of a func with two results
+	ID      string  `json:"id"`
+	Name    string  `json:"name"`
+	Params  []Param `json:"params,omitempty"`
+	Result  string  `json:"result"`
+	Result2 string  `json:"result2,omitempty"` // the error code of a func with two results
+	// Async marks an async func: called only by await or spawn, and lowered
+	// to a frame and a resume function before code generation.
+	Async      bool    `json:"async,omitempty"`
 	Body       []*Node `json:"body,omitempty"`
 	Span       Span    `json:"-"`
 	NameSpan   Span    `json:"-"`

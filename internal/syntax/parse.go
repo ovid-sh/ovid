@@ -243,6 +243,23 @@ func (p *parser) peekLen() bool {
 	return open
 }
 
+// peekPrefixKw reports whether the next tokens are the word k and then a
+// name, on the same line.
+func (p *parser) peekPrefixKw(k string) bool {
+	if !p.peekKw(k) {
+		return false
+	}
+	m := p.save()
+	p.ident()
+	i := p.i
+	for i < len(p.src) && (p.src[i] == ' ' || p.src[i] == '\t') {
+		i++
+	}
+	ok := i > p.i && i < len(p.src) && isIdentStart(p.src[i])
+	p.restore(m)
+	return ok
+}
+
 func (p *parser) kw(k string) bool {
 	if !p.peekKw(k) {
 		return false
@@ -281,7 +298,10 @@ func (p *parser) parseFile() *ir.Package {
 		case p.kw("type"):
 			p.parseTypeDecl(s)
 		case p.kw("func"):
-			p.parseFunc(s)
+			p.parseFunc(s, false)
+		case p.kw("async"):
+			p.expectKw("func")
+			p.parseFunc(s, true)
 		case p.peekKw("import"):
 			p.errorf("imports must come before declarations")
 		default:
@@ -516,10 +536,10 @@ func (p *parser) parseType() (string, ir.Span) {
 	return full, ns
 }
 
-func (p *parser) parseFunc(s int) {
+func (p *parser) parseFunc(s int, async bool) {
 	name := p.ident()
 	p.fn = &ir.Func{
-		ID: "fn:" + p.pkg.Path + "." + name, Name: name, NameSpan: p.tok(name),
+		ID: "fn:" + p.pkg.Path + "." + name, Name: name, NameSpan: p.tok(name), Async: async,
 	}
 	p.ec = 0
 	p.sc = 0
@@ -860,6 +880,12 @@ func (p *parser) unary0() *ir.Node {
 	}
 	if p.peekByte('*') {
 		p.errorf("there is no dereference operator; read through a pointer with p.field, or an address with load64(addr)")
+	}
+	if p.peekPrefixKw("await") || p.peekPrefixKw("spawn") {
+		// await f(...) and spawn f(...): keywords only when a name follows,
+		// so a local may still be called await or spawn.
+		op := p.ident()
+		return &ir.Node{ID: p.eid(), Op: op, Arg: p.unary()}
 	}
 	return p.postfix()
 }
