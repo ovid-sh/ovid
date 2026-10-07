@@ -73,6 +73,7 @@ function host(stdin, canWait, opts) {
   const freed = [];
   const done = []; // completed HOST_SUBMIT tags not yet polled
   let wake = null; // resolves the waiting HOST_POLL
+  const buckets = new Map(); // due time (ms) -> tags of HOST_SUBMIT timers
   const poll = (buf, max) => {
     const n = Math.min(Number(max), done.length);
     const view = new DataView(h.memory.buffer);
@@ -127,16 +128,28 @@ function host(stdin, canWait, opts) {
       case HOST.SLEEP:
         if (!canWait) return ENOSYS;
         return new Promise((r) => setTimeout(() => r(0n), Number(a)));
-      case HOST.SUBMIT:
-        setTimeout(() => {
-          done.push(b);
-          if (wake) {
-            const w = wake;
-            wake = null;
-            w();
-          }
-        }, Number(a));
+      case HOST.SUBMIT: {
+        // Timers due at the same moment share one setTimeout, so one
+        // HOST_POLL wakes for all of them: workerd runs each timer
+        // callback in a turn of its own.
+        const due = Date.now() + Number(a);
+        let tags = buckets.get(due);
+        if (!tags) {
+          tags = [];
+          buckets.set(due, tags);
+          setTimeout(() => {
+            buckets.delete(due);
+            done.push(...tags);
+            if (wake) {
+              const w = wake;
+              wake = null;
+              w();
+            }
+          }, Number(a));
+        }
+        tags.push(b);
         return 0n;
+      }
       case HOST.POLL:
         if (done.length > 0) return poll(a, b);
         if (!canWait) return ENOSYS;
