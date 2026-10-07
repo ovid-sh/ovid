@@ -606,12 +606,11 @@ func (p *parser) stmt(s int, id string) *ir.Node {
 		return p.parseReturn()
 	case p.peekKw("store8") || p.peekKw("store16") || p.peekKw("store32") || p.peekKw("store64"):
 		op := p.ident()
-		p.expect('(')
-		addr := p.parseExpr()
-		p.expect(',')
-		val := p.parseExpr()
-		p.expect(')')
-		return &ir.Node{Op: op, Addr: addr, Val: val}
+		args, ok := p.builtinArgs(2)
+		if !ok {
+			return &ir.Node{Op: op, Args: args}
+		}
+		return &ir.Node{Op: op, Addr: args[0], Val: args[1]}
 	default:
 		e := p.parseExpr()
 		if p.peekByte(',') {
@@ -931,18 +930,18 @@ func (p *parser) primary0() *ir.Node {
 	case p.peekKw("ushr"), p.peekKw("umulhi"), p.peekKw("ult"), p.peekKw("udiv"), p.peekKw("urem"):
 		// The unsigned operations are binary operators spelled as calls.
 		op := p.ident()
-		p.expect('(')
-		l := p.parseExpr()
-		p.expect(',')
-		r := p.parseExpr()
-		p.expect(')')
-		return &ir.Node{ID: p.eid(), Op: op, Left: l, Right: r}
+		args, ok := p.builtinArgs(2)
+		if !ok {
+			return &ir.Node{ID: p.eid(), Op: op, Args: args}
+		}
+		return &ir.Node{ID: p.eid(), Op: op, Left: args[0], Right: args[1]}
 	case p.peekKw("load8"), p.peekKw("load16"), p.peekKw("load32"), p.peekKw("load64"), p.peekKw("bswap16"), p.peekKw("bswap32"), p.peekKw("bswap64"):
 		op := p.ident()
-		p.expect('(')
-		a := p.parseExpr()
-		p.expect(')')
-		return &ir.Node{ID: p.eid(), Op: op, Arg: a}
+		args, ok := p.builtinArgs(1)
+		if !ok {
+			return &ir.Node{ID: p.eid(), Op: op, Args: args}
+		}
+		return &ir.Node{ID: p.eid(), Op: op, Arg: args[0]}
 	case p.peekKw("sizeof"):
 		p.ident()
 		p.expect('(')
@@ -1033,6 +1032,17 @@ func (p *parser) tryPkgRef(first string) (string, string, bool) {
 
 // callArgs reads a call's arguments; ns is the span of the func name.
 func (p *parser) callArgs(op, pkg, name string, ns ir.Span) *ir.Node {
+	args := p.argList()
+	n := &ir.Node{ID: p.eid(), Op: op, Pkg: pkg, Func: name, Args: args, NameSpan: ns}
+	if op == "syscall" {
+		n.Func = ""
+		n.Pkg = ""
+	}
+	return n
+}
+
+// argList reads a parenthesised, comma-separated list of expressions.
+func (p *parser) argList() []*ir.Node {
 	p.expect('(')
 	var args []*ir.Node
 	if !p.peekByte(')') {
@@ -1045,12 +1055,15 @@ func (p *parser) callArgs(op, pkg, name string, ns ir.Span) *ir.Node {
 		}
 	}
 	p.expect(')')
-	n := &ir.Node{ID: p.eid(), Op: op, Pkg: pkg, Func: name, Args: args, NameSpan: ns}
-	if op == "syscall" {
-		n.Func = ""
-		n.Pkg = ""
-	}
-	return n
+	return args
+}
+
+// builtinArgs reads a builtin's arguments and reports whether there are
+// want of them. Any other number is left to the checker, which reports
+// an arity error naming the builtin and its form, as the parser cannot.
+func (p *parser) builtinArgs(want int) ([]*ir.Node, bool) {
+	args := p.argList()
+	return args, len(args) == want
 }
 
 func (p *parser) isNum() bool {

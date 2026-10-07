@@ -171,6 +171,23 @@ func WHerePos(c *Ch) i64 {
   return ovid/parse.WPos(c.io, c.b, d.file, d.off)
 }
 
+// BuiltinArity reports builtin n called with the wrong number of
+// arguments, which the parser left in args, checks those, and gives the
+// call the builtin's type (bool for ult), so nothing else is reported.
+func BuiltinArity(c *Ch, n *ovid/parse.Node, isBool bool) i64 {
+  Here(c, n)
+  Err(c, strptr("arity"), strlen("arity"), strptr("wrong number of arguments to a builtin"), strlen("wrong number of arguments to a builtin"))
+  var a *ovid/parse.Node = n.args
+  while a != 0 as *ovid/parse.Node {
+    CheckExpr(c, a)
+    a = a.next
+  }
+  if isBool {
+    return SetBool(c)
+  }
+  return SetI64(c)
+}
+
 // Err prints one error line: code, message, the id it is about, and that
 // id's source position.
 func Err(c *Ch, code i64, coden i64, detail i64, dn i64) i64 {
@@ -612,6 +629,9 @@ func CheckExprIn(c *Ch, n *ovid/parse.Node) i64 {
     return SetI64(c)
   }
   if ovid/parse.UnsignedOp(op) {
+    if n.left == 0 as *ovid/parse.Node {
+      return BuiltinArity(c, n, op == ovid/parse.OP_ULT)
+    }
     CheckExpr(c, n.left)
     NeedI64(c, strptr("unsigned argument 1"), strlen("unsigned argument 1"))
     CheckExpr(c, n.right)
@@ -666,11 +686,17 @@ func CheckExprIn(c *Ch, n *ovid/parse.Node) i64 {
     return SetBool(c)
   }
   if op == ovid/parse.OP_NEG || op == ovid/parse.OP_BNOT || ovid/parse.BswapOp(op) {
+    if n.arg == 0 as *ovid/parse.Node {
+      return BuiltinArity(c, n, false)
+    }
     CheckExpr(c, n.arg)
     NeedI64(c, strptr("unary needs i64"), strlen("unary needs i64"))
     return SetI64(c)
   }
   if ovid/parse.LoadOp(op) {
+    if n.arg == 0 as *ovid/parse.Node {
+      return BuiltinArity(c, n, false)
+    }
     CheckExpr(c, n.arg)
     NeedI64(c, strptr("load needs i64"), strlen("load needs i64"))
     return SetI64(c)
@@ -998,6 +1024,10 @@ func CheckStmt(c *Ch, s *ovid/parse.Node) i64 {
     return 0
   }
   if ovid/parse.StoreOp(op) {
+    if s.addr == 0 as *ovid/parse.Node {
+      BuiltinArity(c, s, false)
+      return 0
+    }
     CheckExpr(c, s.addr)
     NeedI64(c, strptr("store address"), strlen("store address"))
     CheckExpr(c, s.val)
