@@ -45,6 +45,18 @@ ten; no `replace` or `edit`), even when told to. The hashes `show` prints
 are paid for and not used on this task, where the edits are a dozen
 message strings in one file.
 
+On `16-two-writers-prog` (0c33973, below), where one agent renames a func
+used from three packages while another adds a func to the file that
+defines it, every agent, told or not, used `ovid rename` for the rename
+(10 of 10), and the guided ones added their func through ovid (`append`
+once, `edit` four times) where the plain ones used Edit. All ten runs met
+the goal, at a median of $0.03 (plain) and $0.04 (guided): Claude Code's
+Edit replaces one string in a file it reads at that moment, so the
+stale-copy overwrite the task was built to provoke never happened, and
+the guard was not needed. What every agent
+did need and did not get: `rename` leaves the decl's own doc comment
+starting with the old name, and all ten fixed it by hand (#160).
+
 In the small modules ovid's guard still does its job: in `14-rename-vs-call`
 an edit that named the function the other agent had just renamed was
 refused with `unknown_name` and nothing written, and the agent re-read and
@@ -109,6 +121,58 @@ What it shows:
 - **A blind first search**: six of the twenty runs ran
   `grep -rn ... --include=*.ovid`, which matches nothing, though the
   help's first paragraph says `.ov`.
+
+## 2026-10-06, 0c33973: two writers on one file of prog/
+
+`16-two-writers-prog` (new): agent a renames `ovid/parse.FindDecl` to
+`LookupDecl` (21 uses in three packages, defined in `ast.ov`); agent b,
+at the same time, adds `LastDecl` to `ast.ov`. The goal checks the
+module, runs both functions from an injected test, builds the compiler
+and runs it, and requires that nothing is spelled `FindDecl` any more.
+Five runs with each preamble, `us.anthropic.claude-sonnet-5-5`, $2
+budget, $0.38 in all. Records:
+`2026-10-06-0c33973-two-writers-prog-{plain,guided}-sonnet.jsonl`.
+
+| preamble | passed | calls | ovid calls | failed calls | bytes read | bytes written | tokens in | tokens out | cost | seconds |
+|---|---|---|---|---|---|---|---|---|---|---|
+| plain | 5/5 | 6 | 4 | 0 | 6971 | 835 | 22477 | 1058 | $0.03 | 9 |
+| guided | 5/5 | 6 | 6 | 0 | 17202 | 784 | 39000 | 1010 | $0.04 | 9 |
+
+ovid calls by subcommand over the five runs (both agents), with the
+other edit tools:
+
+| | rename | append | edit | replace | check | test | help | grep | show | refs | outline | Edit tool | sed -i |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| plain | 5 | 0 | 0 | 0 | 15 | 13 | 5 | 0 | 0 | 0 | 0 | 5 | 5 |
+| guided | 5 | 1 | 4 | 2 | 14 | 11 | 12 | 15 | 9 | 5 | 1 | 0 | 4 |
+
+What it shows:
+
+- **`rename` is the edit command agents reach for on their own.** Every
+  plain run's agent a read `ovid help`, saw `rename`, and used it, after
+  one `grep -rn` to see the 21 uses. It is the one ovid edit that does
+  something the shell cannot do in one step.
+- **Told to, agents add a decl through ovid.** Every guided agent b
+  appended `LastDecl` with `ovid append` or an `ovid edit` request; every
+  plain agent b used the Edit tool after `grep -n CountDecls`.
+- **The race the task was built for did not happen.** The median run is
+  nine seconds and the two agents' edits land seconds apart (one guided
+  agent a took 294 s, after both edits were in), and Edit rewrites one
+  string in the file as it is
+  at that moment, so b never overwrote a's rename. On this toolchain the
+  lost update needs a whole-file rewrite from a stale read (python, or
+  `cat > file`), which these agents did not do here. The guard's value on
+  a large module is therefore still unmeasured; `14-rename-vs-call` shows
+  it on a small one.
+- **`rename` left work for every agent.** The doc comment above
+  `FindDecl` still began `// FindDecl`, the goal's `lacks` would have
+  caught it, and every agent a found it (with `grep -rn` or `ovid grep`)
+  and fixed it: eight with `sed -i`, two of the guided ones by
+  re-sending the declaration through `ovid replace` after `ovid show`.
+  That is #160.
+- **Guided reading cost more here.** 17 KB read against 7 KB, from
+  `ovid help edit` (40 lines, in every guided run), `refs`, and `grep`.
+  The task is too small for it to matter ($0.01).
 
 ## 2026-10-06, 68194b7: the same two preambles, with the read commands printing text
 

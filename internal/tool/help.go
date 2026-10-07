@@ -346,8 +346,10 @@ ovid replace <id> | insert --after <id> | insert --before <id> | append <id>
   (the hash of the node it names), --rev (the module revision), or --force;
   only append <pkg> goes without.
 ovid rename <id|name> <new> [--dry-run]
-  Rewrites the declaration's name and each use refs lists, nothing else (a
-  field, local, comment, or string spelled the same is left alone); refuses
+  Rewrites the declaration's name, each use refs lists, and the first word
+  of the declaration's doc comment when that is its name ("// Name ...");
+  nothing else (a field, local, other comment, or string spelled the same
+  is left alone; the receipt's "doc" says whether the comment changed). Refuses
   collisions and changes that add check errors. Like move it takes no
   --expect: it carries no code, is planned from the module as it is, and a
   replay is refused.
