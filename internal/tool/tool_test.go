@@ -1467,6 +1467,36 @@ func TestOutlineTable(t *testing.T) {
 	}
 }
 
+// TestBytesFieldLayout: a bytes field is two words, and what outline and
+// check --facts say about a struct's size and its fields' offsets agree
+// with the code generator.
+func TestBytesFieldLayout(t *testing.T) {
+	dir := mkmod(t, demo("package demo\nimport ovid/io\ntype T struct {\n  b bytes\n  n i64\n}\nfunc main(io *ovid/io.Cap) i64 {\n  return sizeof(T)\n}\n"))
+	var b bytes.Buffer
+	Outline(dir, "demo", false, false, false, true, Page{}, &b)
+	for _, r := range lines(t, b.String()) {
+		if r["id"] == "ty:demo.T" && r["size"] != float64(24) {
+			t.Fatalf("outline size %v", r["size"])
+		}
+	}
+	b.Reset()
+	if code := Check(dir, true, &b); code != 0 {
+		t.Fatalf("check: %s", b.String())
+	}
+	got := map[string]any{}
+	for _, r := range lines(t, b.String()) {
+		switch r["fact"] {
+		case "type":
+			got[r["id"].(string)] = r["size"]
+		case "field":
+			got[r["id"].(string)] = r["offset"]
+		}
+	}
+	if got["ty:demo.T"] != float64(24) || got["fld:demo.T.b"] != float64(0) || got["fld:demo.T.n"] != float64(16) {
+		t.Fatalf("facts %v", got)
+	}
+}
+
 // TestMoveTableUse: a func whose only use of a package is a table read or
 // its length brings that import along when it moves.
 func TestMoveTableUse(t *testing.T) {
