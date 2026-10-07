@@ -60,7 +60,7 @@ Also: ovid build [-o out], ovid dump (program as JSON), ovid version
 All commands take -C <dir> (default: the module containing the cwd).
 
 The language at a glance (all of it: ovid help language):
-  i64, bool, *T; var x i64 = 0; if/else if/else; while; no for/break/continue
+  i64, bool, bytes, *T; var x i64 = 0; if/else if/else; while; no for/break
   var p *T = ovid/io.Alloc(io, sizeof(T)) as *T     structs live on the heap
   ovid/io.Print(strptr("hi\n")); ovid/io.PrintInt(io, n)   output
   var sp bool = c == 32 || c == 9                   && || ! work anywhere
@@ -92,10 +92,10 @@ File:
 Imports may not form a cycle, directly or through other packages
 (import_cycle): the packages are a DAG.
 
-Types: i64, bool, *T (T a struct in this package or path.T from an import).
-No struct values, slices, arrays, strings, generics, methods, globals, or
-closures. At most 6 params; one result type, or two: (T, i64), a value
-and an error code (0: success), see Errors below.
+Types: i64, bool, bytes, *T (T a struct in this package or path.T from an
+import). No struct values, arrays, generics, methods, globals, or
+closures. Params take at most 6 words (a bytes is 2); one result type, or
+two: (T, i64), a value and an error code (0: success), see Errors below.
 
 Errors: a func declared (T, i64) returns a value and an error code, 0 for
 success. A caller must receive both, with a var of two names or an
@@ -147,16 +147,31 @@ ushr(x, n) (logical shift, count masked to 0..63 like >>), umulhi(a, b)
 (the high 64 bits of the 128-bit product), udiv(a, b), urem(a, b) (both
 trap on 0 like / and %), ult(a, b) bool.
 
-Strings: there is no string type. strptr("hi\n") is the address of an
-interned NUL-terminated literal and strlen("hi\n") is its length (3),
-computed by the compiler, so never count bytes by hand. Literals are
-read-only: a store into one kills the program (SIGSEGV), so to change the
-bytes, copy them first: var b i64 = ovid/io.Alloc(io, n) then
-ovid/mem.Copy(b, strptr("..."), n). Literals are NUL-terminated, so
-printing one needs only its address:
+Bytes: a bytes is an address and a length, two words, with checked
+access. "hi\n" is a bytes in read-only memory (so a store into one kills
+the program); bytes(p, n) is one over n bytes at p; b[i] is the byte at i
+as an i64 in 0..255 and b[i] = v stores the low byte of v; b[i:j] is the
+subrange, no copy; len(b) is the length. Every index and bound is checked
+unsigned (a negative one trips too): i < len(b) for b[i], j <= len(b) and
+i <= j for b[i:j], and a failed check traps (ovid test names the
+statement). No == on bytes (ovid/mem.Eq), no cast to or from i64.
+  var line bytes = "total: 42\n"
+  var n bytes = line[7:len(line) - 1]      // "42"
+  var d i64 = n[0] - 48                     // 4
+  func Trim(s bytes) bytes {                // a bytes param, a bytes result
+    var i i64 = 0
+    while i < len(s) && s[i] == 32 {
+      i = i + 1
+    }
+    return s[i:len(s)]
+  }
+A func may return (bytes, i64), received as var b bytes, e i64 = f(...).
+strptr("hi\n") and strlen("hi\n") are the address and length of the same
+interned, NUL-terminated literal as two i64, for the std functions that
+take an address and a length or need the NUL:
   ovid/io.Print(strptr("total: "))     // Eprint writes to stderr
   ovid/io.PrintInt(io, n)              // a number in decimal
-  ovid/io.Stdout(p, n)                 // n bytes at p, for non-literals
+  ovid/io.Stdout(p, n)                 // n bytes at p
 
 Memory: no implicit allocation. ovid/io.Alloc(io, nbytes) returns an i64
 address of zeroed bytes from the heap, which grows as needed; it does not
