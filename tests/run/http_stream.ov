@@ -25,8 +25,8 @@ import ovid/http
 // is Content-Length bytes, none without it, and a request it cannot read
 // is answered and is the last.
 func handle(io *ovid/io.Cap, req *ovid/http.Request, res *ovid/http.Response) i64 {
-  ovid/http.Write(io, res, ovid/http.Method(req), ovid/http.MethodLen(req))
-  ovid/http.Write(io, res, strptr(": "), strlen(": "))
-  ovid/http.Write(io, res, ovid/http.Body(req), ovid/http.BodyLen(req))
+  ovid/http.Write(io, res, ovid/http.Method(req))
+  ovid/http.Write(io, res, ": ")
+  ovid/http.Write(io, res, ovid/http.Body(req))
   return 0
 }

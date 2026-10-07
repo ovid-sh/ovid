@@ -16,20 +16,19 @@ import ovid/http
 
 // handle is the program; main below is the stdio host around it.
 func handle(io *ovid/io.Cap, req *ovid/http.Request, res *ovid/http.Response) i64 {
-  if !ovid/http.PathIs(req, strptr("/hello"), strlen("/hello")) {
+  if !ovid/http.PathIs(req, "/hello") {
     ovid/http.SetStatus(res, 404)
     return 0
   }
-  ovid/http.SetHeader(io, res, strptr("Content-Type"), strlen("Content-Type"), strptr("text/plain"), strlen("text/plain"))
-  ovid/http.SetHeader(io, res, strptr("X-Query"), strlen("X-Query"), ovid/http.Query(req), ovid/http.QueryLen(req))
-  ovid/http.Write(io, res, strptr("hello, "), strlen("hello, "))
-  ovid/http.Write(io, res, ovid/http.Body(req), ovid/http.BodyLen(req))
-  ovid/http.Write(io, res, strptr(" ("), strlen(" ("))
-  ovid/http.Write(io, res, ovid/http.Method(req), ovid/http.MethodLen(req))
-  ovid/http.Write(io, res, strptr(", host "), strlen(", host "))
-  var host i64 = ovid/http.Header(req, strptr("HOST"), strlen("HOST"))
-  ovid/http.Write(io, res, host, ovid/http.HeaderLen(req, strptr("HOST"), strlen("HOST")))
-  ovid/http.Write(io, res, strptr(")"), strlen(")"))
+  ovid/http.SetHeader(io, res, "Content-Type", "text/plain")
+  ovid/http.SetHeader(io, res, "X-Query", ovid/http.Query(req))
+  ovid/http.Write(io, res, "hello, ")
+  ovid/http.Write(io, res, ovid/http.Body(req))
+  ovid/http.Write(io, res, " (")
+  ovid/http.Write(io, res, ovid/http.Method(req))
+  ovid/http.Write(io, res, ", host ")
+  ovid/http.Write(io, res, ovid/http.Header(req, "HOST"))
+  ovid/http.Write(io, res, ")")
   return 0
 }
 

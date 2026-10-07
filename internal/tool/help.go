@@ -228,7 +228,7 @@ running. A request that cannot be read is answered (400, 413, 501) and is
 the last. Between two requests the heap is reset: nothing a request
 allocated is there for the next.
   func handle(io *ovid/io.Cap, req *ovid/http.Request, res *ovid/http.Response) i64 {
-    ovid/http.Write(io, res, strptr("hi"), strlen("hi"))
+    ovid/http.Write(io, res, "hi")
     return 0                        // anything else answers 500
   }
 A main, if there is one, is the entry instead; the host it replaces is

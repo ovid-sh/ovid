@@ -7,13 +7,13 @@ import ovid/http
 // the toolchain writes the stdio host, which systemd's socket activation
 // connects to each accepted connection.
 func handle(io *ovid/io.Cap, req *ovid/http.Request, res *ovid/http.Response) i64 {
-  if !ovid/http.PathIs(req, strptr("/hello"), strlen("/hello")) {
+  if !ovid/http.PathIs(req, "/hello") {
     ovid/http.SetStatus(res, 404)
     return 0
   }
-  ovid/http.SetHeader(io, res, strptr("Content-Type"), strlen("Content-Type"), strptr("text/plain"), strlen("text/plain"))
-  ovid/http.Write(io, res, strptr("hello, "), strlen("hello, "))
-  ovid/http.Write(io, res, ovid/http.Query(req), ovid/http.QueryLen(req))
-  ovid/http.Write(io, res, strptr("\n"), strlen("\n"))
+  ovid/http.SetHeader(io, res, "Content-Type", "text/plain")
+  ovid/http.Write(io, res, "hello, ")
+  ovid/http.Write(io, res, ovid/http.Query(req))
+  ovid/http.Write(io, res, "\n")
   return 0
 }

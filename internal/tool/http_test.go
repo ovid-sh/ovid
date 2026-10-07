@@ -30,7 +30,7 @@ func main(io *ovid/io.Cap) i64 {
   if ovid/http.Err(req) != 0 {
     return ovid/http.WriteStdio(io, req, res, 0)
   }
-  ovid/http.WriteInt(io, res, ovid/http.BodyLen(req))
+  ovid/http.WriteInt(io, res, len(ovid/http.Body(req)))
   return ovid/http.WriteStdio(io, req, res, 0)
 }
 `))
@@ -98,10 +98,10 @@ import ovid/io
 import ovid/http
 
 func handle(io *ovid/io.Cap, req *ovid/http.Request, res *ovid/http.Response) i64 {
-  if ovid/http.PathIs(req, strptr("/crash"), 6) {
+  if ovid/http.PathIs(req, "/crash") {
     return load64(8)
   }
-  ovid/http.Write(io, res, strptr("hi"), 2)
+  ovid/http.Write(io, res, "hi")
   return 0
 }
 `,
