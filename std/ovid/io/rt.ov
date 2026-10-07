@@ -1,0 +1,72 @@
+package ovid/io
+
+// The system calls ovid/task's scheduler needs (async POC C, #75). They
+// live here because only ovid/io may call syscall; ovid/task holds the
+// rest, so a program that does not import it never parses its builtins.
+
+const SYS_MPROTECT i64 = 10
+const SYS_GETSOCKOPT i64 = 55
+const SYS_TIMERFD_CREATE i64 = 283
+const SYS_TIMERFD_SETTIME i64 = 286
+const SYS_HOST_SPAWN i64 = 65552
+const SYS_HOST_JOIN i64 = 65553
+
+// Unmap gives back the n bytes mapped at p. It returns 0, or an error code.
+func Unmap(p i64, n i64) i64 {
+  return Code(syscall(SYS_MUNMAP, p, n, 0, 0, 0, 0))
+}
+
+// Protect sets the protection of the n bytes at p (0: no access, a guard).
+// It returns 0, or an error code.
+func Protect(p i64, n i64, prot i64) i64 {
+  return Code(syscall(SYS_MPROTECT, p, n, prot, 0, 0, 0))
+}
+
+// EpollCtlAt is EpollCtl with the caller's epoll_event at ev (EVENT bytes,
+// already filled in), so a loop that waits often allocates nothing. It
+// returns 0, or an error code.
+func EpollCtlAt(ep i64, op i64, fd i64, ev i64) i64 {
+  return Code(syscall(SYS_EPOLL_CTL, ep, op, fd, ev, 0, 0))
+}
+
+// SockError is the pending error of socket fd (SO_ERROR): 0, or an error
+// code, as a non-blocking connect ended.
+func SockError(io *Cap, fd i64) i64 {
+  var v i64 = Alloc(io, 16)
+  store32(v + 8, 4)
+  var r i64 = syscall(SYS_GETSOCKOPT, fd, 1, 4, v, v + 8, 0)
+  if r < 0 {
+    return Code(r)
+  }
+  return load32(v)
+}
+
+// Timer makes a non-blocking timerfd that becomes readable once, ms
+// milliseconds from now: the fd and 0, or 0 and an error code.
+func Timer(io *Cap, ms i64) (i64, i64) {
+  var fd i64 = syscall(SYS_TIMERFD_CREATE, 1, SOCK_NONBLOCK | SOCK_CLOEXEC, 0, 0, 0, 0)
+  if fd < 0 {
+    return 0, Code(fd)
+  }
+  var its i64 = Alloc(io, 32)
+  store64(its + 16, ms / 1000)
+  store64(its + 24, (ms % 1000) * 1000000)
+  var r i64 = syscall(SYS_TIMERFD_SETTIME, fd, 0, its, 0, 0, 0)
+  if r < 0 {
+    Close(fd)
+    return 0, Code(r)
+  }
+  return fd, 0
+}
+
+// HostSpawn asks a wasm host to start the task fn(cap, arg): its id, or a
+// negative error (-E_NOSYS from a kernel). fn 0 starts nothing and answers
+// 0 where the host runs tasks.
+func HostSpawn(fn i64, cap i64, arg i64) i64 {
+  return syscall(SYS_HOST_SPAWN, fn, cap, arg, 0, 0, 0)
+}
+
+// HostJoin waits for the host's task id to end and returns its result.
+func HostJoin(id i64) i64 {
+  return syscall(SYS_HOST_JOIN, id, 0, 0, 0, 0, 0)
+}

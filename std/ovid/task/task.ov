@@ -1,0 +1,390 @@
+package ovid/task
+
+import ovid/io
+
+// Tasks (async POC C, #75): stackful, cooperatively scheduled, each with a
+// heap of its own. A task is an entry func named with taskfn(F), where
+//
+//   func F(io *ovid/io.Cap, arg i64) i64
+//
+// and the io it is given is its own: what it allocates is freed when it
+// ends, so two tasks never share a heap (ResetHeap and Alloc assume one
+// flow of allocation per Cap). Inside a task, Accept, Read, Write,
+// Connect, and Sleep below look blocking; when the kernel says "not yet"
+// (E_AGAIN) they park the task on epoll and another one runs. Spawning is
+// structured: a task that returns first waits for every task it spawned.
+//
+// Natively each task has its own stack (STACK bytes, a guard page below
+// it) and the scheduler switches stacks with swapstack. Under wasm the
+// host runs each task as a JSPI call (ovid/io.HostSpawn, HostJoin), and a
+// host op that waits suspends only that task. Spawn asks the host which.
+//
+//   func main(io *ovid/io.Cap) i64 {
+//     return ovid/task.Run(io, taskfn(serve), 0)
+//   }
+
+// HEAP is the first heap region of a task (its Task record sits at the
+// start); STACK its stack, natively. Both are address space until touched.
+const HEAP i64 = 64 << 10
+const STACK i64 = 64 << 10
+const GUARD i64 = 4096
+
+// RUNQ is how many tasks can be ready at once; EVENTS how many epoll
+// events one wait takes.
+const RUNQ i64 = 1 << 16
+const EVENTS i64 = 256
+
+const T_READY i64 = 0
+const T_WAITING i64 = 1
+const T_DONE i64 = 2
+const T_CHILDREN i64 = 3
+
+// Task is a task. Its first six fields are an ovid/io.Cap's, in the same
+// order: a *Task is the io its entry func is given.
+type Task struct {
+  argc i64
+  argv i64
+  heap i64
+  used i64
+  size i64
+  maps i64
+  sched i64
+  rsp i64
+  stack i64
+  state i64
+  result i64
+  parent i64
+  children i64
+  joiner i64
+  released bool
+  ev i64
+  host i64
+}
+
+// TASK_RSP is the offset of Task.rsp, SCHED_MAINRSP of Sched.mainrsp:
+// swapstack takes the addresses of the cells.
+const TASK_RSP i64 = 56
+const SCHED_MAINRSP i64 = 32
+
+// Sched is the native scheduler: an epoll instance, a ring of ready tasks,
+// and the stack pointer of the loop in Run while a task runs.
+type Sched struct {
+  ep i64
+  runq i64
+  head i64
+  tail i64
+  mainrsp i64
+  live i64
+  events i64
+}
+
+// Group is a set of tasks to wait for together.
+type Group struct {
+  tasks i64
+  n i64
+  cap i64
+}
+
+// Run runs the task fn(arg) and everything it spawns, and returns its
+// result. Natively main calls it once; the loop runs on main's stack.
+func Run(io *ovid/io.Cap, fn i64, arg i64) i64 {
+  var s *Sched = ovid/io.Alloc(io, sizeof(Sched)) as *Sched
+  var ep i64, e i64 = ovid/io.EpollCreate()
+  if e != 0 {
+    return 0 - e
+  }
+  s.ep = ep
+  s.runq = ovid/io.Alloc(io, RUNQ * 8)
+  s.events = ovid/io.Alloc(io, EVENTS * ovid/io.EVENT)
+  var root *Task = newTask(io, s, fn, arg, 0 as *Task)
+  s.live = 1
+  push(s, root)
+  while s.live > 0 {
+    while s.head != s.tail {
+      var t *Task = load64(s.runq + ((s.head & (RUNQ - 1)) * 8)) as *Task
+      s.head = s.head + 1
+      swapstack((s as i64) + SCHED_MAINRSP, (t as i64) + TASK_RSP)
+      if t.state == T_DONE && t.released {
+        freeTask(t)
+      }
+    }
+    if s.live > 0 {
+      var n i64, we i64 = ovid/io.EpollWait(s.ep, s.events, EVENTS, -1)
+      var i i64 = 0
+      while i < n {
+        push(s, ovid/io.EventData(s.events, i) as *Task)
+        i = i + 1
+      }
+    }
+  }
+  return root.result
+}
+
+func push(s *Sched, t *Task) i64 {
+  store64(s.runq + ((s.tail & (RUNQ - 1)) * 8), t as i64)
+  s.tail = s.tail + 1
+  return 0
+}
+
+// newTask makes a task of fn(arg) whose Cap inherits io's arguments. With
+// a scheduler it also gets a stack laid out to start in fn.
+func newTask(io *ovid/io.Cap, s *Sched, fn i64, arg i64, parent *Task) *Task {
+  var r i64 = ovid/io.Map(HEAP)
+  var t *Task = r as *Task
+  var pt *Task = io as *Task
+  t.argc = pt.argc
+  t.argv = pt.argv
+  t.heap = r
+  t.used = (sizeof(Task) + 7) & ^7
+  t.size = HEAP
+  t.maps = 0
+  t.sched = s as i64
+  t.parent = parent as i64
+  t.ev = ovid/io.Alloc(t as *ovid/io.Cap, 16)
+  if s != 0 as *Sched {
+    var st i64 = ovid/io.Map(STACK + GUARD)
+    ovid/io.Protect(st, GUARD, 0)
+    t.stack = st
+    t.rsp = taskinit((st + GUARD) + STACK, fn, r, arg, taskfn(exit))
+  }
+  return t
+}
+
+// freeTask gives back a finished task's stack and heap, the Task with it.
+func freeTask(t *Task) i64 {
+  if t.stack != 0 {
+    ovid/io.Unmap(t.stack, STACK + GUARD)
+  }
+  var q i64 = t.maps
+  while q != 0 {
+    var next i64 = load64(q)
+    ovid/io.Unmap(q, load64(q + 8))
+    q = next
+  }
+  ovid/io.Unmap(t as i64, HEAP)
+  return 0
+}
+
+// exit is where a task's entry func returns to (taskinit's exit): it
+// waits for the task's children, wakes whoever waits for it, and leaves
+// the stack for good.
+func exit(io *ovid/io.Cap, result i64) i64 {
+  var t *Task = io as *Task
+  var s *Sched = t.sched as *Sched
+  t.result = result
+  while t.children > 0 {
+    t.state = T_CHILDREN
+    swapstack((t as i64) + TASK_RSP, (s as i64) + SCHED_MAINRSP)
+  }
+  t.state = T_DONE
+  s.live = s.live - 1
+  if t.parent != 0 {
+    var p *Task = t.parent as *Task
+    p.children = p.children - 1
+    if p.children == 0 && p.state == T_CHILDREN {
+      push(s, p)
+    }
+  }
+  if t.joiner != 0 {
+    push(s, t.joiner as *Task)
+    t.joiner = 0
+  }
+  swapstack((t as i64) + TASK_RSP, (s as i64) + SCHED_MAINRSP)
+  return 0
+}
+
+// Spawn starts the task fn(arg) (fn from taskfn) and returns it. io must
+// be a task's, natively; under wasm any Cap will do. The new task runs
+// when this one next waits. Join or Release every task spawned.
+func Spawn(io *ovid/io.Cap, fn i64, arg i64) *Task {
+  if ovid/io.HostSpawn(0, 0, 0) == 0 {
+    var h *Task = newTask(io, 0 as *Sched, fn, arg, 0 as *Task)
+    h.host = ovid/io.HostSpawn(fn, h as i64, arg)
+    return h
+  }
+  var p *Task = io as *Task
+  var s *Sched = p.sched as *Sched
+  var t *Task = newTask(io, s, fn, arg, p)
+  p.children = p.children + 1
+  s.live = s.live + 1
+  push(s, t)
+  return t
+}
+
+// Join waits for t to end, frees it, and returns its result.
+func Join(io *ovid/io.Cap, t *Task) i64 {
+  if t.host != 0 {
+    var hr i64 = ovid/io.HostJoin(t.host)
+    freeTask(t)
+    return hr
+  }
+  var p *Task = io as *Task
+  var s *Sched = p.sched as *Sched
+  while t.state != T_DONE {
+    t.joiner = p as i64
+    p.state = T_WAITING
+    swapstack((p as i64) + TASK_RSP, (s as i64) + SCHED_MAINRSP)
+    p.state = T_READY
+  }
+  var r i64 = t.result
+  freeTask(t)
+  return r
+}
+
+// Release lets t be freed when it ends, unjoined: for a server's
+// connections. Its parent still waits for it before ending itself.
+func Release(io *ovid/io.Cap, t *Task) i64 {
+  if t.host != 0 {
+    return 0
+  }
+  if t.state == T_DONE {
+    return freeTask(t)
+  }
+  t.released = true
+  return 0
+}
+
+// NewGroup is an empty group, allocated in io's heap.
+func NewGroup(io *ovid/io.Cap) *Group {
+  var g *Group = ovid/io.Alloc(io, sizeof(Group)) as *Group
+  g.cap = 16
+  g.tasks = ovid/io.Alloc(io, g.cap * 8)
+  return g
+}
+
+// Go spawns fn(arg) into g.
+func Go(io *ovid/io.Cap, g *Group, fn i64, arg i64) i64 {
+  if g.n == g.cap {
+    var more i64 = ovid/io.Alloc(io, g.cap * 16)
+    var i i64 = 0
+    while i < g.n {
+      store64(more + (i * 8), load64(g.tasks + (i * 8)))
+      i = i + 1
+    }
+    g.tasks = more
+    g.cap = g.cap * 2
+  }
+  store64(g.tasks + (g.n * 8), Spawn(io, fn, arg) as i64)
+  g.n = g.n + 1
+  return 0
+}
+
+// Wait joins every task of g, empties it, and returns how many of them
+// returned other than 0.
+func Wait(io *ovid/io.Cap, g *Group) i64 {
+  var bad i64 = 0
+  var i i64 = 0
+  while i < g.n {
+    if Join(io, load64(g.tasks + (i * 8)) as *Task) != 0 {
+      bad = bad + 1
+    }
+    i = i + 1
+  }
+  g.n = 0
+  return bad
+}
+
+// park waits until fd has one of events, through a one-shot epoll
+// registration whose data is the task. It returns 0, or an error code.
+func park(io *ovid/io.Cap, fd i64, events i64) i64 {
+  var t *Task = io as *Task
+  var s *Sched = t.sched as *Sched
+  store32(t.ev, events | ovid/io.EPOLLONESHOT)
+  store64(t.ev + 4, t as i64)
+  var e i64 = ovid/io.EpollCtlAt(s.ep, ovid/io.EPOLL_CTL_MOD, fd, t.ev)
+  if e == ovid/io.E_NOENT {
+    e = ovid/io.EpollCtlAt(s.ep, ovid/io.EPOLL_CTL_ADD, fd, t.ev)
+  }
+  if e != 0 {
+    return e
+  }
+  t.state = T_WAITING
+  swapstack((t as i64) + TASK_RSP, (s as i64) + SCHED_MAINRSP)
+  t.state = T_READY
+  return 0
+}
+
+// Accept waits for a connection on the non-blocking listener ln and
+// returns it, non-blocking: an fd and 0, or 0 and an error code.
+func Accept(io *ovid/io.Cap, ln i64) (i64, i64) {
+  while true {
+    var fd i64, e i64 = ovid/io.Accept(ln, ovid/io.SOCK_NONBLOCK | ovid/io.SOCK_CLOEXEC)
+    if e != ovid/io.E_AGAIN {
+      return fd, e
+    }
+    e = park(io, ln, ovid/io.EPOLLIN)
+    if e != 0 {
+      return 0, e
+    }
+  }
+  return 0, 0
+}
+
+// Read reads up to n bytes from the non-blocking fd into p, waiting for
+// some: the count (0 at the end) and 0, or 0 and an error code.
+func Read(io *ovid/io.Cap, fd i64, p i64, n i64) (i64, i64) {
+  while true {
+    var k i64, e i64 = ovid/io.Read(fd, p, n)
+    if e != ovid/io.E_AGAIN {
+      return k, e
+    }
+    e = park(io, fd, ovid/io.EPOLLIN)
+    if e != 0 {
+      return 0, e
+    }
+  }
+  return 0, 0
+}
+
+// Write writes all n bytes at p to the non-blocking fd. It returns 0, or
+// an error code.
+func Write(io *ovid/io.Cap, fd i64, p i64, n i64) i64 {
+  var off i64 = 0
+  while off < n {
+    var w i64, e i64 = ovid/io.WriteSome(fd, p + off, n - off)
+    if e == ovid/io.E_AGAIN {
+      e = park(io, fd, ovid/io.EPOLLOUT)
+      if e != 0 {
+        return e
+      }
+    } else if e != 0 {
+      return e
+    } else {
+      off = off + w
+    }
+  }
+  return 0
+}
+
+// Connect opens a non-blocking connection to 127.0.0.1:port and returns
+// it once established: an fd and 0, or 0 and an error code.
+func Connect(io *ovid/io.Cap, port i64) (i64, i64) {
+  var fd i64, e i64 = ovid/io.Connect(io, port, ovid/io.SOCK_NONBLOCK | ovid/io.SOCK_CLOEXEC)
+  if e == ovid/io.E_INPROGRESS {
+    e = park(io, fd, ovid/io.EPOLLOUT)
+    if e == 0 {
+      e = ovid/io.SockError(io, fd)
+    }
+    if e != 0 {
+      ovid/io.Close(fd)
+      return 0, e
+    }
+  }
+  return fd, e
+}
+
+// Sleep waits ms milliseconds, suspending only this task: under wasm on a
+// host timer, natively on a timerfd. It returns 0, or an error code.
+func Sleep(io *ovid/io.Cap, ms i64) i64 {
+  var he i64 = ovid/io.HostSleep(ms)
+  if he != ovid/io.E_NOSYS {
+    return he
+  }
+  var fd i64, e i64 = ovid/io.Timer(io, ms)
+  if e != 0 {
+    return e
+  }
+  e = park(io, fd, ovid/io.EPOLLIN)
+  ovid/io.Close(fd)
+  return e
+}
