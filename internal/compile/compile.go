@@ -162,7 +162,6 @@ type cg struct {
 	localBytes int32
 	epi        int
 	traps      []trap      // the func's failed-check stubs, emitted after its ret
-	stmt       string      // the id of the statement being emitted
 	last       *ir.Node    // the func's final statement when it is a return
 	regs       map[int]int // locals that live in a register
 	saved      []int       // callee-saved registers the func uses
@@ -432,7 +431,8 @@ func (c *cg) emitFunc(pkg *ir.Package, fn *ir.Func) error {
 }
 
 // trap is a failed check's ud2: out of line, after the func's ret, and
-// marked with the check's statement so a crash still names it.
+// marked with the statement the check was emitted under (the current
+// mark: a while's condition is the while's) so a crash still names it.
 type trap struct {
 	label int
 	stmt  string
@@ -442,7 +442,7 @@ type trap struct {
 // of every check is its load; in line, the ud2 cost a loop over a table
 // half again as much (255 ms against 171 ms for 400M reads on a Zen 4).
 func (c *cg) trapLabel() int {
-	t := trap{c.b.NewLabel(), c.stmt}
+	t := trap{c.b.NewLabel(), c.marks[len(c.marks)-1].ID}
 	c.traps = append(c.traps, t)
 	return t.label
 }
@@ -874,7 +874,6 @@ func (c *cg) emitStmts(stmts []*ir.Node) error {
 			continue
 		}
 		c.mark(s.ID)
-		c.stmt = s.ID
 		if err := c.emitStmt(s); err != nil {
 			return err
 		}

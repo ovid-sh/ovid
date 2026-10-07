@@ -1180,6 +1180,13 @@ func TestNegative(io *ovid/io.Cap) i64 {
 func TestEdges(io *ovid/io.Cap) i64 {
   return At(0) + At(len(T) - 1) - 10
 }
+func TestInWhile(io *ovid/io.Cap) i64 {
+  var i i64 = 0
+  while T[i] != 0 {
+    i = i + 1
+  }
+  return i
+}
 `,
 	})
 	needExec(t)
@@ -1196,10 +1203,10 @@ func TestEdges(io *ovid/io.Cap) i64 {
 	if got["fn:demo.TestEdges"]["ok"] != true {
 		t.Fatalf("edges %v", got["fn:demo.TestEdges"])
 	}
-	for _, name := range []string{"TestPastEnd", "TestNegative"} {
+	for name, src := range map[string]string{"TestPastEnd": "  return T[i]", "TestNegative": "  return T[i]", "TestInWhile": "  while T[i] != 0 {"} {
 		r := got["fn:demo."+name]
 		at, _ := r["at"].(map[string]any)
-		if r["signal"] != "illegal instruction" || at["source"] != "  return T[i]" {
+		if r["signal"] != "illegal instruction" || at["source"] != src {
 			t.Fatalf("%s: %v", name, r)
 		}
 	}
