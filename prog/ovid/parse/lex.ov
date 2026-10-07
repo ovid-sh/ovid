@@ -233,7 +233,7 @@ func PeekIdent(p *P) bool {
   return p.i < len(p.src) && IsIdentStart(At(p, p.i))
 }
 
-// Ident consumes an identifier; its text is ptr(p.tok)/len(p.tok) (empty on error).
+// Ident consumes an identifier; its text is p.tok (empty on error).
 func Ident(p *P) i64 {
   Skip(p)
   if p.i >= len(p.src) || !IsIdentStart(At(p, p.i)) {
@@ -344,7 +344,7 @@ func Cat(io *ovid/io.Cap, a bytes, b bytes) i64 {
   return d
 }
 
-// ParsePath reads ident ('/' ident)*; the joined path is ptr(p.tok)/len(p.tok).
+// ParsePath reads ident ('/' ident)*; the joined path is p.tok.
 func ParsePath(p *P) i64 {
   Ident(p)
   var sp i64 = ptr(p.tok)
@@ -364,7 +364,7 @@ func ParsePath(p *P) i64 {
   return 0
 }
 
-// ParseType reads a type and leaves its full spelling in ptr(p.tok)/len(p.tok):
+// ParseType reads a type and leaves its full spelling in p.tok:
 // i64, bool, pkg/path.Name, or *pkg/path.Name. p.ttok is the source
 // position of the type's name (Name, i64, or bool), for the uses the
 // checker records.
