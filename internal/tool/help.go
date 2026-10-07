@@ -62,7 +62,7 @@ All commands take -C <dir> (default: the module containing the cwd).
 The language at a glance (all of it: ovid help language):
   i64, bool, bytes, *T; var x i64 = 0; if/else if/else; while; no for/break
   var p *T = ovid/io.Alloc(io, sizeof(T)) as *T     structs live on the heap
-  ovid/io.Print(strptr("hi\n")); ovid/io.PrintInt(io, n)   output
+  ovid/io.Print("hi\n"); ovid/io.PrintInt(io, n)   output
   var sp bool = c == 32 || c == 9                   && || ! work anywhere
 
 Topics: ovid help language | commands | edit | std | ids
@@ -132,7 +132,7 @@ Statements: var x T = e | var x T (zero: 0, false, or a null pointer) | x = e | 
 Every path through a func must return.
 
 Expressions: integers (decimal, 0x hex), true/false, names, calls f(a),
-other packages' funcs and consts by import path: ovid/mem.Copy(d, s, n),
+other packages' funcs and consts by import path: ovid/mem.Copy(dst, src),
 ovid/io.O_RDONLY (a one-segment import may also be written util.F()),
 field reads p.f, casts e as *T (i64 address to pointer and back),
 load8/16/32/64(addr) (zero-extended), bswap16/32/64(x) (reverses the low
@@ -166,12 +166,13 @@ statement). No == on bytes (ovid/mem.Eq), no cast to or from i64.
     return s[i:len(s)]
   }
 A func may return (bytes, i64), received as var b bytes, e i64 = f(...).
-strptr("hi\n") and strlen("hi\n") are the address and length of the same
-interned, NUL-terminated literal as two i64, for the std functions that
-take an address and a length or need the NUL:
-  ovid/io.Print(strptr("total: "))     // Eprint writes to stderr
+bytes(p, n) is a bytes over n bytes at address p (your own memory, from
+ovid/io.Alloc), ptr(b) the address b starts at, for a syscall path.
+strptr("hi\n") and strlen("hi\n") are a literal's address and length as
+two i64; the literal is NUL-terminated in memory, for a syscall path.
+  ovid/io.Print("total: ")             // Eprint writes to stderr
   ovid/io.PrintInt(io, n)              // a number in decimal
-  ovid/io.Stdout(p, n)                 // n bytes at p
+  ovid/io.Stdout(b)                    // a bytes; bytes(p, n) for n bytes at p
 
 Memory: no implicit allocation. ovid/io.Alloc(io, nbytes) returns an i64
 address of zeroed bytes from the heap, which grows as needed; it does not
@@ -188,16 +189,17 @@ package's), a compile-time i64:
   var p *Pair = ovid/io.Alloc(io, sizeof(Pair)) as *Pair
 There is no address-of (&x): locals live in registers or the stack and
 cannot be pointed at. When a callee must write a value back, allocate a
-cell and pass its address (the out-param ovid/io.ReadFile uses for the
-length, beside its two results):
-  var nn i64 = ovid/io.Alloc(io, 8)       // receives the length
-  var data i64, e i64 = ovid/io.ReadFile(io, path, ovid/io.CLen(path), nn)
+cell and pass its address:
+  var cell i64 = ovid/io.Alloc(io, 8)     // receives a count
+  Scan(data, cell)
+  var n i64 = load64(cell)
+Or return a struct: func Read(...) *Result, with the fields you need; or
+a value and an error code, as ovid/io.ReadFile does:
+  var data bytes, e i64 = ovid/io.ReadFile(io, path)
   if e != 0 {
     ovid/io.Eprint(ovid/io.ErrText(e))
     return 1
   }
-  var n i64 = load64(nn)
-Or return a struct: func Read(...) *Result, with the fields you need.
 
 Control flow, all of it:
   if a < b {
@@ -355,7 +357,7 @@ ovid replace <id> | insert --after <id> | insert --before <id> | append <id>
   [--require-clean|--allow-broken] [--show]
   One edit op; the text is read from stdin (or F), so a heredoc works:
     ovid replace st:app.main:3 --expect 1f0c9a2b7d4e <<'EOF'
-    ovid/io.Stdout(strptr("a \"quoted\" line\n"), strlen("a \"quoted\" line\n"))
+    ovid/io.Stdout("a \"quoted\" line\n")
     EOF
   Same checks and result as ovid edit. Every op needs a guard: --expect
   (the hash of the node it names), --rev (the module revision), or --force;
@@ -627,8 +629,8 @@ func Init(dir, name string, w io.Writer) int {
 
 import ovid/io
 
-func Greeting() i64 {
-  return strptr("hello, world\n")
+func Greeting() bytes {
+  return "hello, world\n"
 }
 
 func main(io *ovid/io.Cap) i64 {
@@ -642,7 +644,7 @@ import ovid/io
 import ovid/mem
 
 func TestGreeting(io *ovid/io.Cap) i64 {
-  if ovid/mem.EqC(Greeting(), strptr("hello, world\n"), strlen("hello, world\n")) {
+  if ovid/mem.Eq(Greeting(), "hello, world\n") {
     return 0
   }
   return 1

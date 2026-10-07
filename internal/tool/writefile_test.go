@@ -16,21 +16,21 @@ import (
 const writer = `package demo
 import ovid/io
 func main(io *ovid/io.Cap) i64 {
-  var got i64, _ = ovid/io.Read(0, ovid/io.Alloc(io, 8), 8)
+  var got i64, _ = ovid/io.Read(0, bytes(ovid/io.Alloc(io, 8), 8))
   while got > 0 {
-    got, _ = ovid/io.Read(0, ovid/io.Alloc(io, 8), 8)
+    got, _ = ovid/io.Read(0, bytes(ovid/io.Alloc(io, 8), 8))
   }
-  var path i64 = ovid/io.Arg(io, 2)
+  var path i64 = ovid/io.ArgC(io, 2)
   var n i64 = ovid/io.CLen(path)
   var mode i64 = 493
   if ovid/io.Argc(io) > 3 {
     mode = 128
   }
   var r i64 = 0
-  if load8(ovid/io.Arg(io, 1)) == 97 {
-    r = ovid/io.WriteFileAtomic(io, path, n, strptr("new\n"), 4, mode)
+  if load8(ovid/io.ArgC(io, 1)) == 97 {
+    r = ovid/io.WriteFileAtomic(io, bytes(path, n), bytes(strptr("new\n"), 4), mode)
   } else {
-    r = ovid/io.WriteFileDurable(io, path, n, strptr("new\n"), 4, mode)
+    r = ovid/io.WriteFileDurable(io, bytes(path, n), bytes(strptr("new\n"), 4), mode)
   }
   if r != 0 {
     return 1

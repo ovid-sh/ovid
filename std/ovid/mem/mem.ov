@@ -9,8 +9,13 @@ type Buf struct {
   cap i64
 }
 
-// Eq reports whether the an bytes at a equal the bn bytes at b.
-func Eq(a i64, an i64, b i64, bn i64) bool {
+// Eq reports whether a and b hold the same bytes.
+func Eq(a bytes, b bytes) bool {
+  return EqN(ptr(a), len(a), ptr(b), len(b))
+}
+
+// EqN reports whether the an bytes at a equal the bn bytes at b.
+func EqN(a i64, an i64, b i64, bn i64) bool {
   if an != bn {
     return false
   }
@@ -30,14 +35,29 @@ func Eq(a i64, an i64, b i64, bn i64) bool {
   return true
 }
 
-// EqC compares the NUL-terminated string at p with n bytes at lit:
-// ovid/mem.EqC(arg, strptr("-v"), strlen("-v")).
-func EqC(p i64, lit i64, n i64) bool {
-  return Eq(p, ovid/io.CLen(p), lit, n)
+// EqC compares the NUL-terminated string at p with lit:
+// ovid/mem.EqC(ovid/io.ArgC(io, 1), "-v").
+func EqC(p i64, lit bytes) bool {
+  return EqN(p, ovid/io.CLen(p), ptr(lit), len(lit))
 }
 
-// Copy copies n bytes from src to dst and returns n.
-func Copy(dst i64, src i64, n i64) i64 {
+// Copy copies src into dst, which must have room (a shorter dst is a
+// failed check), and returns the count.
+func Copy(dst bytes, src bytes) i64 {
+  var n i64 = len(src)
+  if n > 0 {
+    dst[n - 1] = dst[n - 1]
+  }
+  return CopyN(ptr(dst), ptr(src), n)
+}
+
+// Bytes is the bytes b holds so far.
+func Bytes(b *Buf) bytes {
+  return bytes(b.data, b.len)
+}
+
+// CopyN copies n bytes from src to dst and returns n.
+func CopyN(dst i64, src i64, n i64) i64 {
   var i i64 = 0
   // Eight bytes at a time, unless dst starts inside the word being read:
   // there the byte loop's result (the bytes repeat) is the defined one.
@@ -77,7 +97,7 @@ func Grow(io *ovid/io.Cap, b *Buf, need i64) i64 {
     nc = nc * 2
   }
   var nd i64 = ovid/io.Alloc(io, nc)
-  Copy(nd, b.data, b.len)
+  CopyN(nd, b.data, b.len)
   b.data = nd
   b.cap = nc
   return 0
@@ -91,10 +111,15 @@ func WByte(io *ovid/io.Cap, b *Buf, c i64) i64 {
   return 0
 }
 
-// WBytes appends n bytes at p.
-func WBytes(io *ovid/io.Cap, b *Buf, p i64, n i64) i64 {
+// WBytes appends s.
+func WBytes(io *ovid/io.Cap, b *Buf, s bytes) i64 {
+  return WBytesN(io, b, ptr(s), len(s))
+}
+
+// WBytesN appends n bytes at p.
+func WBytesN(io *ovid/io.Cap, b *Buf, p i64, n i64) i64 {
   Grow(io, b, n)
-  Copy(b.data + b.len, p, n)
+  CopyN(b.data + b.len, p, n)
   b.len = b.len + n
   return 0
 }

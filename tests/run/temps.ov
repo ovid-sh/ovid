@@ -94,10 +94,10 @@ func Nz(x i64) i64 {
   return 0
 }
 
-func Put(io *ovid/io.Cap, name i64, v i64) i64 {
+func Put(io *ovid/io.Cap, name bytes, v i64) i64 {
   ovid/io.Print(name)
   ovid/io.PrintInt(io, v)
-  ovid/io.Print(strptr("\n"))
+  ovid/io.Print("\n")
   return 0
 }
 
@@ -115,9 +115,9 @@ func main(io *ovid/io.Cap) i64 {
     cmp = cmp + Cmp(a * 9, a - 17)
     a = a + 37
   }
-  Put(io, strptr("deep "), deep)
-  Put(io, strptr("full "), full)
-  Put(io, strptr("calls "), calls)
-  Put(io, strptr("cmp "), cmp)
+  Put(io, "deep ", deep)
+  Put(io, "full ", full)
+  Put(io, "calls ", calls)
+  Put(io, "cmp ", cmp)
   return 0
 }

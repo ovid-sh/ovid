@@ -108,11 +108,11 @@ Read-only constant tables (`const T [N]i64 = {...}`, read as `T[i]` with a bound
 No struct values, globals, function pointers, methods, generics, or implicit
 allocation. Parameters take at most six words (a `bytes` is two); one result, or a value and an error code (`func F() (i64, i64)`, received as `var v i64, e i64 = F()`; a call that is not received is a check error). Operators follow Go
 precedence and are signed; `>>` is arithmetic, and `ushr`, `umulhi`, `udiv`, `urem`, and `ult` are the unsigned forms. `strptr("…")`
-and `strlen("…")` are a literal's address and length as two `i64`, for the std functions that take them. Memory is `load8/16/32/64`, `store8/16/32/64`, `bswap16/32/64`, and
+and `strlen("…")` are a literal's address and length as two `i64`, and `ptr(b)` a bytes' address, for a syscall path. Memory is `load8/16/32/64`, `store8/16/32/64`, `bswap16/32/64`, and
 `ovid/io.Alloc`. `main` is `func main(io *ovid/io.Cap) i64`; `io` is the
 capability for argv, the heap, and syscalls, and `syscall` is only allowed in
 `ovid/io`. Other packages' funcs and consts spell the import path:
-`ovid/mem.Copy(d, s, n)`, `ovid/io.O_RDONLY`; a one-segment import may be
+`ovid/mem.Copy(dst, src)`, `ovid/io.O_RDONLY`; a one-segment import may be
 written `util.F()`. Imports may not form a cycle (`import_cycle`), so the
 packages are a DAG.
 

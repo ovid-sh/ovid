@@ -121,7 +121,7 @@ func TestHelperJail(t *testing.T) {
 // killed.
 func TestBuildReportsSyscalls(t *testing.T) {
 	needExec(t)
-	hello := mkmod(t, demo("package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  ovid/io.Print(strptr(\"hi\\n\"))\n  return 3\n}\n"))
+	hello := mkmod(t, demo("package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  ovid/io.Print(\"hi\\n\")\n  return 3\n}\n"))
 	bin, calls := buildSyscalls(t, hello)
 	if want := []int{1, 9, 60}; !reflect.DeepEqual(calls, want) { // write, mmap, exit
 		t.Fatalf("a program that prints lists %v, want %v", calls, want)
@@ -142,12 +142,11 @@ func TestBuildReportsSyscalls(t *testing.T) {
 	reader := mkmod(t, demo(`package demo
 import ovid/io
 func main(io *ovid/io.Cap) i64 {
-  var n i64 = ovid/io.Alloc(io, 8)
-  var p i64, e i64 = ovid/io.ReadFile(io, ovid/io.Arg(io, 1), ovid/io.CLen(ovid/io.Arg(io, 1)), n)
+  var data bytes, e i64 = ovid/io.ReadFile(io, ovid/io.Arg(io, 1))
   if e != 0 {
     return 1
   }
-  ovid/io.Stdout(p, load64(n))
+  ovid/io.Stdout(data)
   return 0
 }
 `))

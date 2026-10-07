@@ -4,18 +4,16 @@ import ovid/io
 // hello (open, fstat, read, close), for the NixOS test's syscall filter.
 func main(io *ovid/io.Cap) i64 {
   if ovid/io.Argc(io) != 2 {
-    ovid/io.Eprint(strptr("usage: catfile FILE\n"))
+    ovid/io.Eprint("usage: catfile FILE\n")
     return 64
   }
-  var path i64 = ovid/io.Arg(io, 1)
-  var nn i64 = ovid/io.Alloc(io, 8)
-  var data i64, e i64 = ovid/io.ReadFile(io, path, ovid/io.CLen(path), nn)
+  var data bytes, e i64 = ovid/io.ReadFile(io, ovid/io.Arg(io, 1))
   if e != 0 {
-    ovid/io.Eprint(strptr("catfile: cannot read: "))
+    ovid/io.Eprint("catfile: cannot read: ")
     ovid/io.Eprint(ovid/io.ErrText(e))
-    ovid/io.Eprint(strptr("\n"))
+    ovid/io.Eprint("\n")
     return 1
   }
-  ovid/io.Stdout(data, load64(nn))
+  ovid/io.Stdout(data)
   return 0
 }

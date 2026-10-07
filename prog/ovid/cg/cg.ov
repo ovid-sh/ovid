@@ -79,7 +79,7 @@ func Fail(c *C, p i64, n i64) i64 {
   if c.adding {
     c.err = 1
     c.msg = ovid/mem.New(c.io, 64)
-    ovid/mem.WBytes(c.io, c.msg, p, n)
+    ovid/mem.WBytes(c.io, c.msg, bytes(p, n))
   }
   return c.err
 }
@@ -87,7 +87,7 @@ func Fail(c *C, p i64, n i64) i64 {
 // Add appends p[0:n] to the message of the failure the last Fail recorded.
 func Add(c *C, p i64, n i64) i64 {
   if c.adding {
-    ovid/mem.WBytes(c.io, c.msg, p, n)
+    ovid/mem.WBytes(c.io, c.msg, bytes(p, n))
   }
   return c.err
 }
@@ -187,7 +187,7 @@ func UnaryOp(op i64) bool {
 func FindPkg(c *C, pp i64, pn i64) *ovid/parse.Pkg {
   var k *ovid/parse.Pkg = c.mod.pkgs
   while k != 0 as *ovid/parse.Pkg {
-    if ovid/mem.Eq(k.pathp, k.pathn, pp, pn) {
+    if ovid/mem.Eq(bytes(k.pathp, k.pathn), bytes(pp, pn)) {
       return k
     }
     k = k.next
@@ -271,7 +271,7 @@ func BindName(c *C, n *ovid/parse.Node, np i64, nn i64) i64 {
   while j >= 0 {
     var i i64 = load64(c.scope + (j * 8))
     var rec i64 = c.locs + (i * LOCSIZE)
-    if ovid/mem.Eq(load64(rec + 0), load64(rec + 8), np, nn) {
+    if ovid/mem.Eq(bytes(load64(rec + 0), load64(rec + 8)), bytes(np, nn)) {
       n.loc = i + 1
       return 0
     }
@@ -510,7 +510,7 @@ func OffsetOf(c *C, tp i64, tn i64, fp i64, fnn i64) i64 {
   var k i64 = 0
   var f *ovid/parse.Decl = t.sub
   while f != 0 as *ovid/parse.Decl {
-    if ovid/mem.Eq(f.namep, f.namen, fp, fnn) {
+    if ovid/mem.Eq(bytes(f.namep, f.namen), bytes(fp, fnn)) {
       c.typ = f.typp
       c.tyn = f.typn
       return k * 8
@@ -2365,7 +2365,7 @@ func EmitFunc(c *C, fn *ovid/parse.Decl) i64 {
 func TrapLabel(c *C) i64 {
   var lab i64 = ovid/asm.NewLabel(c.code)
   store64(c.cell, lab)
-  ovid/mem.WBytes(c.io, c.traps, c.cell, 8)
+  ovid/mem.WBytes(c.io, c.traps, bytes(c.cell, 8))
   return lab
 }
 
@@ -2378,7 +2378,7 @@ func MarkLive(c *C, fn *ovid/parse.Decl) i64 {
   fn.live = 1
   if c.nwork >= c.workcap {
     var w i64 = ovid/io.Alloc(c.io, c.workcap * 16)
-    ovid/mem.Copy(w, c.work, c.workcap * 8)
+    ovid/mem.CopyN(w, c.work, c.workcap * 8)
     c.work = w
     c.workcap = c.workcap * 2
   }

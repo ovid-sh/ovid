@@ -5,19 +5,19 @@ import ovid/mem
 
 // BytesAre reports whether c holds exactly the n bytes at want.
 func BytesAre(io *ovid/io.Cap, c *Code, want i64, n i64) bool {
-  if ovid/mem.Eq(c.data, c.len, want, n) {
+  if ovid/mem.Eq(bytes(c.data, c.len), bytes(want, n)) {
     return true
   }
   var h i64 = ovid/io.Alloc(io, 2)
   var i i64 = 0
-  ovid/io.Eprint(strptr("got"))
+  ovid/io.Eprint("got")
   while i < c.len {
-    ovid/io.Eprint(strptr(" "))
+    ovid/io.Eprint(" ")
     ovid/mem.HexOut(h, load8(c.data + i), 2)
-    ovid/io.Stderr(h, 2)
+    ovid/io.Stderr(bytes(h, 2))
     i = i + 1
   }
-  ovid/io.Eprint(strptr("\n"))
+  ovid/io.Eprint("\n")
   return false
 }
 

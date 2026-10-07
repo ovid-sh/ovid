@@ -86,10 +86,10 @@ func Imm() i64 {
   return a + b
 }
 
-func Line(io *ovid/io.Cap, name i64, v i64) i64 {
+func Line(io *ovid/io.Cap, name bytes, v i64) i64 {
   ovid/io.Print(name)
   ovid/io.PrintInt(io, v)
-  ovid/io.Print(strptr("\n"))
+  ovid/io.Print("\n")
   return 0
 }
 
@@ -98,9 +98,9 @@ func main(io *ovid/io.Cap) i64 {
   var leaf i64 = Leaf(1)
   Dirty(1, 2, 3, 4, 5, 6)
   var frame i64 = Frame(0)
-  Line(io, strptr("leaf "), leaf)
-  Line(io, strptr("frame "), frame)
-  Line(io, strptr("loop "), Loop())
-  Line(io, strptr("imm "), Imm())
+  Line(io, "leaf ", leaf)
+  Line(io, "frame ", frame)
+  Line(io, "loop ", Loop())
+  Line(io, "imm ", Imm())
   return 0
 }

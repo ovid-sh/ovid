@@ -67,7 +67,7 @@ func ErrBegin(p *P) bool {
 }
 
 func EW(p *P, s i64, n i64) i64 {
-  return ovid/mem.WBytes(p.io, p.emsg, s, n)
+  return ovid/mem.WBytes(p.io, p.emsg, bytes(s, n))
 }
 
 func EWInt(p *P, v i64) i64 {
@@ -78,7 +78,7 @@ func EWInt(p *P, v i64) i64 {
 // ", found <token>", and the offset points at the end of the line when the
 // next token is on a later line.
 func ErrEnd(p *P) i64 {
-  if p.emsg.len >= 8 && ovid/mem.Eq(p.emsg.data, 8, strptr("expected"), 8) {
+  if p.emsg.len >= 8 && ovid/mem.Eq(bytes(p.emsg.data, 8), bytes(strptr("expected"), 8)) {
     EW(p, strptr(", found "), strlen(", found "))
     Found(p)
   }
@@ -292,7 +292,7 @@ func PeekKw(p *P, lit i64, n i64) bool {
   if p.kwend - p.i != n {
     return false
   }
-  return ovid/mem.Eq(p.src + p.i, n, lit, n)
+  return ovid/mem.Eq(bytes(p.src + p.i, n), bytes(lit, n))
 }
 
 func Kw(p *P, lit i64, n i64) bool {
@@ -337,8 +337,8 @@ func PeekAssign(p *P) bool {
 // Cat returns a new buffer holding a then b (length an + bn).
 func Cat(io *ovid/io.Cap, a i64, an i64, b i64, bn i64) i64 {
   var d i64 = ovid/io.Alloc(io, an + bn + 1)
-  ovid/mem.Copy(d, a, an)
-  ovid/mem.Copy(d + an, b, bn)
+  ovid/mem.CopyN(d, a, an)
+  ovid/mem.CopyN(d + an, b, bn)
   store8(d + an + bn, 0)
   return d
 }
@@ -389,7 +389,7 @@ func ParseType(p *P) i64 {
   }
   p.ttok = namep
   if pkgp == 0 {
-    if ovid/mem.Eq(namep, namen, strptr("i64"), 3) || ovid/mem.Eq(namep, namen, strptr("bool"), 4) || ovid/mem.Eq(namep, namen, strptr("bytes"), 5) {
+    if ovid/mem.Eq(bytes(namep, namen), bytes(strptr("i64"), 3)) || ovid/mem.Eq(bytes(namep, namen), bytes(strptr("bool"), 4)) || ovid/mem.Eq(bytes(namep, namen), bytes(strptr("bytes"), 5)) {
       if star {
         Errorf2(p, strptr("cannot use a pointer to "), strlen("cannot use a pointer to "), namep, namen)
       }
@@ -407,9 +407,9 @@ func ParseType(p *P) i64 {
   var tn i64 = ((k + pkgn) + 1) + namen
   var d i64 = ovid/io.Alloc(p.io, tn + 1)
   store8(d, 42)
-  ovid/mem.Copy(d + k, pkgp, pkgn)
+  ovid/mem.CopyN(d + k, pkgp, pkgn)
   store8((d + k) + pkgn, 46)
-  ovid/mem.Copy(((d + k) + pkgn) + 1, namep, namen)
+  ovid/mem.CopyN(((d + k) + pkgn) + 1, namep, namen)
   store8(d + tn, 0)
   p.tp = d
   p.tn = tn

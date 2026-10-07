@@ -25,7 +25,7 @@ import ovid/io
 func TestA_Big(io *ovid/io.Cap) i64 {
   var i i64 = 0
   while i < 100000 {
-    ovid/io.Print(strptr("0123456789\n"))
+    ovid/io.Print("0123456789\n")
     i = i + 1
   }
   return 0
@@ -33,20 +33,20 @@ func TestA_Big(io *ovid/io.Cap) i64 {
 
 func TestB_Flood(io *ovid/io.Cap) i64 {
   while true {
-    ovid/io.Print(strptr("0123456789\n"))
+    ovid/io.Print("0123456789\n")
   }
   return 0
 }
 
 func TestC_FloodMark(io *ovid/io.Cap) i64 {
   while true {
-    ovid/io.Write(3, strptr("0123456789\n"), 11)
+    ovid/io.Write(3, bytes(strptr("0123456789\n"), 11))
   }
   return 0
 }
 
 func TestD_Small(io *ovid/io.Cap) i64 {
-  ovid/io.Print(strptr("hi\n"))
+  ovid/io.Print("hi\n")
   return 1
 }
 

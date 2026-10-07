@@ -2,5 +2,5 @@ package demo
 import ovid/io
 func main(io *ovid/io.Cap) i64 {
   var a i64 = ovid/io.Alloc(io, 8)
-  return ovid/mem.Copy(a, a, 8) // error: missing_import 10 hint="add `import ovid/mem` after the package line"
+  return ovid/mem.CopyN(a, a, 8) // error: missing_import 10 hint="add `import ovid/mem` after the package line"
 }

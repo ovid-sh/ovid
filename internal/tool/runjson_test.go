@@ -20,11 +20,11 @@ type P struct {
 }
 
 func main(io *ovid/io.Cap) i64 {
-  ovid/io.Print(strptr("out\n"))
-  ovid/io.Eprint(strptr("{\"ok\":false}\n"))
+  ovid/io.Print("out\n")
+  ovid/io.Eprint("{\"ok\":false}\n")
   if ovid/io.Argc(io) == 2 {
     while true {
-      ovid/io.Print(strptr("0123456789\n"))
+      ovid/io.Print("0123456789\n")
     }
   }
   if ovid/io.Argc(io) == 3 {
@@ -111,7 +111,7 @@ func main(io *ovid/io.Cap) i64 {
   store8(p, 255)
   store8(p + 1, 10)
   store8(p + 2, 34)
-  ovid/io.Stdout(p, 3)
+  ovid/io.Stdout(bytes(p, 3))
   return 0
 }
 `))

@@ -6,10 +6,10 @@ import geo/shape
 func main(io *ovid/io.Cap) i64 {
   var r *geo/shape.Room = geo/shape.NewRoom(io, 4, 5, 21)
   ovid/io.PrintInt(io, geo/shape.Planned(r))
-  ovid/io.Print(strptr(" "))
+  ovid/io.Print(" ")
   ovid/io.PrintInt(io, r.Area)
-  ovid/io.Print(strptr(" "))
+  ovid/io.Print(" ")
   ovid/io.PrintInt(io, geo/shape.Area(2, 3) + geo/shape.Area(1, 1))
-  ovid/io.Print(strptr("\n"))
+  ovid/io.Print("\n")
   return 0
 }

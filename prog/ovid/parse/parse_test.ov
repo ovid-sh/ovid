@@ -22,9 +22,9 @@ func ErrIs(io *ovid/io.Cap, src i64, n i64, msg i64, mn i64, off i64) bool {
   if p.err == 0 {
     return false
   }
-  if !ovid/mem.Eq(p.emsg.data, p.emsg.len, msg, mn) {
-    ovid/io.Stderr(p.emsg.data, p.emsg.len)
-    ovid/io.Stderr(strptr("\n"), 1)
+  if !ovid/mem.Eq(bytes(p.emsg.data, p.emsg.len), bytes(msg, mn)) {
+    ovid/io.Stderr(bytes(p.emsg.data, p.emsg.len))
+    ovid/io.Stderr(bytes(strptr("\n"), 1))
     return false
   }
   return p.eoff == off
@@ -135,7 +135,7 @@ func TestPkgConst(io *ovid/io.Cap) i64 {
     return 2
   }
   var l *Node = add.left
-  if l.op != OP_NAME || !ovid/mem.Eq(l.pkgp, l.pkgn, strptr("ovid/io"), 7) || !ovid/mem.Eq(l.namep, l.namen, strptr("O_CREAT"), 7) {
+  if l.op != OP_NAME || !ovid/mem.Eq(bytes(l.pkgp, l.pkgn), bytes(strptr("ovid/io"), 7)) || !ovid/mem.Eq(bytes(l.namep, l.namen), bytes(strptr("O_CREAT"), 7)) {
     return 3
   }
   // io is not an imported path, so io.X stays a field access.

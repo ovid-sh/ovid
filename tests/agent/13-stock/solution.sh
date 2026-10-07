@@ -28,7 +28,7 @@ func NewTable(io *ovid/io.Cap) *Table {
 // Same reports whether the an bytes at a and the bn bytes at b are the
 // same name.
 func Same(a i64, an i64, b i64, bn i64) bool {
-  return ovid/mem.Eq(a, an, b, bn)
+  return ovid/mem.Eq(bytes(a, an), bytes(b, bn))
 }
 
 // Index returns the index of the name of n bytes at p, adding it with a
@@ -45,8 +45,8 @@ func Index(io *ovid/io.Cap, t *Table, p i64, n i64) i64 {
   if t.len == t.cap {
     var names i64 = ovid/io.Alloc(io, t.cap * 32)
     var counts i64 = ovid/io.Alloc(io, t.cap * 16)
-    ovid/mem.Copy(names, t.names, t.len * 16)
-    ovid/mem.Copy(counts, t.counts, t.len * 8)
+    ovid/mem.CopyN(names, t.names, t.len * 16)
+    ovid/mem.CopyN(counts, t.counts, t.len * 8)
     t.names = names
     t.counts = counts
     t.cap = t.cap * 2
@@ -119,38 +119,36 @@ func Load(io *ovid/io.Cap, t *Table, p i64, n i64) i64 {
 // first seen, NAME TOTAL, then the line "total" and the sum of all counts.
 func main(io *ovid/io.Cap) i64 {
   if ovid/io.Argc(io) < 2 {
-    ovid/io.Eprint(strptr("usage: stock FILE\n"))
+    ovid/io.Eprint("usage: stock FILE\n")
     return 1
   }
-  var name i64 = ovid/io.Arg(io, 1)
-  var nn i64 = ovid/io.Alloc(io, 8)
-  var data i64, re i64 = ovid/io.ReadFile(io, name, ovid/io.CLen(name), nn)
+  var data bytes, re i64 = ovid/io.ReadFile(io, ovid/io.Arg(io, 1))
   if re != 0 {
-    ovid/io.Eprint(strptr("stock: cannot read the file\n"))
+    ovid/io.Eprint("stock: cannot read the file\n")
     return 1
   }
   var t *Table = NewTable(io)
-  var bad i64 = Load(io, t, data, load64(nn))
+  var bad i64 = Load(io, t, ptr(data), len(data))
   if bad != 0 {
-    ovid/io.Eprint(strptr("stock: bad line "))
+    ovid/io.Eprint("stock: bad line ")
     ovid/io.WriteInt(io, 2, bad)
-    ovid/io.Eprint(strptr("\n"))
+    ovid/io.Eprint("\n")
     return 1
   }
   var sum i64 = 0
   var i i64 = 0
   while i < t.len {
     var e i64 = t.names + i * 16
-    ovid/io.Stdout(load64(e), load64(e + 8))
-    ovid/io.Print(strptr(" "))
+    ovid/io.Stdout(bytes(load64(e), load64(e + 8)))
+    ovid/io.Print(" ")
     ovid/io.PrintInt(io, load64(t.counts + i * 8))
-    ovid/io.Print(strptr("\n"))
+    ovid/io.Print("\n")
     sum = sum + load64(t.counts + i * 8)
     i = i + 1
   }
-  ovid/io.Print(strptr("total "))
+  ovid/io.Print("total ")
   ovid/io.PrintInt(io, sum)
-  ovid/io.Print(strptr("\n"))
+  ovid/io.Print("\n")
   return 0
 }
 EOF

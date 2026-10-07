@@ -12,20 +12,20 @@ func Eq(io *ovid/io.Cap, got i64, want i64) bool {
   if got == want {
     return true
   }
-  ovid/io.Eprint(strptr("got "))
+  ovid/io.Eprint("got ")
   ovid/io.WriteInt(io, 2, got)
-  ovid/io.Eprint(strptr(", want "))
+  ovid/io.Eprint(", want ")
   ovid/io.WriteInt(io, 2, want)
-  ovid/io.Eprint(strptr("\n"))
+  ovid/io.Eprint("\n")
   return false
 }
 
-// True reports ok. If it is false, it writes msg (a NUL-terminated
-// literal: strptr("...")) and a newline to stderr.
-func True(ok bool, msg i64) bool {
+// True reports ok. If it is false, it writes msg and a newline to
+// stderr: ovid/test.True(n > 0, "n is positive").
+func True(ok bool, msg bytes) bool {
   if !ok {
     ovid/io.Eprint(msg)
-    ovid/io.Eprint(strptr("\n"))
+    ovid/io.Eprint("\n")
   }
   return ok
 }

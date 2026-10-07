@@ -18,7 +18,7 @@ import ovid/io
 func Dump(io *ovid/io.Cap) i64 {
   var n i64 = 0
   var argc i64 = ovid/io.Argc(io)
-  var p i64 = ovid/io.Arg(io, argc - 1)
+  var p i64 = ovid/io.ArgC(io, argc - 1)
   p = (p + ovid/io.CLen(p)) + 1
   while load8(p) != 0 {
     var len i64 = ovid/io.CLen(p)
@@ -29,18 +29,18 @@ func Dump(io *ovid/io.Cap) i64 {
       i = i + 1
     }
     if eq {
-      ovid/io.Stdout(p, len)
-      ovid/io.Print(strptr("\n"))
+      ovid/io.Stdout(bytes(p, len))
+      ovid/io.Print("\n")
       n = n + 1
     }
     p = (p + len) + 1
   }
-  if ovid/io.Arg(io, argc + 1) != 0 || ovid/io.Arg(io, argc) != 0 || ovid/io.Arg(io, -1) != 0 {
-    ovid/io.Print(strptr("Arg reads past the arguments\n"))
+  if ovid/io.ArgC(io, argc + 1) != 0 || ovid/io.ArgC(io, argc) != 0 || ovid/io.ArgC(io, -1) != 0 {
+    ovid/io.Print("Arg reads past the arguments\n")
   }
-  ovid/io.Print(strptr("entries: "))
+  ovid/io.Print("entries: ")
   ovid/io.PrintInt(io, n)
-  ovid/io.Print(strptr("\n"))
+  ovid/io.Print("\n")
   return 0
 }
 

@@ -135,7 +135,7 @@ func Sum(io *ovid/io.Cap, data i64, n i64, out i64) i64 {
     off = off + 64
   }
   var tlen i64 = n - off
-  ovid/mem.Copy(pad, data + off, tlen)
+  ovid/mem.CopyN(pad, data + off, tlen)
   store8(pad + tlen, 128)
   tlen = tlen + 1
   if tlen > 56 {

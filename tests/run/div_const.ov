@@ -502,9 +502,9 @@ func main(io *ovid/io.Cap) i64 {
   bad = bad + edge((0 - 2147483648) * 3)
   if bad > 0 {
     ovid/io.PrintInt(io, bad)
-    ovid/io.Print(strptr(" wrong\n"))
+    ovid/io.Print(" wrong\n")
     return 1
   }
-  ovid/io.Print(strptr("ok\n"))
+  ovid/io.Print("ok\n")
   return 0
 }
