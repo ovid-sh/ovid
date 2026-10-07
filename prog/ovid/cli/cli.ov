@@ -12,6 +12,7 @@ type Args struct {
   std i64
   out i64
   bad i64
+  q i64
 }
 
 func ArgEq(io *ovid/io.Cap, i i64, lit i64, n i64) bool {
@@ -34,7 +35,7 @@ func Usage(io *ovid/io.Cap, msg i64, msgn i64) i64 {
   var b *ovid/mem.Buf = ovid/mem.New(io, 1024)
   ovid/mem.WBytes(io, b, strptr("{\"ok\":false,\"error\":\"usage\",\"message\":"), strlen("{\"ok\":false,\"error\":\"usage\",\"message\":"))
   ovid/parse.WStr(io, b, msg, msgn)
-  ovid/mem.WBytes(io, b, strptr(",\"usage\":\"ovid check [dir] [--std dir] | ovid build [dir] [-o out] [--std dir] | ovid dump [dir] [--std dir]; dir defaults to . and may also be given as -C dir; out defaults to <dir>/bin/<module name>; --std names the directory holding the shipped packages (ovid/io, ovid/mem)\"}\n"), strlen(",\"usage\":\"ovid check [dir] [--std dir] | ovid build [dir] [-o out] [--std dir] | ovid dump [dir] [--std dir]; dir defaults to . and may also be given as -C dir; out defaults to <dir>/bin/<module name>; --std names the directory holding the shipped packages (ovid/io, ovid/mem)\"}\n"))
+  ovid/mem.WBytes(io, b, strptr(",\"usage\":\"ovid check [dir] [--std dir] | ovid build [dir] [-o out] [--std dir] | ovid dump [dir] [--std dir] | ovid refs <id|name> [dir] [--std dir]; dir defaults to . and may also be given as -C dir; out defaults to <dir>/bin/<module name>; --std names the directory holding the shipped packages (ovid/io, ovid/mem)\"}\n"), strlen(",\"usage\":\"ovid check [dir] [--std dir] | ovid build [dir] [-o out] [--std dir] | ovid dump [dir] [--std dir] | ovid refs <id|name> [dir] [--std dir]; dir defaults to . and may also be given as -C dir; out defaults to <dir>/bin/<module name>; --std names the directory holding the shipped packages (ovid/io, ovid/mem)\"}\n"))
   ovid/io.Stdout(b.data, b.len)
   return 64
 }
@@ -83,7 +84,10 @@ func MkParent(io *ovid/io.Cap, path i64) i64 {
 
 // ParseArgs reads [dir] [-C dir] [--std dir] and, when allowOut, [-o out]
 // from argv[2:]. a.bad is set (and a message printed) on a usage error.
-func ParseArgs(io *ovid/io.Cap, allowOut bool) *Args {
+// ParseArgs reads the command line after the command: the module dir, -C
+// DIR, --std DIR, -o OUT when allowOut, and when wantQ the first bare word
+// as the query (a.q) before the dir.
+func ParseArgs(io *ovid/io.Cap, allowOut bool, wantQ bool) *Args {
   var a *Args = ovid/io.Alloc(io, sizeof(Args)) as *Args
   var i i64 = 2
   var n i64 = ovid/io.Argc(io)
@@ -104,6 +108,9 @@ func ParseArgs(io *ovid/io.Cap, allowOut bool) *Args {
       i = i + 2
     } else if load8(ovid/io.Arg(io, i)) == 45 {
       a.bad = Usage(io, ovid/io.Arg(io, i), ovid/io.CLen(ovid/io.Arg(io, i)))
+    } else if wantQ && a.q == 0 {
+      a.q = ovid/io.Arg(io, i)
+      i = i + 1
     } else if a.dir != 0 {
       a.bad = Usage(io, strptr("more than one module dir"), strlen("more than one module dir"))
     } else {
@@ -137,7 +144,7 @@ func LoadArgs(io *ovid/io.Cap, a *Args, build bool) *ovid/parse.Mod {
 }
 
 func CmdCheck(io *ovid/io.Cap) i64 {
-  var a *Args = ParseArgs(io, false)
+  var a *Args = ParseArgs(io, false, false)
   if a.bad != 0 {
     return a.bad
   }
@@ -152,7 +159,7 @@ func CmdCheck(io *ovid/io.Cap) i64 {
 }
 
 func CmdDump(io *ovid/io.Cap) i64 {
-  var a *Args = ParseArgs(io, false)
+  var a *Args = ParseArgs(io, false, false)
   if a.bad != 0 {
     return a.bad
   }
@@ -166,7 +173,7 @@ func CmdDump(io *ovid/io.Cap) i64 {
 }
 
 func CmdBuild(io *ovid/io.Cap) i64 {
-  var a *Args = ParseArgs(io, true)
+  var a *Args = ParseArgs(io, true, false)
   if a.bad != 0 {
     return a.bad
   }
@@ -238,10 +245,13 @@ func main(io *ovid/io.Cap) i64 {
   if ArgEq(io, 1, strptr("dump"), 4) {
     return CmdDump(io)
   }
+  if ArgEq(io, 1, strptr("refs"), 4) {
+    return CmdRefs(io)
+  }
   var cmd i64 = ovid/io.Arg(io, 1)
   var b *ovid/mem.Buf = ovid/mem.New(io, 256)
   ovid/mem.WBytes(io, b, strptr("unknown command "), strlen("unknown command "))
   ovid/mem.WBytes(io, b, cmd, ovid/io.CLen(cmd))
-  ovid/mem.WBytes(io, b, strptr("; commands: check build dump"), strlen("; commands: check build dump"))
+  ovid/mem.WBytes(io, b, strptr("; commands: check build dump refs"), strlen("; commands: check build dump refs"))
   return Usage(io, b.data, b.len)
 }

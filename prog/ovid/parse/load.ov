@@ -29,6 +29,9 @@ type Mod struct {
   out *ovid/mem.Buf
   json *ovid/mem.Buf
   modsrc i64
+  uses *Use
+  usest *Use
+  nuses i64
   modlen i64
   ftab i64
   fmask i64
@@ -534,8 +537,9 @@ func StdPass(m *Mod) i64 {
           var t i64 = Cat(m.io, strptr("std:"), 4, sorted.pathp, sorted.pathn)
           f.relp = Path(m.io, t, 4 + sorted.pathn, e.relp, e.reln)
           f.reln = (5 + sorted.pathn) + e.reln
-          f.dispp = full
-          f.dispn = ovid/io.CLen(full)
+          // Shown as std:<pkg>/<file>, as the Go toolchain shows it.
+          f.dispp = f.relp
+          f.dispn = f.reln
           f.src = src
           f.n = load64(pn)
           f.std = 1
