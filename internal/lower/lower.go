@@ -24,6 +24,7 @@ package lower
 
 import (
 	"fmt"
+	"math"
 	"strings"
 
 	"ovid/internal/check"
@@ -253,7 +254,13 @@ func (l *lowerer) pair(n *ir.Node, p *pre) (addr, ln *ir.Node, err error) {
 			return nil, nil, err
 		}
 		ln, err := l.hoist(n.Right, p)
-		return a, ln, err
+		if err != nil {
+			return nil, nil, err
+		}
+		// n < 2^63 unsigned: a negative length would let every later
+		// check pass.
+		*p = append(*p, &ir.Node{Op: "chk", Addr: ln, Val: &ir.Node{Op: "int", Int: math.MinInt64}})
+		return a, ln, nil
 	case "field":
 		base, err := l.hoist(n.Base, p)
 		if err != nil {
