@@ -87,7 +87,7 @@ func (c *checker) use(target, id, kind, in string, sp ir.Span) {
 // useType records a use of the struct type t resolves to, if it is one.
 func (c *checker) useType(t, id, kind, in string, sp ir.Span) {
 	t = strings.TrimPrefix(t, "*")
-	if t == "" || t == "i64" || t == "bool" || t == "invalid" {
+	if t == "" || t == "i64" || t == "bool" || t == "bytes" || t == "invalid" {
 		return
 	}
 	c.use("ty:"+t, id, kind, in, sp)
