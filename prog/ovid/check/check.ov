@@ -171,8 +171,6 @@ func WHerePos(c *Ch) i64 {
   return ovid/parse.WPos(c.io, c.b, d.file, d.off)
 }
 
-// Err prints one error line: code, message, the id it is about, and that
-// id's source position.
 // BuiltinArity reports builtin n called with the wrong number of
 // arguments, which the parser left in args, checks those, and gives the
 // call the builtin's type (bool for ult), so nothing else is reported.
@@ -190,6 +188,8 @@ func BuiltinArity(c *Ch, n *ovid/parse.Node, isBool bool) i64 {
   return SetI64(c)
 }
 
+// Err prints one error line: code, message, the id it is about, and that
+// id's source position.
 func Err(c *Ch, code i64, coden i64, detail i64, dn i64) i64 {
   c.errs = c.errs + 1
   WLit(c, strptr("{\"fact\":\"error\",\"code\":"), strlen("{\"fact\":\"error\",\"code\":"))
