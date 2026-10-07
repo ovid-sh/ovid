@@ -186,7 +186,7 @@ func StdHas(m *Mod, pathp i64, pathn i64) bool {
 }
 
 // ListDir returns the entries of a directory as a list of Files used as
-// (name = relp/reln, std = d_type), sorted by name, without . and ..
+// (name = rel, std = d_type), sorted by name, without . and ..
 // It uses getdents64 through ovid/io.Getdents.
 func ListDir(io *ovid/io.Cap, path i64) *File {
   var fd i64, e i64 = ovid/io.Open(path, 65536, 0)
@@ -218,7 +218,7 @@ func ListDir(io *ovid/io.Cap, path i64) *File {
   return head
 }
 
-// InsertByName inserts f into the list sorted by relp.
+// InsertByName inserts f into the list sorted by rel.
 func InsertByName(head *File, f *File) *File {
   if head == 0 as *File || Cmp(ptr(f.rel), len(f.rel), ptr(head.rel), len(head.rel)) < 0 {
     f.next = head
