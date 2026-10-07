@@ -472,9 +472,10 @@ type Cursor struct {
 }
 
 // LineFrom is the 1-based line of offset off in f, and the trimmed text of
-// that line (its start and length go to line). It continues from cur when
-// that lies in the same file before off, and leaves cur at off.
-func LineFrom(f *ovid/parse.File, off i64, lines bytes, cur *Cursor) i64 {
+// that line (its start and length go to out, two words). It continues
+// from cur when that lies in the same file before off, and leaves cur at
+// off.
+func LineFrom(f *ovid/parse.File, off i64, out i64, cur *Cursor) i64 {
   var line i64 = 1
   var ls i64 = 0
   var i i64 = 0
@@ -508,8 +509,8 @@ func LineFrom(f *ovid/parse.File, off i64, lines bytes, cur *Cursor) i64 {
   while le > ls && (load8(ptr(f.src) + (le - 1)) == 32 || load8(ptr(f.src) + (le - 1)) == 9 || load8(ptr(f.src) + (le - 1)) == 13) {
     le = le - 1
   }
-  store64(ptr(lines), ptr(f.src) + ls)
-  store64(len(lines), le - ls)
+  store64(out, ptr(f.src) + ls)
+  store64(out + 8, le - ls)
   return line
 }
 
@@ -641,8 +642,7 @@ func CmdRefs(io *ovid/io.Cap) i64 {
     i = i + 1
   }
   var b *ovid/mem.Buf = ovid/mem.New(io, 4096)
-  var lp i64 = ovid/io.Alloc(io, 8)
-  var ln i64 = ovid/io.Alloc(io, 8)
+  var out i64 = ovid/io.Alloc(io, 16)
   var cur *Cursor = ovid/io.Alloc(io, sizeof(Cursor)) as *Cursor
   var last *ovid/parse.Decl = 0 as *ovid/parse.Decl
   var files i64 = 0
@@ -674,7 +674,7 @@ func CmdRefs(io *ovid/io.Cap) i64 {
     } else if u.udecl != 0 as *ovid/parse.Decl {
       off = u.udecl.off
     }
-    var line i64 = LineFrom(f, off, bytes(lp, ln), cur)
+    var line i64 = LineFrom(f, off, out, cur)
     var tmp i64 = ovid/io.Alloc(io, 32)
     var dn i64 = ovid/mem.FormatI64(tmp, line)
     var pad i64 = 4 - dn
@@ -684,7 +684,7 @@ func CmdRefs(io *ovid/io.Cap) i64 {
     }
     ovid/mem.WBytes(io, b, bytes(tmp, dn))
     ovid/mem.WBytes(io, b, ": ")
-    ovid/mem.WBytes(io, b, bytes(load64(lp), load64(ln)))
+    ovid/mem.WBytes(io, b, bytes(load64(out), load64(out + 8)))
     ovid/mem.WByte(io, b, 10)
     i = i + 1
   }
