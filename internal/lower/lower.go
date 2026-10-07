@@ -13,7 +13,8 @@
 // constant), so anything else is first moved into a temp local (t#k)
 // by a statement placed before the one being lowered. Moving an
 // expression keeps evaluation order: every earlier expression in the
-// same statement that calls a func is moved too, and an operand of &&
+// same statement that is not a simple operand is moved too (a memory
+// read left of a call that writes it must come first), and an operand of &&
 // or || or a while condition that needs a move is restructured into an
 // if, so the move runs exactly when the operand would have.
 //
@@ -216,17 +217,6 @@ func simple(n *ir.Node) bool {
 	return false
 }
 
-// hasCall says evaluating n could call a func.
-func hasCall(n *ir.Node) bool {
-	found := false
-	n.Walk(func(m *ir.Node) {
-		if m.Op == "call" || m.Op == "syscall" {
-			found = true
-		}
-	})
-	return found
-}
-
 // temp declares a fresh local of type t holding v, in pre, and names it.
 func (l *lowerer) temp(t string, v *ir.Node, p *pre) *ir.Node {
 	l.tmp++
@@ -308,9 +298,9 @@ func (l *lowerer) pair(n *ir.Node, p *pre) (addr, ln *ir.Node, err error) {
 
 // expr lowers the bytes operations inside an i64 or bool expression,
 // placing in p what must run first. Children go in evaluation order,
-// and when one adds to p, every earlier child that calls a func is
-// moved into a temp ahead of that addition, so calls still happen in
-// source order.
+// and when one adds to p, every earlier child that is not a simple
+// operand is moved into a temp ahead of that addition, so what it
+// computes or reads still happens in source order.
 func (l *lowerer) expr(n *ir.Node, p *pre) (*ir.Node, error) {
 	if n == nil {
 		return nil, nil
@@ -359,7 +349,7 @@ func (l *lowerer) expr(n *ir.Node, p *pre) (*ir.Node, error) {
 	case "call", "syscall":
 		m := *n
 		m.Args = nil
-		var kept []int // indexes into m.Args of earlier args with calls
+		var kept []int // indexes into m.Args of earlier args not simple
 		for _, a := range n.Args {
 			at := len(*p)
 			if l.typeOf(a) == "bytes" {
@@ -376,7 +366,7 @@ func (l *lowerer) expr(n *ir.Node, p *pre) (*ir.Node, error) {
 				return nil, err
 			}
 			kept = l.keepOrder(p, at, m.Args, kept)
-			if hasCall(a) {
+			if !simple(a) {
 				kept = append(kept, len(m.Args))
 			}
 			m.Args = append(m.Args, a)
@@ -395,9 +385,9 @@ func (l *lowerer) expr(n *ir.Node, p *pre) (*ir.Node, error) {
 			return nil, err
 		}
 		if len(*p) > at {
-			// Earlier siblings with calls move ahead of this addition.
+			// Earlier siblings not simple move ahead of this addition.
 			for _, g := range done {
-				if hasCall(*g) {
+				if !simple(*g) {
 					l.insertTemp(p, at, g)
 					at++
 				}
@@ -412,8 +402,8 @@ func (l *lowerer) expr(n *ir.Node, p *pre) (*ir.Node, error) {
 
 // keepOrder is expr's reordering for call arguments: when lowering the
 // argument that started at mark at added statements, the earlier
-// arguments that call funcs (kept, indexes into args) move into temps
-// placed at at, ahead of those statements. It returns kept, emptied
+// arguments that are not simple (kept, indexes into args) move into
+// temps placed at at, ahead of those statements. It returns kept, emptied
 // when they moved.
 func (l *lowerer) keepOrder(p *pre, at int, args []*ir.Node, kept []int) []int {
 	if len(*p) == at {

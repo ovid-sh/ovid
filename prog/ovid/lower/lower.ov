@@ -21,7 +21,8 @@ import ovid/parse
 // constant), so anything else is first moved into a temp local (t#k)
 // by a statement placed before the one being lowered. Moving an
 // expression keeps evaluation order: every earlier expression in the
-// same statement that calls a func is moved too, and an operand of &&
+// same statement that is not a simple operand is moved too (a memory
+// read left of a call that writes it must come first), and an operand of &&
 // or || or a while condition that needs a move is restructured into an
 // if, so the move runs exactly when the operand would have.
 //
@@ -391,20 +392,6 @@ func Simple(n *ovid/parse.Node) bool {
   return op == ovid/parse.OP_NAME || op == ovid/parse.OP_INT || op == ovid/parse.OP_STRLEN || op == ovid/parse.OP_STRPTR || op == ovid/parse.OP_SIZEOF || op == ovid/parse.OP_LEN
 }
 
-// HasCall says evaluating n could call a func.
-func HasCall(n *ovid/parse.Node) bool {
-  while n != 0 as *ovid/parse.Node {
-    if n.op == ovid/parse.OP_CALL || n.op == ovid/parse.OP_SYSCALL {
-      return true
-    }
-    if HasCall(n.left) || HasCall(n.right) || HasCall(n.arg) || HasCall(n.base) || HasCall(n.addr) || HasCall(n.val) || HasCall(n.val2) || HasCall(n.cond) || HasCall(n.args) || HasCall(n.then) || HasCall(n.els) || HasCall(n.body) {
-      return true
-    }
-    n = n.next
-  }
-  return false
-}
-
 // TmpName makes the name t#k of a fresh temp, at l.typ (the address) and
 // l.tyn (its length), without touching the type the caller holds.
 func TmpName(l *L, out i64) i64 {
@@ -578,8 +565,9 @@ func Grew(p *Pre, mark *ovid/parse.Node) bool {
 }
 
 // MoveCalls moves every node in the list kept (a list of name-less
-// holder nodes whose base is the node to move) into a temp placed after
-// mark in p, in order, and returns the mark after the last one.
+// holder nodes whose base is the node to move, none simple) into a temp
+// placed after mark in p, in order, and returns the mark after the last
+// one.
 func MoveCalls(l *L, p *Pre, mark *ovid/parse.Node, kept *ovid/parse.Node) *ovid/parse.Node {
   while kept != 0 as *ovid/parse.Node {
     var n *ovid/parse.Node = kept.base
@@ -640,9 +628,9 @@ func Child(n *ovid/parse.Node, k i64) *ovid/parse.Node {
 
 // Expr lowers the bytes operations inside an i64 or bool expression, in
 // place, placing in p what must run first. Children go in evaluation
-// order, and when one adds to p, every earlier child that calls a func
-// is moved into a temp ahead of that addition, so calls still happen in
-// source order.
+// order, and when one adds to p, every earlier child that is not a
+// simple operand is moved into a temp ahead of that addition, so what
+// it computes or reads still happens in source order.
 func Expr(l *L, n *ovid/parse.Node, p *Pre) i64 {
   if n == 0 as *ovid/parse.Node {
     return 0
@@ -708,7 +696,6 @@ func Expr(l *L, n *ovid/parse.Node, p *Pre) i64 {
     var a *ovid/parse.Node = n.args
     while a != 0 as *ovid/parse.Node {
       var nxt *ovid/parse.Node = a.next
-      // Off the list, so HasCall sees this argument alone.
       a.next = 0 as *ovid/parse.Node
       var at *ovid/parse.Node = p.tail
       if IsBytesExpr(l, a) {
@@ -725,7 +712,7 @@ func Expr(l *L, n *ovid/parse.Node, p *Pre) i64 {
           MoveCalls(l, p, at, kept)
           kept = 0 as *ovid/parse.Node
         }
-        if HasCall(a) {
+        if !Simple(a) {
           kept = Keep(l, kept, a)
         }
         Append(out, a)
@@ -743,11 +730,11 @@ func Expr(l *L, n *ovid/parse.Node, p *Pre) i64 {
       var at *ovid/parse.Node = p.tail
       Expr(l, ch, p)
       if Grew(p, at) {
-        // Earlier siblings with calls move ahead of this addition.
+        // Earlier siblings not simple move ahead of this addition.
         var mk *ovid/parse.Node = at
         var d *ovid/parse.Node = done
         while d != 0 as *ovid/parse.Node {
-          if HasCall(d.base) {
+          if !Simple(d.base) {
             mk = MoveCalls(l, p, mk, Keep(l, 0 as *ovid/parse.Node, d.base))
           }
           d = d.next

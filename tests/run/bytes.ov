@@ -71,6 +71,24 @@ func Second(s bytes) (bytes, i64) {
   return Field(s, 1)
 }
 
+// Tag returns its bytes with a code that is a local, and Tagged one
+// whose code is a call, in a func that otherwise calls nothing.
+func Tag(s bytes, n i64) (bytes, i64) {
+  var code i64 = n * 2
+  return s, code
+}
+
+func Tagged(s bytes, n i64) (bytes, i64) {
+  return s, Id(n)
+}
+
+// Bump adds one to r.n and returns r.path: a call that writes memory a
+// caller may have read just before it.
+func Bump(r *Req) bytes {
+  r.n = r.n + 1
+  return r.path
+}
+
 func NewReq(io *ovid/io.Cap, path bytes) *Req {
   var r *Req = ovid/io.Alloc(io, sizeof(Req)) as *Req
   r.id = 7
@@ -172,6 +190,19 @@ func main(io *ovid/io.Cap) i64 {
   var q i64 = 2
   if Three(q + 1, t[1:3], Id(q)) != 300 + 101 + 2 {
     return 19
+  }
+  var tg bytes, tc i64 = Tag(t, 21)
+  if tc != 42 || !Eq(tg, t) {
+    return 20
+  }
+  tg, tc = Tagged(t, 7)
+  if tc != 7 || len(tg) != 11 {
+    return 21
+  }
+  // r.n is read before Bump writes it.
+  r.n = 5
+  if r.n + Bump(r)[0] != 5 + 79 || r.n != 6 {
+    return 22
   }
   // The byte of a string literal, a slice of a call's result.
   if "abc"[1] != 98 || len(Upper(io, "xy")[1:2]) != 1 {
