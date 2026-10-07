@@ -26,7 +26,7 @@
 // stdout: "HTTP/1.1 205 Reset Content\r\nX-A: 1\r\nContent-Length: 0\r\n\r\n"
 // stdout: "HTTP/1.1 200 OK\r\nX-A: 1\r\nContent-Length: 2\r\n\r\n"
 // stdout: "test: 201 /x 3 b=2 7\n"
-// stdout: "has: 11011101\n"
+// stdout: "has: 110111011\n"
 package demo
 
 import ovid/io
@@ -145,7 +145,7 @@ func main(io *ovid/io.Cap) i64 {
   ovid/io.Print("\n")
   // A header with an empty value is there, with an empty value; a
   // missing one is not, and reads as empty too. The same for the
-  // headers a handler set.
+  // headers a handler set, and one it set with a value is there.
   ovid/http.AddHeader(io, req, "X-Empty", "")
   ovid/http.SetHeader(io, out, "X-Set-Empty", "")
   ovid/http.SetHeader(io, out, "Content-Type", "text/plain")
@@ -157,6 +157,7 @@ func main(io *ovid/io.Cap) i64 {
   yes(io, ovid/http.HasSentHeader(out, "x-set-empty"))
   yes(io, len(ovid/http.SentHeader(out, "x-set-empty")) == 0)
   yes(io, ovid/http.HasSentHeader(out, "x-set-none"))
+  yes(io, len(ovid/http.SentHeader(out, "x-set-none")) == 0)
   yes(io, ovid/http.HasSentHeader(out, "content-type"))
   ovid/io.Print("\n")
   return 0
