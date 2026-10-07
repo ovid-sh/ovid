@@ -11,7 +11,8 @@
 # benchmarks never share the machine.
 #
 # Env: PORT (8080), UPSTREAM_PORT (9100), DURATION (10s), CONCURRENCY
-# ("1 10 100 1000"), PATHS ("/w1 /w2").
+# ("1 10 100 1000"), PATHS ("/w1 /w2"), TW_MAX (2000: wait for fewer
+# sockets than this in TIME_WAIT before each run).
 set -euo pipefail
 
 label=${1:?label}
@@ -22,6 +23,7 @@ UPSTREAM_PORT=${UPSTREAM_PORT:-9100}
 DURATION=${DURATION:-10s}
 CONCURRENCY=${CONCURRENCY:-"1 10 100 1000"}
 PATHS=${PATHS:-"/w1 /w2"}
+TW_MAX=${TW_MAX:-2000}
 
 root=$(pwd)
 out="$root/experiments/async/results/$label-native.jsonl"
@@ -67,6 +69,14 @@ commit=${COMMIT:-$(git rev-parse --short HEAD 2>/dev/null || echo unknown)}
 bytes=$(stat -c %s "$tmp/server")
 for path in $PATHS; do
 	for c in $CONCURRENCY; do
+		# Every upstream call is a new connection, so a busy run leaves tens
+		# of thousands of sockets in TIME_WAIT (60 s). Let them drain, up to
+		# 90 s, so one run does not start in the last one's port shortage.
+		for _ in $(seq 1 90); do
+			[ "$(ss -Htan state time-wait | wc -l)" -lt "$TW_MAX" ] && break
+			sleep 1
+		done
+		tw=$(ss -Htan state time-wait | wc -l)
 		peak=0
 		"$tmp/loadgen" -addr "127.0.0.1:$PORT" -path "$path" -c "$c" -d "$DURATION" -label "$label" >"$tmp/line" &
 		lg=$!
@@ -80,7 +90,7 @@ for path in $PATHS; do
 		kill -0 "$server" 2>/dev/null || alive=false
 		# Add what loadgen cannot see: the server's memory, binary size,
 		# whether it survived, and where it ran.
-		sed -e "s/}\$/,\"peak_rss_kb\":$peak,\"binary_bytes\":$bytes,\"server_alive\":$alive,\"platform\":\"native\",\"host\":\"$host\",\"commit\":\"$commit\"}/" "$tmp/line" | tee -a "$out"
+		sed -e "s/}\$/,\"peak_rss_kb\":$peak,\"binary_bytes\":$bytes,\"server_alive\":$alive,\"time_wait_at_start\":$tw,\"platform\":\"native\",\"host\":\"$host\",\"commit\":\"$commit\"}/" "$tmp/line" | tee -a "$out"
 		$alive || { echo "server died" >&2; exit 1; }
 	done
 done
