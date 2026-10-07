@@ -48,10 +48,8 @@ func Stmt(io *ovid/io.Cap, op i64, next *ovid/parse.Node) *ovid/parse.Node {
 // Var declares np[0:nn] of type tp[0:tn], followed by next.
 func Var(io *ovid/io.Cap, np i64, nn i64, tp i64, tn i64, next *ovid/parse.Node) *ovid/parse.Node {
   var n *ovid/parse.Node = Stmt(io, ovid/parse.OP_VAR, next)
-  n.namep = np
-  n.namen = nn
-  n.typp = tp
-  n.typn = tn
+  n.name = bytes(np, nn)
+  n.typ = bytes(tp, tn)
   return n
 }
 
@@ -64,8 +62,7 @@ func I64(io *ovid/io.Cap, np i64, nn i64, next *ovid/parse.Node) *ovid/parse.Nod
 func Use(io *ovid/io.Cap, np i64, nn i64, next *ovid/parse.Node) *ovid/parse.Node {
   var n *ovid/parse.Node = Stmt(io, ovid/parse.OP_EXPR, next)
   var e *ovid/parse.Node = Stmt(io, ovid/parse.OP_NAME, 0 as *ovid/parse.Node)
-  e.namep = np
-  e.namen = nn
+  e.name = bytes(np, nn)
   n.val = e
   return n
 }

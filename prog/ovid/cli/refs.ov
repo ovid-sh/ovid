@@ -265,9 +265,9 @@ func ByID(m *ovid/parse.Mod, t *Target, qp i64, qn i64) i64 {
       t.bad = ovid/mem.New(m.io, 256)
       ovid/mem.WBytes(m.io, t.bad, bytes(qp, qn))
       ovid/mem.WBytes(m.io, t.bad, " declares two locals, ")
-      ovid/mem.WBytes(m.io, t.bad, bytes(t.vn.namep, t.vn.namen))
+      ovid/mem.WBytes(m.io, t.bad, t.vn.name)
       ovid/mem.WBytes(m.io, t.bad, " and ")
-      ovid/mem.WBytes(m.io, t.bad, bytes(t.vn.name2p, t.vn.name2n))
+      ovid/mem.WBytes(m.io, t.bad, t.vn.name2)
       ovid/mem.WBytes(m.io, t.bad, ", and an id names only one; refs cannot reach either yet (ovid grep finds their uses)")
     } else if t.vn.op != ovid/parse.OP_VAR {
       t.bad = ovid/mem.New(m.io, 256)
@@ -368,7 +368,7 @@ func ByName(m *ovid/parse.Mod, t *Target, qp i64, qn i64) i64 {
 func CountNamed(d *ovid/parse.Decl, np i64, nn i64) i64 {
   var n i64 = 0
   while d != 0 as *ovid/parse.Decl {
-    if Eq2(d.namep, d.namen, np, nn) {
+    if Eq2(ptr(d.name), len(d.name), np, nn) {
       n = n + 1
     }
     d = d.next
@@ -381,13 +381,13 @@ func CountNamed(d *ovid/parse.Decl, np i64, nn i64) i64 {
 // A field, param, or var is counted in every copy of its owner too.
 func Copies(t *Target) i64 {
   if t.kind == T_TYPE {
-    return CountNamed(t.pkg.ts, t.d.namep, t.d.namen)
+    return CountNamed(t.pkg.ts, ptr(t.d.name), len(t.d.name))
   }
   if t.kind == T_CONST {
-    return CountNamed(t.pkg.cs, t.d.namep, t.d.namen)
+    return CountNamed(t.pkg.cs, ptr(t.d.name), len(t.d.name))
   }
   if t.kind == T_FUNC {
-    return CountNamed(t.pkg.fs, t.d.namep, t.d.namen)
+    return CountNamed(t.pkg.fs, ptr(t.d.name), len(t.d.name))
   }
   var owners *ovid/parse.Decl = t.pkg.fs
   if t.kind == T_FIELD {
@@ -395,13 +395,13 @@ func Copies(t *Target) i64 {
   }
   var n i64 = 0
   while owners != 0 as *ovid/parse.Decl {
-    if Eq2(owners.namep, owners.namen, t.own.namep, t.own.namen) {
+    if Eq2(ptr(owners.name), len(owners.name), ptr(t.own.name), len(t.own.name)) {
       if t.kind == T_VAR {
         if FindVar(owners.body, t.vn.num) != 0 as *ovid/parse.Node {
           n = n + 1
         }
       } else {
-        n = n + CountNamed(owners.sub, t.d.namep, t.d.namen)
+        n = n + CountNamed(owners.sub, ptr(t.d.name), len(t.d.name))
       }
     }
     owners = owners.next
@@ -435,7 +435,7 @@ func WTarget(io *ovid/io.Cap, b *ovid/mem.Buf, t *Target) i64 {
   ovid/mem.WBytes(io, b, t.pkg.path)
   ovid/mem.WByte(io, b, 46)
   if t.own != 0 as *ovid/parse.Decl {
-    ovid/mem.WBytes(io, b, bytes(t.own.namep, t.own.namen))
+    ovid/mem.WBytes(io, b, t.own.name)
     if t.kind == T_VAR {
       ovid/mem.WByte(io, b, 58)
       ovid/parse.WInt(io, b, t.vn.num)
@@ -443,21 +443,21 @@ func WTarget(io *ovid/io.Cap, b *ovid/mem.Buf, t *Target) i64 {
     }
     ovid/mem.WByte(io, b, 46)
   }
-  ovid/mem.WBytes(io, b, bytes(t.d.namep, t.d.namen))
+  ovid/mem.WBytes(io, b, t.d.name)
   return 0
 }
 
 // WDeclID writes the id of the func or type d (the "in" of a use). Every
 // func has a result type and no type decl does; a func's body may be empty.
 func WDeclID(io *ovid/io.Cap, b *ovid/mem.Buf, d *ovid/parse.Decl) i64 {
-  if d.typn != 0 {
+  if len(d.typ) != 0 {
     ovid/mem.WBytes(io, b, "fn:")
   } else {
     ovid/mem.WBytes(io, b, "ty:")
   }
   ovid/mem.WBytes(io, b, d.pkg.path)
   ovid/mem.WByte(io, b, 46)
-  ovid/mem.WBytes(io, b, bytes(d.namep, d.namen))
+  ovid/mem.WBytes(io, b, d.name)
   return 0
 }
 
@@ -523,7 +523,7 @@ func UseFile(u *ovid/parse.Use) *ovid/parse.File {
 // integer: file number above, offset below.
 func SortKey(u *ovid/parse.Use) i64 {
   var f *ovid/parse.File = UseFile(u)
-  return (f.ord << 32) | (u.tokp - ptr(f.src))
+  return (f.ord << 32) | (ptr(u.tok) - ptr(f.src))
 }
 
 // NumberFiles gives each module file its place in the list.
@@ -666,7 +666,7 @@ func CmdRefs(io *ovid/io.Cap) i64 {
     }
     // The line is the one the node that spells the use starts on, as
     // the Go refs prints it: a func's own result use starts at the func.
-    var off i64 = u.tokp - ptr(f.src)
+    var off i64 = ptr(u.tok) - ptr(f.src)
     if u.node != 0 as *ovid/parse.Node {
       off = u.node.off
     } else if u.kind == ovid/parse.USE_RESULT {

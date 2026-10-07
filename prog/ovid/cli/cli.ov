@@ -191,7 +191,7 @@ func CmdBuild(io *ovid/io.Cap) i64 {
   var out i64 = a.out
   if out == 0 {
     var bin i64 = Join(io, ptr(m.dir), len(m.dir), strptr("bin"), 3)
-    out = Join(io, bin, len(m.dir) + 4, m.namep, m.namen)
+    out = Join(io, bin, len(m.dir) + 4, ptr(m.name), len(m.name))
   }
   var errp i64 = ovid/io.Alloc(io, 8)
   store64(errp, 0)

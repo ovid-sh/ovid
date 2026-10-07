@@ -132,7 +132,7 @@ func TestPkgConst(io *ovid/io.Cap) i64 {
     return 2
   }
   var l *Node = add.left
-  if l.op != OP_NAME || !ovid/mem.Eq(bytes(l.pkgp, l.pkgn), "ovid/io") || !ovid/mem.Eq(bytes(l.namep, l.namen), "O_CREAT") {
+  if l.op != OP_NAME || !ovid/mem.Eq(l.pkg, "ovid/io") || !ovid/mem.Eq(l.name, "O_CREAT") {
     return 3
   }
   // io is not an imported path, so io.X stays a field access.

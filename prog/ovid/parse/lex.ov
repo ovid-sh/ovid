@@ -7,7 +7,7 @@ import ovid/mem
 // i is the cursor, last the end of the last consumed token, nl whether the
 // blank run before the next token holds a newline, skipped whether that run
 // was already skipped. Ident, ParsePath and ParseType return their string in
-// tp/tn. The first error sets err and moves the cursor to the end so every
+// tok. The first error sets err and moves the cursor to the end so every
 // loop stops; later errors are ignored. kwat/kwend belong to PeekKw. ttok
 // is where in the source the name of the type ParseType last read stands.
 type P struct {
@@ -22,15 +22,12 @@ type P struct {
   eoff i64
   emsg *ovid/mem.Buf
   pkg *Pkg
-  fnp i64
-  fnn i64
+  fn bytes
   ec i64
   sc i64
-  tp i64
-  tn i64
+  tok bytes
   cok bool
-  xp i64
-  xn i64
+  path bytes
   kwat i64
   kwend i64
   ttok i64
@@ -236,24 +233,22 @@ func PeekIdent(p *P) bool {
   return p.i < len(p.src) && IsIdentStart(At(p, p.i))
 }
 
-// Ident consumes an identifier; its text is p.tp/p.tn (empty on error).
+// Ident consumes an identifier; its text is p.tok (empty on error).
 func Ident(p *P) i64 {
   Skip(p)
   if p.i >= len(p.src) || !IsIdentStart(At(p, p.i)) {
     Errorf(p, strptr("expected identifier"), strlen("expected identifier"))
-    p.tp = ptr(p.src)
-    p.tn = 0
-    return p.tp
+    p.tok = bytes(ptr(p.src), 0)
+    return ptr(p.tok)
   }
   var s i64 = p.i
   p.i = p.i + 1
   while p.i < len(p.src) && IsIdentCont(At(p, p.i)) {
     p.i = p.i + 1
   }
-  p.tp = ptr(p.src) + s
-  p.tn = p.i - s
+  p.tok = bytes(ptr(p.src) + s, p.i - s)
   Bump(p)
-  return p.tp
+  return ptr(p.tok)
 }
 
 // PeekKw reports whether the next token is the identifier lit. Skipping
@@ -349,28 +344,27 @@ func Cat(io *ovid/io.Cap, a i64, an i64, b i64, bn i64) i64 {
   return d
 }
 
-// ParsePath reads ident ('/' ident)*; the joined path is p.tp/p.tn.
+// ParsePath reads ident ('/' ident)*; the joined path is p.tok.
 func ParsePath(p *P) i64 {
   Ident(p)
-  var sp i64 = p.tp
-  var sn i64 = p.tn
+  var sp i64 = ptr(p.tok)
+  var sn i64 = len(p.tok)
   while PeekByte(p, 47) {
     Expect(p, 47)
     Ident(p)
-    if p.tp == sp + sn + 1 {
-      sn = sn + 1 + p.tn
+    if ptr(p.tok) == sp + sn + 1 {
+      sn = sn + 1 + len(p.tok)
     } else {
       var t i64 = Cat(p.io, sp, sn, strptr("/"), 1)
-      sp = Cat(p.io, t, sn + 1, p.tp, p.tn)
-      sn = sn + 1 + p.tn
+      sp = Cat(p.io, t, sn + 1, ptr(p.tok), len(p.tok))
+      sn = sn + 1 + len(p.tok)
     }
   }
-  p.tp = sp
-  p.tn = sn
+  p.tok = bytes(sp, sn)
   return 0
 }
 
-// ParseType reads a type and leaves its full spelling in p.tp/p.tn:
+// ParseType reads a type and leaves its full spelling in p.tok:
 // i64, bool, pkg/path.Name, or *pkg/path.Name. p.ttok is the source
 // position of the type's name (Name, i64, or bool), for the uses the
 // checker records.
@@ -381,8 +375,8 @@ func ParseType(p *P) i64 {
     star = true
   }
   ParsePath(p)
-  var namep i64 = p.tp
-  var namen i64 = p.tn
+  var namep i64 = ptr(p.tok)
+  var namen i64 = len(p.tok)
   var pkgp i64 = 0
   var pkgn i64 = 0
   if PeekByte(p, 46) {
@@ -390,8 +384,8 @@ func ParseType(p *P) i64 {
     pkgp = namep
     pkgn = namen
     Ident(p)
-    namep = p.tp
-    namen = p.tn
+    namep = ptr(p.tok)
+    namen = len(p.tok)
   }
   p.ttok = namep
   if pkgp == 0 {
@@ -399,8 +393,7 @@ func ParseType(p *P) i64 {
       if star {
         Errorf2(p, strptr("cannot use a pointer to "), strlen("cannot use a pointer to "), namep, namen)
       }
-      p.tp = namep
-      p.tn = namen
+      p.tok = bytes(namep, namen)
       return 0
     }
     pkgp = ptr(p.pkg.path)
@@ -417,7 +410,6 @@ func ParseType(p *P) i64 {
   store8((d + k) + pkgn, 46)
   ovid/mem.CopyN(((d + k) + pkgn) + 1, namep, namen)
   store8(d + tn, 0)
-  p.tp = d
-  p.tn = tn
+  p.tok = bytes(d, tn)
   return 0
 }
