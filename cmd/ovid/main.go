@@ -149,8 +149,11 @@ func main() {
 		a := parse(cmd, argv, []string{"C"}, []string{"facts"})
 		os.Exit(tool.Check(dirArg(a, 0), a.bools["facts"], w))
 	case "build":
-		a := parse(cmd, argv, []string{"C", "o"}, nil)
-		os.Exit(tool.Build(dirArg(a, 0), a.vals["o"], w))
+		a := parse(cmd, argv, []string{"C", "o", "target"}, nil)
+		if t := a.vals["target"]; t != "" && t != "linux-amd64" && t != "wasm" {
+			usageErr(cmd, "--target takes linux-amd64 or wasm, got "+strconv.Quote(t))
+		}
+		os.Exit(tool.BuildTarget(dirArg(a, 0), a.vals["o"], a.vals["target"], w))
 	case "run":
 		a := parse(cmd, argv, []string{"C", "timeout", "max-output"}, []string{"json", "no-confine"})
 		o := tool.RunOpts{JSON: a.bools["json"], NoConfine: a.bools["no-confine"]}

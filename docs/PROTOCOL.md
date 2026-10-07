@@ -258,6 +258,13 @@ reach, not what a given run makes, so a filter that allows exactly these
 (and the `execve` that starts the program) never stops it, and a program
 that never calls `ovid/io.WriteFile` does not list `rename`.
 
+`build --target wasm` writes a WebAssembly module instead and ends
+`{"ok":true,"output":PATH,"bytes":N,"target":"wasm"}`, without
+`syscalls`: there every `syscall` is a call of the module's one import,
+`env.syscall(n, a1..a6) -> i64`, which the host answers (`internal/wasm`,
+`internal/wasm/host.mjs`). The module exports `memory` and
+`_start(argc, argv)`. It is a proof of concept, and its shape may change.
+
 The list is exact because only the `ovid/io` the toolchain ships may call
 `syscall` (see `syscall_forbidden`), and its numbers are constants. Were one
 not a constant, the receipt would add `"syscalls_unknown":N`, the count of

@@ -19,6 +19,7 @@ import (
 	"ovid/internal/compile"
 	"ovid/internal/ir"
 	"ovid/internal/module"
+	"ovid/internal/wasm"
 )
 
 // Exit codes.
@@ -179,6 +180,13 @@ func compileTo(m *module.Module, p *ir.Program, out string) (*compile.Output, er
 }
 
 func Build(dir, out string, w io.Writer) int {
+	return BuildTarget(dir, out, "", w)
+}
+
+// BuildTarget is Build for a target: "" (or "linux-amd64") for the native
+// ELF, or "wasm" for a WebAssembly module whose syscalls are a host import
+// (see internal/wasm).
+func BuildTarget(dir, out, target string, w io.Writer) int {
 	m, err := loadBuild(dir)
 	if err != nil {
 		return fail(w, "load", err.Error(), "")
@@ -191,6 +199,20 @@ func Build(dir, out string, w io.Writer) int {
 	}
 	if out == "" {
 		out = DefaultOut(m)
+		if target == "wasm" {
+			out += ".wasm"
+		}
+	}
+	if target == "wasm" {
+		bin, err := wasm.Compile(serveProgram(m.Prog))
+		if err == nil {
+			err = module.ReplaceFile(out, bin, 0o644)
+		}
+		if err != nil {
+			return fail(w, "compile", err.Error(), "")
+		}
+		emit(w, map[string]any{"ok": true, "output": out, "bytes": len(bin), "target": "wasm"})
+		return ExitOK
 	}
 	o, err := compileTo(m, serveProgram(m.Prog), out)
 	if err != nil {
