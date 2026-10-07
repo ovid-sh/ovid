@@ -8,11 +8,14 @@ func main(io *ovid/io.Cap) i64 {
     return 64
   }
   var path i64 = ovid/io.Arg(io, 1)
-  var cell i64 = ovid/io.Alloc(io, 16)
-  if ovid/io.ReadFile(io, path, ovid/io.CLen(path), cell, cell + 8) < 0 {
-    ovid/io.Eprint(strptr("catfile: cannot read\n"))
+  var nn i64 = ovid/io.Alloc(io, 8)
+  var data i64, e i64 = ovid/io.ReadFile(io, path, ovid/io.CLen(path), nn)
+  if e != 0 {
+    ovid/io.Eprint(strptr("catfile: cannot read: "))
+    ovid/io.Eprint(ovid/io.ErrText(e))
+    ovid/io.Eprint(strptr("\n"))
     return 1
   }
-  ovid/io.Stdout(load64(cell), load64(cell + 8))
+  ovid/io.Stdout(data, load64(nn))
   return 0
 }

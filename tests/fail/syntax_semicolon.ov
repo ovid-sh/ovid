@@ -1,0 +1,7 @@
+package demo
+// The Go habit of two statements on a line: the hint says one per line.
+func F() i64 {
+  var a i64 = 1
+  a = a + 1; a = a + 1 // error: syntax 12 hint="statements are one per line; there is no ;"
+  return a
+}

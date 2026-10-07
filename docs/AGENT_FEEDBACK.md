@@ -30,8 +30,14 @@ the shell tools print (611c7e2, below). With the read commands printing
 text by default (#125 at 68194b7, below), the guided runs cost no more
 than the plain ones ($0.14 against $0.15 median, 28 KB read against
 30 KB), while using `show` 38 times, `grep` 23, and `outline` 13 in five
-runs. Whether agents reach for them unprompted, and whether that beats
-the shell on a task that needs the ids, is not yet measured.
+runs. Unprompted they mostly do not, and `ovid help` cannot change that:
+with the plain preamble, sonnet used the read commands in 2 of 5 runs and
+haiku in 1 (one call), and a help section rewritten to set them against
+`grep -n` and `sed -n` moved sonnet to 4 of 5 without replacing any shell
+call, and haiku not at all (6c0010e and 729dbbd, below). Only runs that
+open `ovid help` ever use them. Since on this task the shell costs the
+same, that is not worth changing ovid for; whether the commands beat the
+shell on a task that needs the ids is not yet measured.
 
 Editing through ovid is a separate matter: in both rounds the guided
 agents changed code with python and `sed` (`ovid insert` in one run of
@@ -60,6 +66,60 @@ told to retry a lost `ovid edit` first, every agent in `07-replay` got
 `stale`, confirmed the change was already in, and made it no second time
 (d8c0be0, below). The two problems the b4c231f run found are fixed by #100
 (#98, #99), not yet re-run with a model.
+
+## 2026-10-06, 6c0010e / 729dbbd: unprompted, and with the help reworded
+
+Do agents reach for the read commands without being told, and does
+`ovid help` saying why they beat the shell change that? `15-selfhost-messages`
+with the plain preamble, five runs each of `us.anthropic.claude-sonnet-5-5`
+and `us.anthropic.claude-haiku-4-5-20251001-v1:0`, Claude Code 2.1.286,
+$5 budget per agent, on starship: once at main (6c0010e), once at 729dbbd,
+which only rewrote the help's read section, and was not merged. Its title
+became "Read by name, not by line (in place of grep -n, then sed -n on a
+range)", `grep` "like grep -rn on the .ov files, each match under the name
+of the func or type it is in", `show` "those whole decls, several at once
+(show Err NeedTy), each with its file:lines and hash", and `refs` "uses,
+not text matches". $7.25 in all. Records:
+`2026-10-06-6c0010e-nav-{sonnet,haiku}.jsonl` and
+`2026-10-06-729dbbd-nav-help-{sonnet,haiku}.jsonl`.
+
+Medians over the five runs of each:
+
+| model | help | passed | calls | ovid calls | failed calls | bytes read | bytes written | tokens in | tokens out | cost | seconds |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| sonnet | main | 5/5 | 12 | 7 | 1 | 26347 | 6207 | 144157 | 5377 | $0.13 | 43 |
+| sonnet | reworded | 5/5 | 15 | 8 | 1 | 25864 | 7304 | 160514 | 6028 | $0.15 | 50 |
+| haiku | main | 5/5 | 91 | 32 | 8 | 112136 | 23193 | 3746276 | 18593 | $0.58 | 201 |
+| haiku | reworded | 5/5 | 92 | 26 | 8 | 115120 | 32389 | 3976671 | 21450 | $0.60 | 218 |
+
+Calls summed over the five runs (counted from the transcripts' Bash
+commands, plus the Read and Edit tools):
+
+| model | help | check | build | test | help | outline | show | grep | refs | shell grep | sed | cat | python3 | Read | Edit |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| sonnet | main | 29 | 6 | 6 | 4 | 4 | 7 | 3 | 0 | 41 | 28 | 22 | 14 | 0 | 0 |
+| sonnet | reworded | 36 | 8 | 6 | 7 | 5 | 5 | 5 | 0 | 61 | 37 | 23 | 8 | 0 | 0 |
+| haiku | main | 209 | 23 | 26 | 7 | 1 | 0 | 0 | 0 | 207 | 28 | 124 | 0 | 65 | 29 |
+| haiku | reworded | 207 | 24 | 21 | 12 | 0 | 0 | 0 | 0 | 209 | 11 | 137 | 0 | 44 | 46 |
+
+What it shows:
+
+- **The agents see the commands and pass them by.** Eight of the ten
+  sonnet runs read the top-level `ovid help`, which lists the read
+  commands; the two that did not never used one. At main, two runs used
+  them (one for 11 calls, one for 3) and three never did.
+- **Rewording the help adds calls, it does not move any.** Four of five
+  sonnet runs then ran `outline` or `show` (three of them once or twice), while
+  shell `grep` rose from 41 to 61 and `sed` from 28 to 37; bytes read and
+  cost did not fall. The change was dropped.
+- **Haiku is out of the help's reach.** It reads whole files with the Read
+  tool (65 and 44 times over each five runs) and `cat`, and edits with Edit; it ran
+  `ovid outline` once in ten runs, whatever the help said.
+- **No ovid edit commands** in any of the twenty runs, as in the rounds
+  below.
+- **A blind first search**: six of the twenty runs ran
+  `grep -rn ... --include=*.ovid`, which matches nothing, though the
+  help's first paragraph says `.ov`.
 
 ## 2026-10-06, 0c33973: two writers on one file of prog/
 

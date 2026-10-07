@@ -115,8 +115,16 @@ func needExec(t *testing.T) {
 // run executes an emitted binary.
 func run(t *testing.T, bin string, args ...string) (string, int) {
 	t.Helper()
+	return runIn(t, "", bin, args...)
+}
+
+// runIn is run with the working directory dir.
+func runIn(t *testing.T, dir, bin string, args ...string) (string, int) {
+	t.Helper()
 	needExec(t)
-	out, err := exec.Command(bin, args...).CombinedOutput()
+	cmd := exec.Command(bin, args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
 	if ee, ok := err.(*exec.ExitError); ok {
 		return string(out), ee.ExitCode()
 	} else if err != nil {
@@ -252,9 +260,9 @@ func main(io *ovid/io.Cap) i64 {
 import ovid/io
 func main(io *ovid/io.Cap) i64 {
   var path i64 = ovid/io.Arg(io, 1)
-  var pp i64 = ovid/io.Alloc(io, 8)
   var nn i64 = ovid/io.Alloc(io, 8)
-  if ovid/io.ReadFile(io, path, ovid/io.CLen(path), pp, nn) != 0 {
+  var _, e i64 = ovid/io.ReadFile(io, path, ovid/io.CLen(path), nn)
+  if e != 0 {
     return 9
   }
   return load64(nn)
@@ -876,6 +884,15 @@ func TestEditInsertAppend(t *testing.T) {
 	if again, _ := os.ReadFile(filepath.Join(dir, "demo/main.ov")); string(again) != want {
 		t.Fatal("file changed after rejected edit")
 	}
+	// The parser's hint for a known slip reaches the receipt.
+	r, code = editJSON(t, dir, []any{map[string]any{"op": "append", "into": "fn:demo.main", "expect": hashOf(t, dir, "fn:demo.main"), "text": "var n = 3"}})
+	if code == 0 || r["error"] != "syntax" || r["hint"] != "every local is declared with its type: var n i64 = ... (nothing was written)" {
+		t.Fatalf("syntax hint %d %v", code, r)
+	}
+	r, code = editJSON(t, dir, []any{map[string]any{"op": "append", "into": "fn:demo.main", "expect": hashOf(t, dir, "fn:demo.main"), "text": "x = 1; x = 2"}})
+	if code == 0 || r["error"] != "syntax" || r["hint"] != "statements are one per line; there is no ; (nothing was written)" {
+		t.Fatalf("syntax hint %d %v", code, r)
+	}
 }
 
 func TestRename(t *testing.T) {
@@ -1023,7 +1040,7 @@ import ovid/io
 
 func main(io *ovid/io.Cap) i64 {
   var buf i64 = ovid/io.Alloc(io, 64)
-  var n i64 = ovid/io.Read(0, buf, 64)
+  var n i64, _ = ovid/io.Read(0, buf, 64)
   ovid/io.Stdout(buf, n)
   ovid/io.Stderr(strptr("to stderr\n"), 10)
   return 3
@@ -1671,6 +1688,26 @@ func TestSelfHost(t *testing.T) {
 		out, _ := run(t, s1, "check", dir, "--std", stdDir)
 		if got := last(t, out)["revision"]; got != want || want == nil {
 			t.Fatalf("revision of %s: self-hosted %v, go %v", dir, got, want)
+		}
+	}
+
+	// The self-hosted refs prints what this one prints, for every kind of
+	// target: its checker records the same uses.
+	for _, q := range []string{"fn:ovid/parse.FindDecl", "fn:ovid/mem.Eq", "ty:ovid/parse.Decl", "ty:ovid/io.Cap",
+		"fld:ovid/parse.Decl.next", "fld:ovid/parse.Node.op", "pa:ovid/check.Err.code", "cn:ovid/parse.OP_CALL",
+		"cn:ovid/asm.LOADADDR", "st:ovid/sha.Sum:1", "Block", "ovid/cg.Max", "Revision", "ovid/parse.CountDecls",
+		"mem.Eq", "Decl.next", "parse.Node.op", "Err.code"} {
+		// Both print module-relative paths: this toolchain under
+		// OVID_PATHS=module, the self-hosted one when run in the module on ".".
+		t.Setenv("OVID_PATHS", "module")
+		b.Reset()
+		if code := Refs(prog, q, false, Page{}, &b); code != 0 {
+			t.Fatalf("refs %s: %s", q, b.String())
+		}
+		want := b.String()
+		got, code := runIn(t, prog, s1, "refs", q, ".", "--std", stdDir)
+		if code != 0 || got != want {
+			t.Fatalf("refs %s: self-hosted (exit %d) differs from go:\n--- self\n%s\n--- go\n%s", q, code, got, want)
 		}
 	}
 

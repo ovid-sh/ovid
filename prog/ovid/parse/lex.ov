@@ -8,7 +8,8 @@ import ovid/mem
 // blank run before the next token holds a newline, skipped whether that run
 // was already skipped. Ident, ParsePath and ParseType return their string in
 // tp/tn. The first error sets err and moves the cursor to the end so every
-// loop stops; later errors are ignored. kwat/kwend belong to PeekKw.
+// loop stops; later errors are ignored. kwat/kwend belong to PeekKw. ttok
+// is where in the source the name of the type ParseType last read stands.
 type P struct {
   io *ovid/io.Cap
   src i64
@@ -33,6 +34,7 @@ type P struct {
   xn i64
   kwat i64
   kwend i64
+  ttok i64
 }
 
 func IsIdentStart(c i64) bool {
@@ -363,7 +365,9 @@ func ParsePath(p *P) i64 {
 }
 
 // ParseType reads a type and leaves its full spelling in p.tp/p.tn:
-// i64, bool, pkg/path.Name, or *pkg/path.Name.
+// i64, bool, pkg/path.Name, or *pkg/path.Name. p.ttok is the source
+// position of the type's name (Name, i64, or bool), for the uses the
+// checker records.
 func ParseType(p *P) i64 {
   var star bool = false
   if PeekByte(p, 42) {
@@ -383,6 +387,7 @@ func ParseType(p *P) i64 {
     namep = p.tp
     namen = p.tn
   }
+  p.ttok = namep
   if pkgp == 0 {
     if ovid/mem.Eq(namep, namen, strptr("i64"), 3) || ovid/mem.Eq(namep, namen, strptr("bool"), 4) {
       if star {

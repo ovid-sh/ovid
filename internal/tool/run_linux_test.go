@@ -26,7 +26,8 @@ import ovid/io
 func main(io *ovid/io.Cap) i64 {
   var buf i64 = ovid/io.Alloc(io, 8)
   ovid/io.Stdout(strptr("ready\n"), 6)
-  return ovid/io.Read(0, buf, 8)
+  var n i64, _ = ovid/io.Read(0, buf, 8)
+  return n
 }
 `))
 	cmd := exec.Command(os.Args[0], "-test.run=^TestHelperRun$")

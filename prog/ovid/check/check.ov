@@ -57,6 +57,50 @@ type Ch struct {
   csize i64
   ptab i64
   pmask i64
+  lastf *ovid/parse.Decl
+  quiet bool
+}
+
+// NewUse records a use of kind at the name token tokp[0:tokn], spelled by
+// node (or, for a decl's own type, by the decl the caller sets as udecl)
+// inside in, and returns it for the caller to name the target.
+func NewUse(c *Ch, kind i64, node *ovid/parse.Node, in *ovid/parse.Decl, tokp i64, tokn i64) *ovid/parse.Use {
+  var m *ovid/parse.Mod = c.mod
+  var u *ovid/parse.Use = ovid/io.Alloc(c.io, sizeof(ovid/parse.Use)) as *ovid/parse.Use
+  u.kind = kind
+  u.node = node
+  u.in = in
+  u.tokp = tokp
+  u.tokn = tokn
+  if m.usest == 0 as *ovid/parse.Use {
+    m.uses = u
+  } else {
+    m.usest.next = u
+  }
+  m.usest = u
+  m.nuses = m.nuses + 1
+  return u
+}
+
+// UseLocal records a use of the local or param in the scope record rec.
+func UseLocal(c *Ch, kind i64, rec i64, node *ovid/parse.Node, tokp i64, tokn i64) i64 {
+  var u *ovid/parse.Use = NewUse(c, kind, node, c.fd, tokp, tokn)
+  u.vnode = load64(rec + 32) as *ovid/parse.Node
+  u.vsecond = load64(rec + 48)
+  u.decl = load64(rec + 40) as *ovid/parse.Decl
+  return 0
+}
+
+// UseType records a use of the struct type named by tp[0:tn] at tok, if it
+// is one that exists: in's own type (udecl) when node is 0.
+func UseType(c *Ch, kind i64, tp i64, tn i64, tok i64, in *ovid/parse.Decl) *ovid/parse.Use {
+  var t *ovid/parse.Decl = TypeDecl(c, tp, tn)
+  if t == 0 as *ovid/parse.Decl || tok == 0 {
+    return 0 as *ovid/parse.Use
+  }
+  var u *ovid/parse.Use = NewUse(c, kind, 0 as *ovid/parse.Node, in, tok, t.namen)
+  u.decl = t
+  return u
 }
 
 func WLit(c *Ch, p i64, n i64) i64 {
@@ -97,8 +141,10 @@ func WNum(c *Ch, v i64) i64 {
 }
 
 func Line(c *Ch) i64 {
-  ovid/mem.WByte(c.io, c.b, 10)
-  ovid/io.Stdout(c.b.data, c.b.len)
+  if !c.quiet {
+    ovid/mem.WByte(c.io, c.b, 10)
+    ovid/io.Stdout(c.b.data, c.b.len)
+  }
   c.b.len = 0
   return 0
 }
@@ -169,6 +215,23 @@ func WHerePos(c *Ch) i64 {
     return ovid/parse.WPos(c.io, c.b, o.file, d.off)
   }
   return ovid/parse.WPos(c.io, c.b, d.file, d.off)
+}
+
+// BuiltinArity reports builtin n called with the wrong number of
+// arguments, which the parser left in args, checks those, and gives the
+// call the builtin's type (bool for ult), so nothing else is reported.
+func BuiltinArity(c *Ch, n *ovid/parse.Node, isBool bool) i64 {
+  Here(c, n)
+  Err(c, strptr("arity"), strlen("arity"), strptr("wrong number of arguments to a builtin"), strlen("wrong number of arguments to a builtin"))
+  var a *ovid/parse.Node = n.args
+  while a != 0 as *ovid/parse.Node {
+    CheckExpr(c, a)
+    a = a.next
+  }
+  if isBool {
+    return SetBool(c)
+  }
+  return SetI64(c)
 }
 
 // Err prints one error line: code, message, the id it is about, and that
@@ -279,7 +342,7 @@ func Pop(c *Ch) i64 {
 func Lookup(c *Ch, np i64, nn i64) i64 {
   var i i64 = c.nenv - 1
   while i >= 0 {
-    var rec i64 = c.env + (i * 32)
+    var rec i64 = c.env + (i * 56)
     if ovid/mem.Eq(load64(rec), load64(rec + 8), np, nn) {
       return rec
     }
@@ -301,12 +364,28 @@ func Bind(c *Ch, np i64, nn i64, tp i64, tn i64) i64 {
   if c.nenv >= 4096 {
     return 0
   }
-  var rec i64 = c.env + (c.nenv * 32)
+  var rec i64 = c.env + (c.nenv * 56)
   store64(rec, np)
   store64(rec + 8, nn)
   store64(rec + 16, tp)
   store64(rec + 24, tn)
+  store64(rec + 32, 0)
+  store64(rec + 40, 0)
+  store64(rec + 48, 0)
   c.nenv = c.nenv + 1
+  return 0
+}
+
+// Own says what declared the name Bind just put in scope: the var
+// statement vn (second: its second name), or the param d.
+func Own(c *Ch, vn *ovid/parse.Node, second i64, d *ovid/parse.Decl) i64 {
+  if c.nenv == 0 || c.nenv > 4096 {
+    return 0
+  }
+  var rec i64 = c.env + ((c.nenv - 1) * 56)
+  store64(rec + 32, vn as i64)
+  store64(rec + 40, d as i64)
+  store64(rec + 48, second)
   return 0
 }
 
@@ -388,14 +467,22 @@ func IndexPkgs(c *Ch) i64 {
 }
 
 // CheckPkgConst types a reference pkg.NAME to another package's const.
-func CheckPkgConst(c *Ch, pkp i64, pkn i64, np i64, nn i64) i64 {
+func CheckPkgConst(c *Ch, n *ovid/parse.Node, pkp i64, pkn i64, np i64, nn i64) i64 {
+  // The use is recorded whether or not the name is used rightly, or the
+  // package imported, as the Go checker records it.
+  var k *ovid/parse.Pkg = FindPkg(c, pkp, pkn)
+  var cd *ovid/parse.Decl = 0 as *ovid/parse.Decl
+  if k != 0 as *ovid/parse.Pkg {
+    cd = ovid/parse.FindDecl(k.cs, np, nn)
+    if cd != 0 as *ovid/parse.Decl {
+      NewUse(c, ovid/parse.USE_NAME, n, c.fd, np, nn).decl = cd
+    }
+  }
   if !Imported(c, pkp, pkn) {
     Err(c, strptr("unknown_package"), strlen("unknown_package"), pkp, pkn)
     return SetBad(c)
   }
-  var k *ovid/parse.Pkg = FindPkg(c, pkp, pkn)
   if k != 0 as *ovid/parse.Pkg {
-    var cd *ovid/parse.Decl = ovid/parse.FindDecl(k.cs, np, nn)
     if cd != 0 as *ovid/parse.Decl {
       if cd.istab != 0 {
         Err(c, strptr("bad_type"), strlen("bad_type"), strptr("a table is not a value"), strlen("a table is not a value"))
@@ -421,6 +508,7 @@ func Table(c *Ch, n *ovid/parse.Node) *ovid/parse.Decl {
   if k != 0 as *ovid/parse.Pkg {
     var cd *ovid/parse.Decl = ovid/parse.FindDecl(k.cs, n.namep, n.namen)
     if cd != 0 as *ovid/parse.Decl {
+      NewUse(c, ovid/parse.USE_NAME, n, c.fd, n.namep, n.namen).decl = cd
       if cd.istab == 0 {
         Err(c, strptr("bad_type"), strlen("bad_type"), strptr("a const is not a table"), strlen("a const is not a table"))
         return 0 as *ovid/parse.Decl
@@ -473,8 +561,36 @@ func FieldTy(c *Ch, tp i64, tn i64, fp i64, fn i64) i64 {
   if f == 0 as *ovid/parse.Decl {
     return -1
   }
+  c.lastf = f
   SetTy(c, f.typp, f.typn)
   return 0
+}
+
+// TypeDecl is the struct type that tp[0:tn] (pkg.T or *pkg.T) names, or
+// nil for i64, bool, invalid, or a type that does not exist.
+func TypeDecl(c *Ch, tp i64, tn i64) *ovid/parse.Decl {
+  var star i64 = 0
+  if tn > 0 && load8(tp) == 42 {
+    star = 1
+  }
+  var p i64 = tp + star
+  var n i64 = tn - star
+  var dot i64 = -1
+  var i i64 = 0
+  while i < n {
+    if load8(p + i) == 46 {
+      dot = i
+    }
+    i = i + 1
+  }
+  if dot < 1 {
+    return 0 as *ovid/parse.Decl
+  }
+  var k *ovid/parse.Pkg = FindPkg(c, p, dot)
+  if k == 0 as *ovid/parse.Pkg {
+    return 0 as *ovid/parse.Decl
+  }
+  return ovid/parse.FindDecl(k.ts, (p + dot) + 1, (n - dot) - 1)
 }
 
 // TyKind classifies the type tp[0:tn] as the parser wrote it (i64, bool,
@@ -509,6 +625,16 @@ func TyKind(c *Ch, tp i64, tn i64) i64 {
     return -1
   }
   return 1 - star
+}
+
+// DeclUse records the use of a struct type by d's own type: a field's or
+// param's (kind type) or a func's result (kind result), inside in.
+func DeclUse(c *Ch, kind i64, d *ovid/parse.Decl, in *ovid/parse.Decl) i64 {
+  var u *ovid/parse.Use = UseType(c, kind, d.typp, d.typn, d.tytok, in)
+  if u != 0 as *ovid/parse.Use {
+    u.udecl = d
+  }
+  return 0
 }
 
 // DeclTy checks the type of the field, param, or func result d, which the
@@ -570,6 +696,10 @@ func CheckExprIn(c *Ch, n *ovid/parse.Node) i64 {
     if TyKind(c, n.typp, n.typn) != 1 {
       Err(c, strptr("bad_type"), strlen("bad_type"), n.typp, n.typn)
     }
+    var su *ovid/parse.Use = UseType(c, ovid/parse.USE_TYPE, n.typp, n.typn, n.tytok, c.fd)
+    if su != 0 as *ovid/parse.Use {
+      su.node = n
+    }
     return SetI64(c)
   }
   if op == ovid/parse.OP_BOOL {
@@ -577,14 +707,16 @@ func CheckExprIn(c *Ch, n *ovid/parse.Node) i64 {
   }
   if op == ovid/parse.OP_NAME {
     if n.pkgn != 0 {
-      return CheckPkgConst(c, n.pkgp, n.pkgn, n.namep, n.namen)
+      return CheckPkgConst(c, n, n.pkgp, n.pkgn, n.namep, n.namen)
     }
     var loc i64 = Lookup(c, n.namep, n.namen)
     if loc != 0 {
+      UseLocal(c, ovid/parse.USE_NAME, loc, n, n.namep, n.namen)
       return SetTy(c, load64(loc + 16), load64(loc + 24))
     }
     var cd *ovid/parse.Decl = ovid/parse.FindDecl(c.pkg.cs, n.namep, n.namen)
     if cd != 0 as *ovid/parse.Decl {
+      NewUse(c, ovid/parse.USE_NAME, n, c.fd, n.namep, n.namen).decl = cd
       if cd.istab != 0 {
         Err(c, strptr("bad_type"), strlen("bad_type"), strptr("a table is not a value"), strlen("a table is not a value"))
         return SetBad(c)
@@ -597,7 +729,12 @@ func CheckExprIn(c *Ch, n *ovid/parse.Node) i64 {
   if op == ovid/parse.OP_INDEX || op == ovid/parse.OP_LEN {
     // A param or local of the name shadows a table, as it does a const.
     var td *ovid/parse.Decl = 0 as *ovid/parse.Decl
-    if n.pkgn == 0 && Lookup(c, n.namep, n.namen) != 0 {
+    var vloc i64 = 0
+    if n.pkgn == 0 {
+      vloc = Lookup(c, n.namep, n.namen)
+    }
+    if vloc != 0 {
+      UseLocal(c, ovid/parse.USE_NAME, vloc, n, n.namep, n.namen)
       Err(c, strptr("bad_type"), strlen("bad_type"), strptr("a variable is not a table"), strlen("a variable is not a table"))
     } else {
       td = Table(c, n)
@@ -612,6 +749,9 @@ func CheckExprIn(c *Ch, n *ovid/parse.Node) i64 {
     return SetI64(c)
   }
   if ovid/parse.UnsignedOp(op) {
+    if n.left == 0 as *ovid/parse.Node {
+      return BuiltinArity(c, n, op == ovid/parse.OP_ULT)
+    }
     CheckExpr(c, n.left)
     NeedI64(c, strptr("unsigned argument 1"), strlen("unsigned argument 1"))
     CheckExpr(c, n.right)
@@ -666,11 +806,17 @@ func CheckExprIn(c *Ch, n *ovid/parse.Node) i64 {
     return SetBool(c)
   }
   if op == ovid/parse.OP_NEG || op == ovid/parse.OP_BNOT || ovid/parse.BswapOp(op) {
+    if n.arg == 0 as *ovid/parse.Node {
+      return BuiltinArity(c, n, false)
+    }
     CheckExpr(c, n.arg)
     NeedI64(c, strptr("unary needs i64"), strlen("unary needs i64"))
     return SetI64(c)
   }
   if ovid/parse.LoadOp(op) {
+    if n.arg == 0 as *ovid/parse.Node {
+      return BuiltinArity(c, n, false)
+    }
     CheckExpr(c, n.arg)
     NeedI64(c, strptr("load needs i64"), strlen("load needs i64"))
     return SetI64(c)
@@ -680,6 +826,10 @@ func CheckExprIn(c *Ch, n *ovid/parse.Node) i64 {
     if ck < 0 {
       Err(c, strptr("bad_type"), strlen("bad_type"), n.typp, n.typn)
       return SetBad(c)
+    }
+    var cu *ovid/parse.Use = UseType(c, ovid/parse.USE_TYPE, n.typp, n.typn, n.tytok, c.fd)
+    if cu != 0 as *ovid/parse.Use {
+      cu.node = n
     }
     if Opaque(c, n.typp, n.typn) {
       Here(c, n)
@@ -713,6 +863,7 @@ func CheckExprIn(c *Ch, n *ovid/parse.Node) i64 {
       Err(c, strptr("unknown_field"), strlen("unknown_field"), n.namep, n.namen)
       return SetBad(c)
     }
+    NewUse(c, ovid/parse.USE_FIELD, n, c.fd, n.namep, n.namen).decl = c.lastf
     return 0
   }
   if op == ovid/parse.OP_CALL {
@@ -756,6 +907,7 @@ func CheckExprIn(c *Ch, n *ovid/parse.Node) i64 {
       }
       return SetBad(c)
     }
+    NewUse(c, ovid/parse.USE_CALL, n, c.fd, n.fnp, n.fnn).decl = fn
     if fn.typ2n != 0 && !c.recv {
       Err(c, strptr("unused_result"), strlen("unused_result"), strptr("a value and an error code are returned; receive both"), strlen("a value and an error code are returned; receive both"))
     }
@@ -806,6 +958,14 @@ func RecvTy(c *Ch, s *ovid/parse.Node, np i64, nn i64, tp i64, tn i64) i64 {
     } else if kind == 1 {
       Err(c, strptr("struct_value"), strlen("struct_value"), np, nn)
     }
+    var tok i64 = s.tytok
+    if np == s.name2p {
+      tok = s.ty2tok
+    }
+    var tu *ovid/parse.Use = UseType(c, ovid/parse.USE_TYPE, tp, tn, tok, c.fd)
+    if tu != 0 as *ovid/parse.Use {
+      tu.node = s
+    }
     if Lookup(c, np, nn) != 0 {
       Err(c, strptr("duplicate_name"), strlen("duplicate_name"), np, nn)
     }
@@ -822,6 +982,7 @@ func RecvTy(c *Ch, s *ovid/parse.Node, np i64, nn i64, tp i64, tn i64) i64 {
     SetBad(c)
     return c.typ
   }
+  UseLocal(c, ovid/parse.USE_ASSIGN, loc, s, np, nn)
   SetTy(c, load64(loc + 16), load64(loc + 24))
   return c.typ
 }
@@ -905,11 +1066,16 @@ func CheckStmt(c *Ch, s *ovid/parse.Node) i64 {
       Err(c, strptr("duplicate_name"), strlen("duplicate_name"), s.namep, s.namen)
     }
     // The value is checked before the name is in scope, as in codegen.
+    var vu *ovid/parse.Use = UseType(c, ovid/parse.USE_TYPE, s.typp, s.typn, s.tytok, c.fd)
+    if vu != 0 as *ovid/parse.Use {
+      vu.node = s
+    }
     if s.val != 0 as *ovid/parse.Node {
       CheckExpr(c, s.val)
       NeedTy(c, tp, tn, s.namep, s.namen)
     }
     Bind(c, s.namep, s.namen, tp, tn)
+    Own(c, s, 0, 0 as *ovid/parse.Decl)
     return 0
   }
   if op == ovid/parse.OP_VAR2 || op == ovid/parse.OP_ASSIGN2 {
@@ -953,9 +1119,11 @@ func CheckStmt(c *Ch, s *ovid/parse.Node) i64 {
     if op == ovid/parse.OP_VAR2 {
       if t1n >= 0 {
         Bind(c, s.namep, s.namen, t1p, t1n)
+        Own(c, s, 0, 0 as *ovid/parse.Decl)
       }
       if t2n >= 0 {
         Bind(c, s.name2p, s.name2n, t2p, t2n)
+        Own(c, s, 1, 0 as *ovid/parse.Decl)
       }
     }
     return 0
@@ -967,6 +1135,7 @@ func CheckStmt(c *Ch, s *ovid/parse.Node) i64 {
       CheckExpr(c, s.val)
       return 0
     }
+    UseLocal(c, ovid/parse.USE_ASSIGN, loc, s, s.namep, s.namen)
     CheckExpr(c, s.val)
     NeedTy(c, load64(loc + 16), load64(loc + 24), s.namep, s.namen)
     return 0
@@ -987,6 +1156,7 @@ func CheckStmt(c *Ch, s *ovid/parse.Node) i64 {
         Err(c, strptr("unknown_field"), strlen("unknown_field"), s.namep, s.namen)
         was = true
       } else {
+        NewUse(c, ovid/parse.USE_SETFIELD, s, c.fd, s.namep, s.namen).decl = c.lastf
         fp = c.typ
         fn = c.tyn
       }
@@ -998,6 +1168,10 @@ func CheckStmt(c *Ch, s *ovid/parse.Node) i64 {
     return 0
   }
   if ovid/parse.StoreOp(op) {
+    if s.addr == 0 as *ovid/parse.Node {
+      BuiltinArity(c, s, false)
+      return 0
+    }
     CheckExpr(c, s.addr)
     NeedI64(c, strptr("store address"), strlen("store address"))
     CheckExpr(c, s.val)
@@ -1081,6 +1255,7 @@ func CheckFunc(c *Ch, fn *ovid/parse.Decl) i64 {
   while p != 0 as *ovid/parse.Decl {
     HereDecl(c, H_PARAM, c.pkg, p, fn)
     Define(c, p.namep, p.namen, p.typp, p.typn)
+    Own(c, 0 as *ovid/parse.Node, 0, p)
     p = p.next
   }
   HereDecl(c, H_FUNC, c.pkg, fn, fn)
@@ -1309,6 +1484,7 @@ func Types(c *Ch, k *ovid/parse.Pkg) i64 {
           Err(c, strptr("duplicate_name"), strlen("duplicate_name"), f.namep, f.namen)
         } else {
           DeclTy(c, f)
+          DeclUse(c, ovid/parse.USE_TYPE, f, t)
         }
         f = f.next
       }
@@ -1334,10 +1510,12 @@ func Funcs(c *Ch, k *ovid/parse.Pkg) i64 {
         HereDecl(c, H_PARAM, k, pa, fn)
         Claim(c)
         DeclTy(c, pa)
+        DeclUse(c, ovid/parse.USE_TYPE, pa, fn)
         pa = pa.next
       }
       HereDecl(c, H_FUNC, k, fn, fn)
       DeclTy(c, fn)
+      DeclUse(c, ovid/parse.USE_RESULT, fn, fn)
     }
     fn = fn.next
   }
@@ -1547,12 +1725,19 @@ func CheckCycle(c *Ch, r *ovid/parse.Pkg) i64 {
 // build it prints {"ok":false,"errors":N} only when there are errors, since
 // the build receipt follows otherwise.
 func Run(io *ovid/io.Cap, m *ovid/parse.Mod, build bool) i64 {
+  return RunMode(io, m, build, false)
+}
+
+// RunMode is Run; quiet drops every line it would print, for a command
+// that wants the checker's uses, not its report.
+func RunMode(io *ovid/io.Cap, m *ovid/parse.Mod, build bool, quiet bool) i64 {
   var c *Ch = ovid/io.Alloc(io, sizeof(Ch)) as *Ch
   c.io = io
   c.mod = m
+  c.quiet = quiet
   c.b = ovid/mem.New(io, 4096)
   c.ib = ovid/mem.New(io, 256)
-  c.env = ovid/io.Alloc(io, 4096 * 32)
+  c.env = ovid/io.Alloc(io, 4096 * 56)
   c.mark = ovid/io.Alloc(io, 256 * 8)
   var sz i64 = 1024
   while sz < (CountIds(m) * 2) {

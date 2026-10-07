@@ -119,10 +119,11 @@ packages are a DAG.
 
 `prog/` is the compiler again, written in Ovid (about 6,200 lines across seven
 packages, including SHA-256, an x86-64 assembler, and an ELF writer). It reads `ovid.mod` and `.ov` files itself and offers only
-`check`, `build`, and `dump`; give it the standard library with
-`--std <dir>`, since only the Go binary embeds it. The agent commands
-(`show`, `refs`, `grep`, `edit`, `rename`, `move`, `test`) exist only in the
-Go toolchain.
+`check`, `build`, `dump`, and `refs`; give it the standard library with
+`--std <dir>`, since only the Go binary embeds it. Its `refs` prints what
+the Go toolchain's does, from the uses its checker records; the other
+agent commands (`show`, `grep`, `edit`, `rename`, `move`, `test`) exist
+only in the Go toolchain.
 
 ```sh
 bin/ovid build -C prog -o /tmp/s1          # Go compiles the Ovid compiler
@@ -132,7 +133,7 @@ cmp /tmp/s1 /tmp/s2                        # byte-identical
 
 The two compilers emit byte-identical binaries for the same source, and
 `go test ./internal/tool -run TestSelfHost` checks it. The self-hosted
-compiler is about 120 KB, and `TestSelfHostSize` fails if it outgrows its
+compiler is about 130 KB, and `TestSelfHostSize` fails if it outgrows its
 budget. On starship (Ryzen 7 8745HS, 2026-10-04) it built `prog/` in 9 ms,
 against 27 ms for the Go one, and a generated program of 100,000 funcs
 (300,000 lines) in 0.57 s against 2.25 s. One command measures all of it:
