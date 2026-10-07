@@ -989,6 +989,8 @@ func Stmt(l *L, s *ovid/parse.Node, p *Pre) i64 {
     ifn.then = s.body
     ifn.els = stop
     Append(cp, ifn)
+    // The checks in cp are the while's, for the crash report.
+    ClaimList(cp.head, s.num)
     s.cond = Name(l, g.namep, g.namen)
     s.body = cp.head
     Append(p, s)

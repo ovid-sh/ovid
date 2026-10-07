@@ -649,7 +649,8 @@ func (l *lowerer) stmt(s *ir.Node) ([]*ir.Node, error) {
 		// else { go = false } }.
 		g := l.temp("bool", &ir.Node{Op: "bool", ValK: 2, Bool: true}, &p)
 		stop := &ir.Node{Op: "assign", Name: g.Name, Val: &ir.Node{Op: "bool", ValK: 2, Bool: false}}
-		loop := &ir.Node{ID: s.ID, Op: "while", Cond: name(g.Name),
+		// Without an id of its own, so claim reaches the checks in cp.
+		loop := &ir.Node{Op: "while", Cond: name(g.Name),
 			Body: append(cp, &ir.Node{Op: "if", Cond: cond, Then: body, Else: []*ir.Node{stop}})}
 		return append(p, loop), nil
 	}
