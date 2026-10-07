@@ -1051,9 +1051,8 @@ func (c *checker) expr0(e *env, n *ir.Node) string {
 		var cn *ir.Const
 		if t, id, ok := e.lookup(n.Name); ok && n.Pkg == "" && t == "bytes" {
 			// b[i] or len(b) on a bytes local: the node becomes the bytes
-			// form, with the name as its base.
+			// form, with the parsed name node as its base.
 			c.use(id, n.ID, "name", c.fn.ID, n.NameSpan)
-			n.Base = &ir.Node{Op: "name", Name: n.Name, NameSpan: n.NameSpan, Span: n.NameSpan}
 			if n.Op == "index" {
 				n.Op = "byte"
 				c.want(e, n.Arg, "i64", "index")

@@ -1263,6 +1263,10 @@ func Scan(b bytes, k i64) i64 {
 func TestInWhile(io *ovid/io.Cap) i64 {
   return Scan("abc", 5)
 }
+func TestNegativeLength(io *ovid/io.Cap) i64 {
+  var b bytes = bytes(ovid/io.Alloc(io, 4), 0 - 1)
+  return len(b)
+}
 func TestEdges(io *ovid/io.Cap) i64 {
   var b bytes = bytes(ovid/io.Alloc(io, 4), 4)
   Put(b, 0)
@@ -1288,8 +1292,9 @@ func TestEdges(io *ovid/io.Cap) i64 {
 	for name, src := range map[string]string{
 		"TestPastEnd": "  return b[i]", "TestNegative": "  return b[i]", "TestStore": "  b[i] = 1",
 		"TestHigh": "  return len(b[i:j])", "TestCrossed": "  return len(b[i:j])",
-		"TestNested":  "  if len(b) > 0 && len(b[i:i + 1]) == 1 {",
-		"TestInWhile": "  while len(b[k:k + 1]) == 1 {",
+		"TestNested":         "  if len(b) > 0 && len(b[i:i + 1]) == 1 {",
+		"TestInWhile":        "  while len(b[k:k + 1]) == 1 {",
+		"TestNegativeLength": "  var b bytes = bytes(ovid/io.Alloc(io, 4), 0 - 1)",
 	} {
 		r := got["fn:demo."+name]
 		at, _ := r["at"].(map[string]any)
@@ -1909,7 +1914,7 @@ func TestSelfHost(t *testing.T) {
 	// Both dumps are valid JSON and say the same thing. A literal's bytes
 	// that are not UTF-8 (prog's asm tests have some) come out as
 	// value_hex, which loses nothing.
-	lit := mkmod(t, demo("package demo\nimport ovid/io\nconst T [3]i64 = {-1, 0, 7}\nconst E [0]i64 = {}\nfunc Two(x i64) (i64, i64) {\n  return x, 0\n}\nfunc main(io *ovid/io.Cap) i64 {\n  var v i64, e i64 = Two(1)\n  v, e = Two(2)\n  var w i64, _ = Two(3)\n  return load8(strptr(\"\\xb8\\n\") + 1) + strlen(\"é\") + T[1] + len(T) + v + e + w\n}\n"))
+	lit := mkmod(t, demo("package demo\nimport ovid/io\nconst T [3]i64 = {-1, 0, 7}\nconst E [0]i64 = {}\ntype R struct {\n  s bytes\n}\nfunc Two(x i64) (i64, i64) {\n  return x, 0\n}\nfunc Cut(b bytes) (bytes, i64) {\n  return b[1:len(b)], 0\n}\nfunc main(io *ovid/io.Cap) i64 {\n  var v i64, e i64 = Two(1)\n  v, e = Two(2)\n  var w i64, _ = Two(3)\n  var s bytes = \"ab\"\n  var r *R = ovid/io.Alloc(io, sizeof(R)) as *R\n  r.s = bytes(ovid/io.Alloc(io, 2), 2)\n  r.s[0] = s[1]\n  var c bytes, ce i64 = Cut(r.s)\n  return load8(strptr(\"\\xb8\\n\") + 1) + strlen(\"é\") + T[1] + len(T) + v + e + w + len(c) + ce + len(r.s)\n}\n"))
 	for _, dir := range []string{prog, lit} {
 		b.Reset()
 		Dump(dir, "", "", &b)

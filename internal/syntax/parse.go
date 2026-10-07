@@ -904,7 +904,8 @@ func (p *parser) postfix() *ir.Node {
 				e = &ir.Node{ID: p.eid(), Op: "byte", Base: e, Arg: i, Span: ir.Span{File: p.file, Off: e.Span.Off, End: p.last}}
 				continue
 			}
-			e = &ir.Node{ID: p.eid(), Op: "index", Name: e.Name, Pkg: e.Pkg, Arg: i, Span: ir.Span{File: p.file, Off: e.Span.Off, End: p.last}, NameSpan: e.NameSpan}
+			// The name node stays as the base, for a bytes.
+			e = &ir.Node{ID: p.eid(), Op: "index", Name: e.Name, Pkg: e.Pkg, Base: e, Arg: i, Span: ir.Span{File: p.file, Off: e.Span.Off, End: p.last}, NameSpan: e.NameSpan}
 			continue
 		}
 		return e
@@ -950,7 +951,7 @@ func (p *parser) primary0() *ir.Node {
 		if t.Op != "name" {
 			return &ir.Node{ID: p.eid(), Op: "blen", Base: t}
 		}
-		return &ir.Node{ID: p.eid(), Op: "len", Name: t.Name, Pkg: t.Pkg, NameSpan: t.NameSpan}
+		return &ir.Node{ID: p.eid(), Op: "len", Name: t.Name, Pkg: t.Pkg, Base: t, NameSpan: t.NameSpan}
 	case p.peekKw("ushr"), p.peekKw("umulhi"), p.peekKw("ult"), p.peekKw("udiv"), p.peekKw("urem"):
 		// The unsigned operations are binary operators spelled as calls.
 		op := p.ident()

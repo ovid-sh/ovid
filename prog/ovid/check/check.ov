@@ -791,15 +791,8 @@ func CheckExprIn(c *Ch, n *ovid/parse.Node) i64 {
     }
     if vloc != 0 && TyEq(load64(vloc + 16), load64(vloc + 24), strptr("bytes"), strlen("bytes")) {
       // b[i] or len(b) on a bytes local: the node becomes the bytes
-      // form, with the name as its base.
+      // form, with the parsed name node as its base.
       UseLocal(c, ovid/parse.USE_NAME, vloc, n, n.namep, n.namen)
-      var bn *ovid/parse.Node = ovid/io.Alloc(c.io, sizeof(ovid/parse.Node)) as *ovid/parse.Node
-      bn.op = ovid/parse.OP_NAME
-      bn.namep = n.namep
-      bn.namen = n.namen
-      bn.off = n.off
-      bn.end = n.end
-      n.base = bn
       if op == ovid/parse.OP_INDEX {
         n.op = ovid/parse.OP_BYTE
         CheckExpr(c, n.arg)

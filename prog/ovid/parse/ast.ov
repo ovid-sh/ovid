@@ -1274,12 +1274,14 @@ func Postfix(p *P) *Node {
           bx.end = p.last
           e = bx
         } else {
+          // The name node stays as the base, for a bytes.
           var t *Node = NewNode(p, OP_INDEX)
           t.num = Eid(p)
           t.namep = e.namep
           t.namen = e.namen
           t.pkgp = e.pkgp
           t.pkgn = e.pkgn
+          t.base = e
           t.arg = ix
           t.off = e.off
           t.end = p.last
@@ -1359,6 +1361,7 @@ func Primary0(p *P) *Node {
     }
     var ln *Node = NewNode(p, OP_LEN)
     ln.num = Eid(p)
+    ln.base = tn
     ln.namep = tn.namep
     ln.namen = tn.namen
     ln.pkgp = tn.pkgp
