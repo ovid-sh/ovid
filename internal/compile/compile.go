@@ -113,6 +113,9 @@ func compileProg(p *ir.Program) ([]byte, *cg, error) {
 		return nil, nil, err
 	}
 	live := reachable(p, mainKey)
+	if usesTasks(p, live) {
+		c.emitTaskStubs()
+	}
 	for i := range p.Packages {
 		pkg := &p.Packages[i]
 		for fi := range pkg.Funcs {
@@ -172,6 +175,9 @@ type cg struct {
 	marks      []Mark
 	sys        map[int64]bool // the numbers of the system calls emitted
 	sysUnknown int            // syscalls whose number is not a constant
+	// The task runtime's stubs (swapstack, taskinit), emitted only for a
+	// program that uses them; 0 otherwise.
+	swapLab, initLab int
 }
 
 func (c *cg) mark(id string) {
@@ -327,6 +333,67 @@ func (c *cg) emitStartup(mainLab int) error {
 	c.b.MovRegImm64(asm.RAX, 60)
 	c.b.Syscall()
 	return nil
+}
+
+// usesTasks reports whether a func in live uses swapstack or taskinit.
+func usesTasks(p *ir.Program, live map[string]bool) bool {
+	found := false
+	for i := range p.Packages {
+		pkg := &p.Packages[i]
+		for fi := range pkg.Funcs {
+			if !live[pkg.Path+"."+pkg.Funcs[fi].Name] {
+				continue
+			}
+			for _, st := range pkg.Funcs[fi].Body {
+				st.Walk(func(n *ir.Node) {
+					if n.Op == "swapstack" || n.Op == "taskinit" {
+						found = true
+					}
+				})
+			}
+		}
+	}
+	return found
+}
+
+// emitTaskStubs emits the task runtime (async POC C): three fixed
+// sequences that ovid/io's scheduler reaches through two builtins.
+//
+// swapstack(save, load) pushes what compiled code keeps across a call
+// (rbp and the callee-saved rbx, r12-r15; every other register is dead at
+// a call), stores rsp at save, loads it from load, and pops the other
+// task's: the call returns on the other stack.
+//
+// taskinit(top, fn, cap, arg, exit) lays out a new task's stack below top
+// so that swapping to it pops cap into r12, arg into r13, fn into r14,
+// exit into r15, and returns into the trampoline, which calls fn(cap, arg)
+// and then exit(cap, result). exit never returns.
+func (c *cg) emitTaskStubs() {
+	b := &c.b
+	c.swapLab = b.NewLabel()
+	c.initLab = b.NewLabel()
+	tramp := b.NewLabel()
+	b.Mark(c.swapLab)
+	b.Raw(0x55, 0x53, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57) // push rbp, rbx, r12-r15
+	b.Raw(0x48, 0x89, 0x27)                                           // mov [rdi], rsp
+	b.Raw(0x48, 0x8B, 0x26)                                           // mov rsp, [rsi]
+	b.Raw(0x41, 0x5F, 0x41, 0x5E, 0x41, 0x5D, 0x41, 0x5C, 0x5B, 0x5D) // pop r15-r12, rbx, rbp
+	b.Raw(0x31, 0xC0, 0xC3)                                           // xor eax, eax; ret
+	b.Mark(c.initLab)
+	b.Raw(0x48, 0x8D, 0x47, 0xC8)             // lea rax, [rdi-56]
+	b.Raw(0x4C, 0x89, 0x00)                   // mov [rax], r8      (r15: exit)
+	b.Raw(0x48, 0x89, 0x70, 0x08)             // mov [rax+8], rsi   (r14: fn)
+	b.Raw(0x48, 0x89, 0x48, 0x10)             // mov [rax+16], rcx  (r13: arg)
+	b.Raw(0x48, 0x89, 0x50, 0x18)             // mov [rax+24], rdx  (r12: cap)
+	b.Raw(0x48, 0xC7, 0x40, 0x20, 0, 0, 0, 0) // mov qword [rax+32], 0 (rbx)
+	b.Raw(0x48, 0xC7, 0x40, 0x28, 0, 0, 0, 0) // mov qword [rax+40], 0 (rbp)
+	b.LeaRegLabel(asm.RCX, tramp)             // lea rcx, [rip+tramp]
+	b.Raw(0x48, 0x89, 0x48, 0x30)             // mov [rax+48], rcx  (return address)
+	b.Raw(0xC3)                               // ret
+	b.Mark(tramp)
+	b.Raw(0x4C, 0x89, 0xE7, 0x4C, 0x89, 0xEE, 0x41, 0xFF, 0xD6) // mov rdi, r12; mov rsi, r13; call r14
+	b.Raw(0x4C, 0x89, 0xE7, 0x48, 0x89, 0xC6, 0x41, 0xFF, 0xD7) // mov rdi, r12; mov rsi, rax; call r15
+	b.Raw(0x0F, 0x0B)                                           // ud2
 }
 
 func capOff(p *ir.Program, name string) (int32, error) {
@@ -747,7 +814,7 @@ func exprCalls(n *ir.Node) bool {
 	if n == nil {
 		return false
 	}
-	if n.Op == "call" || n.Op == "syscall" {
+	if n.Op == "call" || n.Op == "syscall" || n.Op == "swapstack" || n.Op == "taskinit" {
 		return true
 	}
 	return exprCalls(n.Left) || exprCalls(n.Right) || exprCalls(n.Arg) || exprCalls(n.Base)
@@ -809,7 +876,7 @@ func exprMax(n *ir.Node, lv int) int {
 		return exprMax(n.Arg, lv)
 	case "field":
 		return exprMax(n.Base, lv)
-	case "call", "syscall":
+	case "call", "syscall", "swapstack", "taskinit":
 		m := -1
 		for i, a := range n.Args {
 			m = max1(m, exprMax(a, lv+i))
@@ -1941,6 +2008,30 @@ func (c *cg) emitExpr(n *ir.Node, lv int) error {
 			c.qmark = -1
 		}
 		return nil
+	case "swapstack", "taskinit":
+		lab := c.swapLab
+		if n.Op == "taskinit" {
+			lab = c.initLab
+		}
+		if err := c.emitArgs(n.Args, argRegs[:len(n.Args)], lv); err != nil {
+			return err
+		}
+		c.b.Call(lab)
+		if c.qcall {
+			c.qmark = -1
+		}
+		return nil
+	case "taskfn":
+		path := n.Pkg
+		if path == "" {
+			path = c.pkg.Path
+		}
+		lab, ok := c.funcLabel[path+"."+n.Func]
+		if !ok {
+			return fmt.Errorf("taskfn %s.%s", path, n.Func)
+		}
+		c.b.LeaRegLabel(asm.RAX, lab)
+		return nil
 	case "syscall":
 		if len(n.Args) != 7 {
 			return fmt.Errorf("syscall arity")
@@ -2042,7 +2133,7 @@ func (c *cg) typeOf(n *ir.Node) string {
 		return "invalid"
 	}
 	switch n.Op {
-	case "int", "strptr", "strlen", "sizeof", "add", "sub", "mul", "div", "mod", "and", "or", "xor", "shl", "shr", "ushr", "umulhi", "udiv", "urem", "neg", "bnot", "index", "len", "load8", "load16", "load32", "load64", "bswap16", "bswap32", "bswap64", "syscall":
+	case "int", "strptr", "strlen", "sizeof", "add", "sub", "mul", "div", "mod", "and", "or", "xor", "shl", "shr", "ushr", "umulhi", "udiv", "urem", "neg", "bnot", "index", "len", "load8", "load16", "load32", "load64", "bswap16", "bswap32", "bswap64", "syscall", "swapstack", "taskinit", "taskfn":
 		return "i64"
 	case "bool", "eq", "ne", "lt", "le", "gt", "ge", "ult", "land", "lor", "not":
 		return "bool"
@@ -2138,7 +2229,7 @@ func reachable(p *ir.Program, root string) map[string]bool {
 			if n == nil {
 				return
 			}
-			if n.Op == "call" {
+			if n.Op == "call" || n.Op == "taskfn" {
 				callee := n.Pkg
 				if callee == "" {
 					callee = pkg

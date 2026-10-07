@@ -908,7 +908,14 @@ func (c *checker) unknownName(id, name string, e *env) {
 // ovid/io one cannot be made by a cast or turned into an address by one,
 // and its fields cannot be read or written.
 func (c *checker) opaque(t string) bool {
-	return strings.HasPrefix(t, "*ovid/io.") && !(c.pkg.Path == "ovid/io" && c.pkg.Sys)
+	return (strings.HasPrefix(t, "*ovid/io.") || strings.HasPrefix(t, "*ovid/task.")) && !c.runtime()
+}
+
+// runtime reports whether the package being checked is the toolchain's own
+// ovid/io or ovid/task (async POC C): they see through each other's
+// handles, and ovid/task may switch stacks.
+func (c *checker) runtime() bool {
+	return c.pkg.Sys && (c.pkg.Path == "ovid/io" || c.pkg.Path == "ovid/task")
 }
 
 func (c *checker) field(n *ir.Node, bt string) string {
@@ -1084,6 +1091,24 @@ func (c *checker) expr0(e *env, n *ir.Node) string {
 			c.want(e, a, "i64", fmt.Sprintf("syscall argument %d", i+1))
 		}
 		return "i64"
+	case "swapstack", "taskinit":
+		// swapstack(save, load) saves the stack pointer at save and runs on
+		// the one at load; taskinit(top, fn, cap, arg, exit) lays out a new
+		// task's stack below top. Only the shipped ovid/task (and ovid/io)
+		// may, as only ovid/io may syscall.
+		if !c.runtime() {
+			c.issue(Issue{Code: "syscall_forbidden", ID: n.ID, Message: n.Op + " is only valid in package ovid/task", Hint: "use ovid/task.Spawn and the task functions"})
+		}
+		want := map[string]int{"swapstack": 2, "taskinit": 5}[n.Op]
+		if len(n.Args) != want {
+			c.issue(Issue{Code: "arity", ID: n.ID, Message: fmt.Sprintf("%s takes %d arguments", n.Op, want), Expected: fmt.Sprint(want), Got: fmt.Sprint(len(n.Args))})
+		}
+		for i, a := range n.Args {
+			c.want(e, a, "i64", fmt.Sprintf("%s argument %d", n.Op, i+1))
+		}
+		return "i64"
+	case "taskfn":
+		return c.taskfn(n)
 	case "load8", "load16", "load32", "load64":
 		if n.Arg == nil {
 			return c.builtinArity(e, n, 1)
@@ -1262,6 +1287,32 @@ func (c *checker) call(e *env, n *ir.Node) string {
 		}
 	}
 	return sg.result
+}
+
+// taskfn checks taskfn(F): F must be a func of the form
+// func F(io *ovid/io.Cap, arg i64) i64, the entry of a task. The value is
+// an opaque i64 (a code address natively, a dispatch index under wasm),
+// recorded as a use of F so refs and rename see it.
+func (c *checker) taskfn(n *ir.Node) string {
+	path := n.Pkg
+	if path == "" {
+		path = c.pkg.Path
+	} else if path != c.pkg.Path && !c.imported[path] {
+		c.issue(Issue{Code: "missing_import", ID: n.ID, Message: "taskfn names " + path + "." + n.Func + " but " + path + " is not imported",
+			Hint: "add `import " + path + "` after the package line"})
+		return "i64"
+	}
+	sg, ok := c.sigs[path+"."+n.Func]
+	if !ok {
+		c.issue(Issue{Code: "unknown_name", ID: n.ID, Message: "undefined function " + path + "." + n.Func})
+		return "i64"
+	}
+	c.use(sg.id, n.ID, "call", c.fn.ID, n.NameSpan)
+	if len(sg.params) != 2 || sg.params[0] != "*ovid/io.Cap" || sg.params[1] != "i64" || sg.result != "i64" || sg.two {
+		c.issue(Issue{Code: "type_mismatch", ID: n.ID, Message: "a task entry must be func " + n.Func + "(io *ovid/io.Cap, arg i64) i64",
+			Expected: "func(*ovid/io.Cap, i64) i64", Got: c.sigText(path, n.Func)})
+	}
+	return "i64"
 }
 
 // callSig is the signature of the func a call node names, if it is a call

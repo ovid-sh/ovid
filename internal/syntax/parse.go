@@ -929,6 +929,21 @@ func (p *parser) primary0() *ir.Node {
 	case p.peekKw("syscall"):
 		p.ident()
 		return p.callArgs("syscall", "", "", ir.Span{})
+	case p.peekKw("swapstack"), p.peekKw("taskinit"):
+		// The task primitives (async POC C), ovid/io only, like syscall.
+		op := p.ident()
+		return p.callArgs(op, "", "", ir.Span{})
+	case p.peekKw("taskfn"):
+		// taskfn(F): the entry of a task, named at compile time; Ovid has
+		// no function values, so this is the only way to name one.
+		p.ident()
+		p.expect('(')
+		t := p.primary()
+		if t.Op != "name" {
+			p.errorf("taskfn takes the name of a func")
+		}
+		p.expect(')')
+		return &ir.Node{ID: p.eid(), Op: "taskfn", Pkg: t.Pkg, Func: t.Name, NameSpan: t.NameSpan}
 	case p.peekLen():
 		// len(Table), a compile-time constant.
 		p.ident()
@@ -1046,7 +1061,7 @@ func (p *parser) tryPkgRef(first string) (string, string, bool) {
 func (p *parser) callArgs(op, pkg, name string, ns ir.Span) *ir.Node {
 	args := p.argList()
 	n := &ir.Node{ID: p.eid(), Op: op, Pkg: pkg, Func: name, Args: args, NameSpan: ns}
-	if op == "syscall" {
+	if op != "call" {
 		n.Func = ""
 		n.Pkg = ""
 	}

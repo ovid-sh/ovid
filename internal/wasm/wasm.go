@@ -46,12 +46,13 @@ func Compile(p *ir.Program) ([]byte, error) {
 		return nil, fmt.Errorf("nil program")
 	}
 	c := &cg{
-		prog:   p,
-		strs:   map[string]int{},
-		tables: map[string]tableRef{},
-		funcs:  map[string]int{},
-		sigs:   map[string]sig{},
-		pkgs:   map[string]*ir.Package{},
+		prog:    p,
+		strs:    map[string]int{},
+		tables:  map[string]tableRef{},
+		funcs:   map[string]int{},
+		sigs:    map[string]sig{},
+		pkgs:    map[string]*ir.Package{},
+		taskIdx: map[string]int{},
 	}
 	mainKey := p.Entry + ".main"
 	live := reachable(p, mainKey)
@@ -101,6 +102,14 @@ func Compile(p *ir.Program) ([]byte, error) {
 		funcTypes = append(funcTypes, c.typeIdx(len(s.params), s.nres))
 		bodies = append(bodies, body)
 	}
+	// _task(fn, cap, arg) starts a task (async POC C): the host calls it,
+	// under JSPI, with a dispatch index from taskfn.
+	taskAt := -1
+	if len(c.taskOrder) > 0 {
+		taskAt = fnFirst + len(order)
+		funcTypes = append(funcTypes, c.typeIdx(3, 1))
+		bodies = append(bodies, c.taskBody())
+	}
 	// Rodata is final: the Cap goes after it.
 	capAddr := (roBase + len(c.ro) + 7) &^ 7
 	start, err := c.startup(c.funcs[mainKey], int64(capAddr), int64(roBase+oom))
@@ -142,7 +151,14 @@ func Compile(p *ir.Program) ([]byte, error) {
 	pages := (capAddr + 64 + 0xffff) / 0x10000
 	m = section(m, 5, uleb([]byte{1, 0x00}, uint64(pages)))
 	var es []byte
-	es = uleb(es, 2)
+	if taskAt >= 0 {
+		es = uleb(es, 3)
+		es = name(es, "_task")
+		es = append(es, 0x00)
+		es = uleb(es, uint64(taskAt))
+	} else {
+		es = uleb(es, 2)
+	}
 	es = name(es, "memory")
 	es = append(es, 0x02, 0)
 	es = name(es, "_start")
@@ -175,15 +191,32 @@ type sig struct {
 
 type tableRef struct{ off, n int }
 
+// taskBody is _task(fn, cap, arg): call the func with dispatch index fn
+// (1 for the first taskfn met, and so on) with (cap, arg).
+func (c *cg) taskBody() []byte {
+	c.b = []byte{0}
+	for k, key := range c.taskOrder {
+		c.op(opLocalGet, 0)
+		c.i64(int64(k + 1))
+		c.op(opI64Eq, opIf, blockVoid, opLocalGet, 1, opLocalGet, 2, opCall)
+		c.b = uleb(c.b, uint64(c.funcs[key]))
+		c.op(opReturn, opEnd)
+	}
+	c.op(opUnreachable, opEnd)
+	return c.b
+}
+
 type cg struct {
-	prog   *ir.Program
-	pkgs   map[string]*ir.Package
-	funcs  map[string]int
-	sigs   map[string]sig
-	types  [][2]int
-	ro     []byte
-	strs   map[string]int
-	tables map[string]tableRef
+	taskIdx   map[string]int // taskfn targets: their dispatch index
+	taskOrder []string
+	prog      *ir.Program
+	pkgs      map[string]*ir.Package
+	funcs     map[string]int
+	sigs      map[string]sig
+	types     [][2]int
+	ro        []byte
+	strs      map[string]int
+	tables    map[string]tableRef
 
 	// The func being compiled.
 	pkg     *ir.Package
@@ -832,6 +865,26 @@ func (c *cg) emitExpr(n *ir.Node) error {
 		}
 		c.op(opCall)
 		c.b = uleb(c.b, uint64(idx))
+	case "swapstack", "taskinit":
+		// The native task runtime; ovid/io takes the host's path under
+		// wasm and never gets here.
+		c.op(opUnreachable)
+	case "taskfn":
+		path := n.Pkg
+		if path == "" {
+			path = c.pkg.Path
+		}
+		key := path + "." + n.Func
+		if _, ok := c.funcs[key]; !ok {
+			return fmt.Errorf("taskfn %s", key)
+		}
+		k, ok := c.taskIdx[key]
+		if !ok {
+			c.taskOrder = append(c.taskOrder, key)
+			k = len(c.taskOrder)
+			c.taskIdx[key] = k
+		}
+		c.i64(int64(k))
 	case "syscall":
 		if len(n.Args) != 7 {
 			return fmt.Errorf("syscall arity")
@@ -979,7 +1032,7 @@ func reachable(p *ir.Program, root string) map[string]bool {
 		pkg := key[:strings.LastIndex(key, ".")]
 		for _, st := range funcs[key].Body {
 			st.Walk(func(n *ir.Node) {
-				if n.Op == "call" {
+				if n.Op == "call" || n.Op == "taskfn" {
 					callee := n.Pkg
 					if callee == "" {
 						callee = pkg

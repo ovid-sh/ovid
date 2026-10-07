@@ -15,6 +15,7 @@ var keywords = map[string]bool{
 	"var": true, "if": true, "else": true, "while": true, "return": true, "true": true, "false": true,
 	"as": true, "syscall": true, "load8": true, "load16": true, "load32": true, "load64": true, "store8": true, "store16": true, "store32": true,
 	"store64": true, "bswap16": true, "bswap32": true, "bswap64": true, "ushr": true, "umulhi": true, "ult": true, "udiv": true, "urem": true, "strptr": true, "strlen": true, "i64": true, "bool": true,
+	"swapstack": true, "taskinit": true, "taskfn": true,
 }
 
 func isIdent(s string) bool {

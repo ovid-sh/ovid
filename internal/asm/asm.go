@@ -530,6 +530,15 @@ func (b *Buf) Jmp(label int) { b.rel32([]byte{0xE9}, label) }
 
 func (b *Buf) Call(label int) { b.rel32([]byte{0xE8}, label) }
 
+// LeaRegLabel encodes lea reg, [rip+label]: the address of code at label.
+func (b *Buf) LeaRegLabel(reg, label int) {
+	b.rel32([]byte{rex(true, reg >= 8, false, false), 0x8D, modrm(0, byte(reg&7), 5)}, label)
+}
+
+// Raw appends bytes already encoded, for the few fixed sequences (the task
+// runtime's stubs) that have no method of their own.
+func (b *Buf) Raw(bytes ...byte) { b.emit(bytes...) }
+
 // Jcc emits 0F cc rel32. cc is the second opcode (0x84 = jz, 0x85 = jnz, 0x8C = jl).
 func (b *Buf) Jcc(cc byte, label int) {
 	b.rel32([]byte{0x0F, cc}, label)
