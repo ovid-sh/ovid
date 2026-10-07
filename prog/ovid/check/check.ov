@@ -168,7 +168,7 @@ func WId(c *Ch, b *ovid/mem.Buf) i64 {
   }
   if c.hk == H_NODE {
     var n *ovid/parse.Node = c.hn
-    if n.op <= ovid/parse.OP_EXPR {
+    if ovid/parse.IsStmt(n.op) {
       ovid/mem.WBytes(io, b, strptr("st:"), 3)
     } else {
       ovid/mem.WBytes(io, b, strptr("ex:"), 3)

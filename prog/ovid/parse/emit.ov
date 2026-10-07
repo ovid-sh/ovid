@@ -318,7 +318,7 @@ func EList(e *E, key i64, kn i64, n *Node) i64 {
 
 func ENode(e *E, n *Node) i64 {
   WC(e, 123)
-  if n.op <= OP_EXPR {
+  if IsStmt(n.op) {
     IdOpen(e, strptr("st:"), 3)
   } else {
     IdOpen(e, strptr("ex:"), 3)

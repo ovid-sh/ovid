@@ -3,9 +3,9 @@ package ovid/parse
 import ovid/io
 import ovid/mem
 
-// Op codes. Statements are 1..15; everything else is an expression, and
-// the binary operators (OP_LOR and up) come after every other expression,
-// so EvalConst can tell them apart by number.
+// Op codes. Statements are 1..OP_CHK (IsStmt); everything else is an
+// expression, and the binary operators (OP_LOR and up) come after every
+// other expression, so EvalConst can tell them apart by number.
 const OP_VAR i64 = 1
 const OP_VAR2 i64 = 2
 const OP_ASSIGN i64 = 3
@@ -77,6 +77,11 @@ const OP_SHR i64 = 67
 // OpWidth is the width in bits of one of them.
 func LoadOp(op i64) bool {
   return op >= OP_LOAD8 && op <= OP_LOAD64
+}
+
+// IsStmt says whether op names a statement.
+func IsStmt(op i64) bool {
+  return op >= OP_VAR && op <= OP_CHK
 }
 
 func StoreOp(op i64) bool {
