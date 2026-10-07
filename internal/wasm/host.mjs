@@ -73,7 +73,25 @@ function host(stdin, canWait, opts) {
   const freed = [];
   const done = []; // completed HOST_SUBMIT tags not yet polled
   let wake = null; // resolves the waiting HOST_POLL
-  const buckets = new Map(); // due time (ms) -> tags of HOST_SUBMIT timers
+  // h.after(ms, fn) calls fn after ms. Calls due at the same moment share
+  // one setTimeout: workerd runs each timer callback in a turn of its own,
+  // so ten 10 ms timers would otherwise wake the instance ten times. Under
+  // workerd Date.now() does not advance during a synchronous run, so
+  // timers started together share a due time.
+  const buckets = new Map(); // due time (ms) -> callbacks
+  h.after = (ms, fn) => {
+    const due = Date.now() + ms;
+    let fns = buckets.get(due);
+    if (!fns) {
+      fns = [];
+      buckets.set(due, fns);
+      setTimeout(() => {
+        buckets.delete(due);
+        for (const g of fns) g();
+      }, ms);
+    }
+    fns.push(fn);
+  };
   const poll = (buf, max) => {
     const n = Math.min(Number(max), done.length);
     const view = new DataView(h.memory.buffer);
@@ -127,29 +145,17 @@ function host(stdin, canWait, opts) {
         throw new Exit(Number(BigInt.asIntN(64, a)));
       case HOST.SLEEP:
         if (!canWait) return ENOSYS;
-        return new Promise((r) => setTimeout(() => r(0n), Number(a)));
-      case HOST.SUBMIT: {
-        // Timers due at the same moment share one setTimeout, so one
-        // HOST_POLL wakes for all of them: workerd runs each timer
-        // callback in a turn of its own.
-        const due = Date.now() + Number(a);
-        let tags = buckets.get(due);
-        if (!tags) {
-          tags = [];
-          buckets.set(due, tags);
-          setTimeout(() => {
-            buckets.delete(due);
-            done.push(...tags);
-            if (wake) {
-              const w = wake;
-              wake = null;
-              w();
-            }
-          }, Number(a));
-        }
-        tags.push(b);
+        return new Promise((r) => h.after(Number(a), () => r(0n)));
+      case HOST.SUBMIT:
+        h.after(Number(a), () => {
+          done.push(b);
+          if (wake) {
+            const w = wake;
+            wake = null;
+            w();
+          }
+        });
         return 0n;
-      }
       case HOST.POLL:
         if (done.length > 0) return poll(a, b);
         if (!canWait) return ENOSYS;
