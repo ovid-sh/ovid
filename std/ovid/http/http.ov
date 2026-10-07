@@ -293,12 +293,13 @@ func NextStdio(io *ovid/io.Cap, s *Stdio) *Request {
   while (s.len - s.start) < (h + bl) && s.eof == 0 {
     fill(s, h + bl)
   }
-  // fill may have moved the request to the start of the buffer.
   if (s.len - s.start) < (h + bl) {
     r.err = ERR_SYNTAX
     return r
   }
   s.used = h + bl
+  // From s.start again: fill may have moved the request to the front of
+  // the buffer.
   s.done = Parse(r, bytes(s.buf + s.start, h + bl)) != 0
   return r
 }
