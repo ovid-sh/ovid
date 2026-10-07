@@ -35,9 +35,10 @@ func identByte(c byte) bool {
 }
 
 // Rename renames a declaration and every use the checker resolved to it,
-// rewriting only those name tokens: a field, local, or other declaration
-// spelled the same is left alone. It refuses names that collide and changes
-// that add check errors.
+// rewriting those name tokens and, when the declaration's doc comment opens
+// with its name, that word too: a field, local, or other declaration
+// spelled the same, or any other mention in a comment or string, is left
+// alone. It refuses names that collide and changes that add check errors.
 func Rename(dir, q, to string, dryRun bool, w io.Writer) int {
 	unlock, code := lockModule(dir, w)
 	if unlock == nil {
