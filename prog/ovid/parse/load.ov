@@ -216,7 +216,7 @@ func ListDir(io *ovid/io.Cap, path i64) *File {
   return head
 }
 
-// InsertByName inserts f into the list sorted by relp.
+// InsertByName inserts f into the list sorted by rel.
 func InsertByName(head *File, f *File) *File {
   if head == 0 as *File || Cmp(f.rel, head.rel) < 0 {
     f.next = head

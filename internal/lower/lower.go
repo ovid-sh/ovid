@@ -9,14 +9,15 @@
 // a chk and a store8; b[i:j] the pair (p + i, j - i) after two chks;
 // len(b) is b#n; "lit" is strptr and strlen; bytes(p, n) the pair.
 //
-// The checks and the pairs' parts must be simple operands (a name or a
-// constant), so anything else is first moved into a temp local (t#k)
-// by a statement placed before the one being lowered. Moving an
-// expression keeps evaluation order: every earlier expression in the
-// same statement that is not a simple operand is moved too (a memory
-// read left of a call that writes it must come first), and an operand of &&
-// or || or a while condition that needs a move is restructured into an
-// if, so the move runs exactly when the operand would have.
+// The checks and the pairs' parts are simple operands (a name or a
+// constant) or, for a field, its two loads left in place; anything else
+// is first moved into a temp local (t#k) by a statement placed before
+// the one being lowered. Moving an expression keeps evaluation order:
+// every earlier expression in the same statement that is not a simple
+// operand is moved too (a memory read left of a call that writes it
+// must come first), the halves of a field among them, and an operand of
+// && or || or a while condition that needs a move is restructured into
+// an if, so the move runs exactly when the operand would have.
 //
 // The lowered tree is the code generator's alone: ids, hashes, and the
 // tools see the tree the checker saw.
@@ -280,8 +281,9 @@ func (l *lowerer) hoist(n *ir.Node, p *pre) (*ir.Node, error) {
 	return l.fix(n, p), nil
 }
 
-// pair lowers a bytes-typed expression to its address and length, both
-// simple operands, placing in p the statements that must run first.
+// pair lowers a bytes-typed expression to its address and length: simple
+// operands, or a field's two loads in place, placing in p the statements
+// that must run first.
 func (l *lowerer) pair(n *ir.Node, p *pre) (addr, ln *ir.Node, err error) {
 	switch n.Op {
 	case "name":
@@ -629,6 +631,10 @@ func (l *lowerer) stmt(s *ir.Node) ([]*ir.Node, error) {
 			if err != nil {
 				return nil, err
 			}
+			// Both words are read before the first store: through a cast
+			// the destination may overlap the source, and the whole value
+			// is what the assignment means.
+			a, ln = l.fix(a, &p), l.fix(ln, &p)
 			return append(p, &ir.Node{ID: s.ID, Op: "setfield", Base: base, Name: s.Name, Val: a},
 				&ir.Node{Op: "setfield", Base: base, Name: s.Name + "#n", Val: ln}), nil
 		}

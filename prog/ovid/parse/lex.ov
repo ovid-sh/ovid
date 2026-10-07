@@ -335,7 +335,7 @@ func PeekAssign(p *P) bool {
   return false
 }
 
-// Cat returns a new buffer holding a then b (length an + bn).
+// Cat returns a new buffer holding a then b (length len(a) + len(b)).
 func Cat(io *ovid/io.Cap, a bytes, b bytes) i64 {
   var d i64 = ovid/io.Alloc(io, len(a) + len(b) + 1)
   ovid/mem.CopyN(d, ptr(a), len(a))

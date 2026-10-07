@@ -3,7 +3,7 @@ package ovid/asm
 import ovid/io
 import ovid/mem
 
-// BytesAre reports whether c holds exactly the n bytes at want.
+// BytesAre reports whether c holds exactly want.
 func BytesAre(io *ovid/io.Cap, c *Code, want bytes) bool {
   if ovid/mem.Eq(bytes(c.data, c.len), want) {
     return true

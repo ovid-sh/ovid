@@ -49,7 +49,7 @@ func New(io *ovid/io.Cap) *Code {
   return c
 }
 
-// Double returns a zeroed copy of the n bytes at p with room for 2n.
+// Double returns a zeroed copy of s with room for twice its length.
 func Double(c *Code, s bytes) i64 {
   var d i64 = ovid/io.Alloc(c.io, len(s) * 2)
   ovid/mem.CopyN(d, ptr(s), len(s))
@@ -534,7 +534,7 @@ func Ud2(c *Code) i64 {
   return 0
 }
 
-// RoBytes appends n bytes at p to rodata and returns their offset.
+// RoBytes appends s to rodata and returns its offset.
 func RoBytes(c *Code, s bytes) i64 {
   while (c.ron + len(s)) > c.rocap {
     c.ro = Double(c, bytes(c.ro, c.rocap))
