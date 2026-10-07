@@ -1,0 +1,130 @@
+package demo
+import ovid/io
+import ovid/mem
+// exit: 0
+// stdout: "ok\n"
+
+// A bytes field is read where it stands in source order: a call later
+// in the same expression that replaces the field sees the old value
+// already taken.
+
+type F struct {
+  id i64
+  b bytes
+  n i64
+}
+
+type L struct {
+  f *F
+}
+
+// Swap gives f a new b and returns the index 1.
+func Swap(f *F) i64 {
+  f.b = "XYZW"
+  return 1
+}
+
+// SwapB is Swap returning a bytes.
+func SwapB(f *F) bytes {
+  f.b = "XYZW"
+  return "pq"
+}
+
+func Take(a bytes, i i64) i64 {
+  return a[i]
+}
+
+func Take2(a bytes, c bytes) i64 {
+  return a[0] * 1000 + c[0]
+}
+
+func New(io *ovid/io.Cap) *F {
+  var f *F = ovid/io.Alloc(io, sizeof(F)) as *F
+  f.b = ovid/io.AllocBytes(io, 4)
+  ovid/mem.Copy(f.b, "abcd")
+  return f
+}
+
+func Fail(io *ovid/io.Cap, k i64) i64 {
+  ovid/io.Print("case ")
+  var d bytes = ovid/io.AllocBytes(io, 1)
+  d[0] = 48 + k
+  ovid/io.Print(d)
+  ovid/io.Print(" failed\n")
+  return 1
+}
+
+func main(io *ovid/io.Cap) i64 {
+  // Indexing: the index call runs after the field is read.
+  var f *F = New(io)
+  if f.b[Swap(f)] != 98 {
+    return Fail(io, 1)
+  }
+  // Slicing: the bounds' calls, too.
+  f = New(io)
+  var s bytes = f.b[1:Swap(f) + 2]
+  if len(s) != 2 || s[0] != 98 || s[1] != 99 {
+    return Fail(io, 2)
+  }
+  // Call arguments, before a plain call and before one returning bytes.
+  f = New(io)
+  if Take(f.b, Swap(f)) != 98 {
+    return Fail(io, 3)
+  }
+  f = New(io)
+  if Take2(f.b, SwapB(f)) != 97 * 1000 + 112 {
+    return Fail(io, 4)
+  }
+  // Operands of an expression, with a plain call and one returning bytes.
+  f = New(io)
+  if len(f.b) + Swap(f) != 5 {
+    return Fail(io, 5)
+  }
+  f = New(io)
+  if len(f.b) + len(SwapB(f)) != 6 {
+    return Fail(io, 6)
+  }
+  // ptr: the address is the old one.
+  f = New(io)
+  var p i64 = ptr(f.b) + Swap(f)
+  if load8(p) != 98 {
+    return Fail(io, 7)
+  }
+  // Storing: the value's call runs after the field is read, and the
+  // store lands in the old buffer, which the check was against.
+  f = New(io)
+  var old bytes = f.b
+  f.b[2] = Swap(f) + 70
+  if old[2] != 71 || f.b[2] != 90 {
+    return Fail(io, 8)
+  }
+  // A field of a field is read in place as well.
+  var l *L = ovid/io.Alloc(io, sizeof(L)) as *L
+  l.f = New(io)
+  if l.f.b[Swap(l.f)] != 98 || Take(l.f.b, Swap(l.f)) != 89 {
+    return Fail(io, 9)
+  }
+  // Returning a field with an error code: the code's call comes after.
+  f = New(io)
+  var r bytes, e i64 = Both(f)
+  if e != 1 || r[0] != 97 {
+    return Fail(io, 10)
+  }
+  // And a while condition on a field is just a condition.
+  f = New(io)
+  var i i64 = 0
+  var sum i64 = 0
+  while i < len(f.b) && f.b[i] != 100 {
+    sum = sum + f.b[i]
+    i = i + 1
+  }
+  if sum != 97 + 98 + 99 {
+    return Fail(io, 11)
+  }
+  ovid/io.Print("ok\n")
+  return 0
+}
+
+func Both(f *F) (bytes, i64) {
+  return f.b, Swap(f)
+}

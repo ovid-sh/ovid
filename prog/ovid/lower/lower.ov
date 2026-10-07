@@ -392,6 +392,22 @@ func Simple(n *ovid/parse.Node) bool {
   return op == ovid/parse.OP_NAME || op == ovid/parse.OP_INT || op == ovid/parse.OP_STRLEN || op == ovid/parse.OP_STRPTR || op == ovid/parse.OP_SIZEOF || op == ovid/parse.OP_LEN
 }
 
+// Pure says n is a load with nothing to run: a local, or a field of one.
+func Pure(n *ovid/parse.Node) bool {
+  return n.op == ovid/parse.OP_NAME || (n.op == ovid/parse.OP_FIELD && Pure(n.base))
+}
+
+// TempType sets l.typ to the type a temp holding the lowered n takes:
+// TypeOf, except that a field it still calls bytes is the address half
+// of a pair, which Pair leaves as a load of the field named after it.
+func TempType(l *L, n *ovid/parse.Node) i64 {
+  TypeOf(l, n)
+  if n.op == ovid/parse.OP_FIELD && IsBytes(l.typ, l.tyn) {
+    return SetTy(l, strptr("i64"), 3)
+  }
+  return 0
+}
+
 // TmpName makes the name t#k of a fresh temp, at l.typ (the address) and
 // l.tyn (its length), without touching the type the caller holds.
 func TmpName(l *L, out i64) i64 {
@@ -453,15 +469,44 @@ func Become(l *L, n *ovid/parse.Node, np i64, nn i64) i64 {
 // it is moved into, in place.
 func Hoist(l *L, n *ovid/parse.Node, p *Pre) *ovid/parse.Node {
   Expr(l, n, p)
+  return Fix(l, n, p)
+}
+
+// Fix makes the lowered n a simple operand, moving it into a temp, in
+// place, if it is not one.
+func Fix(l *L, n *ovid/parse.Node, p *Pre) *ovid/parse.Node {
   if Simple(n) {
     return n
   }
-  TypeOf(l, n)
+  TempType(l, n)
   var tp i64 = l.typ
   var tn i64 = l.tyn
   var t *ovid/parse.Node = Temp(l, tp, tn, Copy(l, n), p)
   Become(l, n, t.namep, t.namen)
   return n
+}
+
+// FixAt moves the lowered a and b, where not simple, into temps placed
+// after mark in p, ahead of what was added since, so their reads keep
+// their place in source order.
+func FixAt(l *L, p *Pre, mark *ovid/parse.Node, a *ovid/parse.Node, b *ovid/parse.Node) i64 {
+  if !Grew(p, mark) {
+    return 0
+  }
+  return FixAll(l, p, mark, a, b)
+}
+
+// FixAll is FixAt whether or not p grew.
+func FixAll(l *L, p *Pre, mark *ovid/parse.Node, a *ovid/parse.Node, b *ovid/parse.Node) i64 {
+  var kept *ovid/parse.Node = 0 as *ovid/parse.Node
+  if !Simple(a) {
+    kept = Keep(l, kept, a)
+  }
+  if !Simple(b) {
+    kept = Keep(l, kept, b)
+  }
+  MoveCalls(l, p, mark, kept)
+  return 0
 }
 
 // Pair lowers a bytes-typed expression to its address and length, both
@@ -504,7 +549,16 @@ func Pair(l *L, n *ovid/parse.Node, p *Pre) i64 {
     return 0
   }
   if op == ovid/parse.OP_FIELD {
-    var base *ovid/parse.Node = Hoist(l, n.base, p)
+    // Two loads of the expanded fields, left where they are: a base
+    // with nothing to run is read in place, any other is moved first.
+    Expr(l, n.base, p)
+    var base *ovid/parse.Node = n.base
+    if !Pure(base) {
+      TypeOf(l, base)
+      var tp i64 = l.typ
+      var tn i64 = l.tyn
+      base = Temp(l, tp, tn, Copy(l, base), p)
+    }
     var fp *ovid/parse.Node = NewNode(l, ovid/parse.OP_FIELD)
     fp.base = base
     fp.namep = n.namep
@@ -513,18 +567,18 @@ func Pair(l *L, n *ovid/parse.Node, p *Pre) i64 {
     fnn.base = base
     fnn.namep = NName(l, n.namep, n.namen)
     fnn.namen = n.namen + 2
-    var fa *ovid/parse.Node = Temp(l, strptr("i64"), 3, fp, p)
-    var fl *ovid/parse.Node = Temp(l, strptr("i64"), 3, fnn, p)
-    l.pa = fa
-    l.pl = fl
+    l.pa = fp
+    l.pl = fnn
     return 0
   }
   if op == ovid/parse.OP_SLICE {
     Pair(l, n.base, p)
     var bp *ovid/parse.Node = l.pa
     var bn *ovid/parse.Node = l.pl
+    var mark *ovid/parse.Node = p.tail
     var i *ovid/parse.Node = Hoist(l, n.left, p)
     var j *ovid/parse.Node = Hoist(l, n.right, p)
+    FixAt(l, p, mark, bp, bn)
     // j <= n and i <= j, unsigned, so a negative bound trips too.
     var c1 *ovid/parse.Node = NewNode(l, ovid/parse.OP_CHK)
     c1.addr = j
@@ -580,7 +634,7 @@ func Grew(p *Pre, mark *ovid/parse.Node) bool {
 func MoveCalls(l *L, p *Pre, mark *ovid/parse.Node, kept *ovid/parse.Node) *ovid/parse.Node {
   while kept != 0 as *ovid/parse.Node {
     var n *ovid/parse.Node = kept.base
-    TypeOf(l, n)
+    TempType(l, n)
     var tp i64 = l.typ
     var tn i64 = l.tyn
     var cell i64 = ovid/io.Alloc(l.io, 16)
@@ -644,7 +698,9 @@ func Expr(l *L, n *ovid/parse.Node, p *Pre) i64 {
     Pair(l, n.base, p)
     var bp *ovid/parse.Node = l.pa
     var bn *ovid/parse.Node = l.pl
+    var mark *ovid/parse.Node = p.tail
     var i *ovid/parse.Node = Hoist(l, n.arg, p)
+    FixAt(l, p, mark, bp, bn)
     n.op = ovid/parse.OP_BLOAD
     n.base = bp
     n.left = i
@@ -665,7 +721,7 @@ func Expr(l *L, n *ovid/parse.Node, p *Pre) i64 {
     if ln.op == ovid/parse.OP_NAME {
       Become(l, n, ln.namep, ln.namen)
     } else {
-      // Of a literal: strlen or strptr.
+      // Of a literal (strlen or strptr) or a field (its load).
       var next *ovid/parse.Node = n.next
       var num i64 = n.num
       ovid/mem.CopyN(n as i64, ln as i64, sizeof(ovid/parse.Node))
@@ -716,6 +772,10 @@ func Expr(l *L, n *ovid/parse.Node, p *Pre) i64 {
         if Grew(p, at) {
           MoveCalls(l, p, at, kept)
           kept = 0 as *ovid/parse.Node
+        }
+        if !Simple(l.pa) {
+          kept = Keep(l, kept, l.pa)
+          kept = Keep(l, kept, l.pl)
         }
         Append(out, l.pa)
         Append(out, l.pl)
@@ -956,8 +1016,17 @@ func Stmt(l *L, s *ovid/parse.Node, p *Pre) i64 {
     Pair(l, ix.base, p)
     var bp *ovid/parse.Node = l.pa
     var bn *ovid/parse.Node = l.pl
+    var mark *ovid/parse.Node = p.tail
     var i *ovid/parse.Node = Hoist(l, ix.arg, p)
     Expr(l, s.val, p)
+    // The store computes the value before its address, so when it could
+    // change b, b is read first and the check and the store see the
+    // same pair.
+    if !Simple(s.val) {
+      FixAll(l, p, mark, bp, bn)
+    } else {
+      FixAt(l, p, mark, bp, bn)
+    }
     var ck *ovid/parse.Node = NewNode(l, ovid/parse.OP_CHK)
     ck.addr = i
     ck.val = bn
@@ -981,7 +1050,11 @@ func Stmt(l *L, s *ovid/parse.Node, p *Pre) i64 {
       s.val = l.pa
       s.val2 = l.pl
       if e != 0 as *ovid/parse.Node {
-        // return b, e: the error code is the third word.
+        // return b, e: the error code is the third word, and the code
+        // generator computes it first, so b is read into temps ahead
+        // of it.
+        s.val = Fix(l, s.val, p)
+        s.val2 = Fix(l, s.val2, p)
         Expr(l, e, p)
         s.args = e
       }
