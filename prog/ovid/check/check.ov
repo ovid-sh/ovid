@@ -168,7 +168,7 @@ func WId(c *Ch, b *ovid/mem.Buf) i64 {
   }
   if c.hk == H_NODE {
     var n *ovid/parse.Node = c.hn
-    if n.op <= ovid/parse.OP_EXPR {
+    if ovid/parse.IsStmt(n.op) {
       ovid/mem.WBytes(io, b, strptr("st:"), 3)
     } else {
       ovid/mem.WBytes(io, b, strptr("ex:"), 3)
@@ -351,6 +351,19 @@ func Lookup(c *Ch, np i64, nn i64) i64 {
   return 0
 }
 
+// ParamWords counts the register words of the params ps: two for a bytes.
+func ParamWords(ps *ovid/parse.Decl) i64 {
+  var w i64 = 0
+  while ps != 0 as *ovid/parse.Decl {
+    w = w + 1
+    if TyEq(ps.typp, ps.typn, strptr("bytes"), strlen("bytes")) {
+      w = w + 1
+    }
+    ps = ps.next
+  }
+  return w
+}
+
 func Define(c *Ch, np i64, nn i64, tp i64, tn i64) i64 {
   if Lookup(c, np, nn) != 0 {
     Err(c, strptr("duplicate_name"), strlen("duplicate_name"), np, nn)
@@ -405,6 +418,14 @@ func SetBool(c *Ch) i64 {
 
 func SetBad(c *Ch) i64 {
   return SetTy(c, strptr("invalid"), strlen("invalid"))
+}
+
+func SetBytes(c *Ch) i64 {
+  return SetTy(c, strptr("bytes"), strlen("bytes"))
+}
+
+func NeedBytes(c *Ch, msg i64, msgn i64) i64 {
+  return NeedTy(c, strptr("bytes"), strlen("bytes"), msg, msgn)
 }
 
 func IsTy(c *Ch, p i64, n i64) bool {
@@ -597,7 +618,7 @@ func TypeDecl(c *Ch, tp i64, tn i64) *ovid/parse.Decl {
 // pkg.T, or *pkg.T): 0 for i64, bool, or a pointer to a struct that exists,
 // 1 for such a struct by value, -1 when the package or struct is unknown.
 func TyKind(c *Ch, tp i64, tn i64) i64 {
-  if TyEq(tp, tn, strptr("i64"), strlen("i64")) || TyEq(tp, tn, strptr("bool"), strlen("bool")) {
+  if TyEq(tp, tn, strptr("i64"), strlen("i64")) || TyEq(tp, tn, strptr("bool"), strlen("bool")) || TyEq(tp, tn, strptr("bytes"), strlen("bytes")) {
     return 0
   }
   var star i64 = 0
@@ -726,12 +747,60 @@ func CheckExprIn(c *Ch, n *ovid/parse.Node) i64 {
     Err(c, strptr("unknown_name"), strlen("unknown_name"), n.namep, n.namen)
     return SetBad(c)
   }
+  if op == ovid/parse.OP_STR {
+    return SetBytes(c)
+  }
+  if op == ovid/parse.OP_BYTES {
+    if n.left == 0 as *ovid/parse.Node {
+      BuiltinArity(c, n, false)
+      return SetBytes(c)
+    }
+    CheckExpr(c, n.left)
+    NeedI64(c, strptr("address of bytes"), strlen("address of bytes"))
+    CheckExpr(c, n.right)
+    NeedI64(c, strptr("length of bytes"), strlen("length of bytes"))
+    return SetBytes(c)
+  }
+  if op == ovid/parse.OP_BYTE {
+    CheckExpr(c, n.base)
+    NeedBytes(c, strptr("indexed value"), strlen("indexed value"))
+    CheckExpr(c, n.arg)
+    NeedI64(c, strptr("index"), strlen("index"))
+    return SetI64(c)
+  }
+  if op == ovid/parse.OP_SLICE {
+    CheckExpr(c, n.base)
+    NeedBytes(c, strptr("sliced value"), strlen("sliced value"))
+    CheckExpr(c, n.left)
+    NeedI64(c, strptr("low bound"), strlen("low bound"))
+    CheckExpr(c, n.right)
+    NeedI64(c, strptr("high bound"), strlen("high bound"))
+    return SetBytes(c)
+  }
+  if op == ovid/parse.OP_BLEN {
+    CheckExpr(c, n.base)
+    NeedBytes(c, strptr("operand of len"), strlen("operand of len"))
+    return SetI64(c)
+  }
   if op == ovid/parse.OP_INDEX || op == ovid/parse.OP_LEN {
     // A param or local of the name shadows a table, as it does a const.
     var td *ovid/parse.Decl = 0 as *ovid/parse.Decl
     var vloc i64 = 0
     if n.pkgn == 0 {
       vloc = Lookup(c, n.namep, n.namen)
+    }
+    if vloc != 0 && TyEq(load64(vloc + 16), load64(vloc + 24), strptr("bytes"), strlen("bytes")) {
+      // b[i] or len(b) on a bytes local: the node becomes the bytes
+      // form, with the parsed name node as its base.
+      UseLocal(c, ovid/parse.USE_NAME, vloc, n, n.namep, n.namen)
+      if op == ovid/parse.OP_INDEX {
+        n.op = ovid/parse.OP_BYTE
+        CheckExpr(c, n.arg)
+        NeedI64(c, strptr("index"), strlen("index"))
+        return SetI64(c)
+      }
+      n.op = ovid/parse.OP_BLEN
+      return SetI64(c)
     }
     if vloc != 0 {
       UseLocal(c, ovid/parse.USE_NAME, vloc, n, n.namep, n.namen)
@@ -781,6 +850,9 @@ func CheckExprIn(c *Ch, n *ovid/parse.Node) i64 {
       if !Bad(c) {
         if !TyEq(lp, ln, c.typ, c.tyn) {
           Err(c, strptr("type_mismatch"), strlen("type_mismatch"), strptr("comparison types differ"), strlen("comparison types differ"))
+        } else if TyEq(lp, ln, strptr("bytes"), strlen("bytes")) {
+          Here(c, n)
+          Err(c, strptr("bad_type"), strlen("bad_type"), strptr("bytes cannot be compared"), strlen("bytes cannot be compared"))
         }
       }
     }
@@ -836,6 +908,11 @@ func CheckExprIn(c *Ch, n *ovid/parse.Node) i64 {
       Err(c, strptr("opaque_type"), strlen("opaque_type"), n.typp, n.typn)
     }
     CheckExpr(c, n.arg)
+    if TyEq(n.typp, n.typn, strptr("bytes"), strlen("bytes")) || IsTy(c, strptr("bytes"), strlen("bytes")) {
+      Here(c, n)
+      Err(c, strptr("bad_type"), strlen("bad_type"), strptr("a bytes cannot be cast"), strlen("a bytes cannot be cast"))
+      return SetTy(c, n.typp, n.typn)
+    }
     if !Bad(c) && Opaque(c, c.typ, c.tyn) {
       Here(c, n)
       Err(c, strptr("opaque_type"), strlen("opaque_type"), c.typ, c.tyn)
@@ -1167,6 +1244,16 @@ func CheckStmt(c *Ch, s *ovid/parse.Node) i64 {
     }
     return 0
   }
+  if op == ovid/parse.OP_SETBYTE {
+    CheckExpr(c, s.base)
+    if s.base.op != ovid/parse.OP_BYTE && !Bad(c) {
+      Here(c, s.base)
+      Err(c, strptr("bad_type"), strlen("bad_type"), strptr("only a byte of a bytes can be assigned"), strlen("only a byte of a bytes can be assigned"))
+    }
+    CheckExpr(c, s.val)
+    NeedI64(c, strptr("stored byte"), strlen("stored byte"))
+    return 0
+  }
   if ovid/parse.StoreOp(op) {
     if s.addr == 0 as *ovid/parse.Node {
       BuiltinArity(c, s, false)
@@ -1248,8 +1335,8 @@ func CheckFunc(c *Ch, fn *ovid/parse.Decl) i64 {
   c.resn = fn.typn
   HereDecl(c, H_FUNC, c.pkg, fn, fn)
   Push(c)
-  if ovid/parse.CountDecls(fn.sub) > 6 {
-    Err(c, strptr("arity"), strlen("arity"), strptr("more than 6 params"), strlen("more than 6 params"))
+  if ParamWords(fn.sub) > 6 {
+    Err(c, strptr("arity"), strlen("arity"), strptr("more than 6 param words"), strlen("more than 6 param words"))
   }
   var p *ovid/parse.Decl = fn.sub
   while p != 0 as *ovid/parse.Decl {

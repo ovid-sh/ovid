@@ -292,18 +292,27 @@ func BindStmts(c *C, s *ovid/parse.Node) i64 {
     BindExpr(c, s.base)
     BindExpr(c, s.addr)
     BindExpr(c, s.cond)
+    if s.op == ovid/parse.OP_RETURN {
+      // A lowered return b, e keeps e, the third word, in args.
+      BindExpr(c, s.args)
+    }
     if s.op == ovid/parse.OP_VAR {
       if s.namen != 0 {
         AddLoc(c, s, s.namep, s.namen, s.typp, s.typn)
       }
     } else if s.op == ovid/parse.OP_VAR2 {
-      // The second name's local is loc2; _ declares nothing.
+      // The second name's local is loc2; _ declares nothing. A lowered
+      // (bytes, i64) names a third in args, loc3.
       if !ovid/parse.IsBlank(s.namep, s.namen) {
         AddLoc(c, s, s.namep, s.namen, s.typp, s.typn)
       }
       if !ovid/parse.IsBlank(s.name2p, s.name2n) {
         AddLoc(c, 0 as *ovid/parse.Node, s.name2p, s.name2n, s.typ2p, s.typ2n)
         s.loc2 = c.nloc
+      }
+      if s.args != 0 as *ovid/parse.Node && !ovid/parse.IsBlank(s.args.namep, s.args.namen) {
+        AddLoc(c, 0 as *ovid/parse.Node, s.args.namep, s.args.namen, strptr("i64"), 3)
+        s.loc3 = c.nloc
       }
     } else if s.op == ovid/parse.OP_ASSIGN {
       BindName(c, s, s.namep, s.namen)
@@ -312,6 +321,10 @@ func BindStmts(c *C, s *ovid/parse.Node) i64 {
       var first i64 = s.loc
       BindName(c, s, s.name2p, s.name2n)
       s.loc2 = s.loc
+      if s.args != 0 as *ovid/parse.Node {
+        BindName(c, s, s.args.namep, s.args.namen)
+        s.loc3 = s.loc
+      }
       s.loc = first
     }
     BindStmts(c, s.then)
@@ -377,6 +390,10 @@ func ExprPeak(n *ovid/parse.Node, lv i64) i64 {
   if UnaryOp(op) || op == ovid/parse.OP_INDEX {
     return ExprPeak(n.arg, lv)
   }
+  if op == ovid/parse.OP_BLOAD {
+    var bb i64 = Max(ExprPeak(n.base, lv), Max(ExprPeak(n.left, lv + 1), lv + 1))
+    return Max(bb, Max(ExprPeak(n.right, lv + 1), lv + 1))
+  }
   if op == ovid/parse.OP_FIELD {
     return ExprPeak(n.base, lv)
   }
@@ -401,6 +418,10 @@ func StmtPeak(s *ovid/parse.Node) i64 {
     return ExprPeak(s.val, 0)
   }
   if op == ovid/parse.OP_RETURN {
+    if s.args != 0 as *ovid/parse.Node {
+      var r3 i64 = Max(ExprPeak(s.args, 0), Max(ExprPeak(s.val2, 1), 1))
+      return Max(r3, Max(ExprPeak(s.val, 2), 1))
+    }
     if s.val2 != 0 as *ovid/parse.Node {
       // The error code waits in temp 0 while the value is evaluated.
       return Max(ExprPeak(s.val2, 0), Max(ExprPeak(s.val, 1), 0))
@@ -412,7 +433,7 @@ func StmtPeak(s *ovid/parse.Node) i64 {
     var v i64 = ExprPeak(s.val, 1)
     return Max(b, Max(v, 1))
   }
-  if ovid/parse.StoreOp(op) {
+  if ovid/parse.StoreOp(op) || op == ovid/parse.OP_CHK {
     var b i64 = ExprPeak(s.addr, 0)
     var v i64 = ExprPeak(s.val, 1)
     return Max(b, Max(v, 1))
@@ -525,7 +546,7 @@ func TypeOf(c *C, n *ovid/parse.Node) i64 {
   if LeafOp(op) || ArithOp(op) || op == ovid/parse.OP_NEG || op == ovid/parse.OP_BNOT || ovid/parse.BswapOp(op) {
     return SetI64(c)
   }
-  if ovid/parse.LoadOp(op) || op == ovid/parse.OP_SYSCALL || op == ovid/parse.OP_INDEX {
+  if ovid/parse.LoadOp(op) || op == ovid/parse.OP_SYSCALL || op == ovid/parse.OP_INDEX || op == ovid/parse.OP_BLOAD {
     return SetI64(c)
   }
   if op == ovid/parse.OP_BOOL || CmpOp(op) || op == ovid/parse.OP_LAND || op == ovid/parse.OP_LOR || op == ovid/parse.OP_NOT {
@@ -659,6 +680,9 @@ func WeighStmts(c *C, s *ovid/parse.Node, depth i64) i64 {
     WeighExpr(c, s.val2, depth)
     WeighExpr(c, s.base, depth)
     WeighExpr(c, s.addr, depth)
+    if s.op == ovid/parse.OP_RETURN {
+      WeighExpr(c, s.args, depth)
+    }
     WeighStmts(c, s.then, depth)
     WeighStmts(c, s.els, depth)
     if s.op == ovid/parse.OP_WHILE {
@@ -707,6 +731,9 @@ func WeighExpr(c *C, n *ovid/parse.Node, depth i64) i64 {
 func StmtsCall(s *ovid/parse.Node) bool {
   while s != 0 as *ovid/parse.Node {
     if ExprCalls(s.val) || ExprCalls(s.val2) || ExprCalls(s.base) || ExprCalls(s.addr) || ExprCalls(s.cond) {
+      return true
+    }
+    if s.op == ovid/parse.OP_RETURN && s.args != 0 as *ovid/parse.Node && ExprCalls(s.args) {
       return true
     }
     if StmtsCall(s.then) || StmtsCall(s.els) || StmtsCall(s.body) {
@@ -1925,6 +1952,27 @@ func EmitExpr(c *C, n *ovid/parse.Node, lv i64) i64 {
     ovid/asm.MovRegImm(c.code, 0, lt.tabn)
     return 0
   }
+  if op == ovid/parse.OP_BLOAD {
+    // A lowered b[i]: b is (base, right) and i is left, all simple
+    // operands, so cmp i, n; jae trap; movzx rax, [p + i].
+    var cmp *ovid/parse.Node = ovid/io.Alloc(c.io, sizeof(ovid/parse.Node)) as *ovid/parse.Node
+    cmp.op = ovid/parse.OP_ULT
+    cmp.left = n.left
+    cmp.right = n.right
+    var bcc i64 = EmitCmp(c, cmp, lv)
+    if bcc < 0 {
+      return c.err
+    }
+    ovid/asm.Jcc(c.code, 0x80 | (bcc ^ 1), TrapLabel(c))
+    var ld *ovid/parse.Node = ovid/io.Alloc(c.io, sizeof(ovid/parse.Node)) as *ovid/parse.Node
+    ld.op = ovid/parse.OP_LOAD8
+    var ad *ovid/parse.Node = ovid/io.Alloc(c.io, sizeof(ovid/parse.Node)) as *ovid/parse.Node
+    ad.op = ovid/parse.OP_ADD
+    ad.left = n.base
+    ad.right = n.left
+    ld.arg = ad
+    return EmitLoad(c, ld, lv, 0)
+  }
   if op == ovid/parse.OP_INDEX {
     // rax = table[rax], after an unsigned check of rax against the
     // length, so a negative index trips it too; the trap is the
@@ -2100,6 +2148,9 @@ func EmitStmt(c *C, s *ovid/parse.Node) i64 {
     if EmitExpr(c, s.val, 0) != 0 {
       return c.err
     }
+    if s.loc3 != 0 {
+      SetLocal(c, c.locs + ((s.loc3 - 1) * LOCSIZE), 1)
+    }
     if s.loc2 != 0 {
       SetLocal(c, c.locs + ((s.loc2 - 1) * LOCSIZE), 2)
     }
@@ -2118,11 +2169,40 @@ func EmitStmt(c *C, s *ovid/parse.Node) i64 {
   if ovid/parse.StoreOp(op) {
     return EmitStore(c, s.addr, s.val, ovid/parse.OpWidth(op), 0)
   }
+  if op == ovid/parse.OP_CHK {
+    // A lowered bounds check: addr < val unsigned, or the trap.
+    var cmp *ovid/parse.Node = ovid/io.Alloc(c.io, sizeof(ovid/parse.Node)) as *ovid/parse.Node
+    cmp.op = ovid/parse.OP_ULT
+    cmp.left = s.addr
+    cmp.right = s.val
+    var ccc i64 = EmitCmp(c, cmp, 0)
+    if ccc < 0 {
+      return c.err
+    }
+    ovid/asm.Jcc(c.code, 0x80 | (ccc ^ 1), TrapLabel(c))
+    return 0
+  }
   if op == ovid/parse.OP_EXPR {
     return EmitExpr(c, s.val, 0)
   }
   if op == ovid/parse.OP_RETURN {
-    if s.val2 != 0 as *ovid/parse.Node {
+    if s.args != 0 as *ovid/parse.Node {
+      // A lowered return b, e: the error code into rcx by way of temp
+      // 0, the length into rdx by way of temp 1, the address into rax.
+      if EmitExpr(c, s.args, 0) != 0 {
+        return c.err
+      }
+      StoreTemp(c, 0)
+      if EmitExpr(c, s.val2, 1) != 0 {
+        return c.err
+      }
+      StoreTemp(c, 1)
+      if EmitExpr(c, s.val, 2) != 0 {
+        return c.err
+      }
+      ovid/asm.MovRegMemRbp(c.code, 2, TempDisp(c, 1))
+      ovid/asm.MovRegMemRbp(c.code, 1, TempDisp(c, 0))
+    } else if s.val2 != 0 as *ovid/parse.Node {
       // return v, e: e into rdx by way of temp 0, then v into rax.
       if EmitExpr(c, s.val2, 0) != 0 {
         return c.err

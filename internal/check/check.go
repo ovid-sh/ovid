@@ -87,7 +87,7 @@ func (c *checker) use(target, id, kind, in string, sp ir.Span) {
 // useType records a use of the struct type t resolves to, if it is one.
 func (c *checker) useType(t, id, kind, in string, sp ir.Span) {
 	t = strings.TrimPrefix(t, "*")
-	if t == "" || t == "i64" || t == "bool" || t == "invalid" {
+	if t == "" || t == "i64" || t == "bool" || t == "bytes" || t == "invalid" {
 		return
 	}
 	c.use("ty:"+t, id, kind, in, sp)
@@ -206,9 +206,10 @@ func run(p *ir.Program, lean bool) *Result {
 			if !decl(t.ID, t.Name, t.Span) {
 				continue
 			}
-			c.r.Facts = append(c.r.Facts, Fact{"fact": "type", "id": t.ID, "fields": len(t.Fields), "size": len(t.Fields) * 8})
+			c.r.Facts = append(c.r.Facts, Fact{"fact": "type", "id": t.ID, "fields": len(t.Fields), "size": SizeOf(t.Fields)})
 			fseen := map[string]bool{}
-			for i, f := range t.Fields {
+			off := 0
+			for _, f := range t.Fields {
 				if fseen[f.Name] {
 					c.issue(Issue{Code: "duplicate_name", ID: f.ID, At: &f.Span, Message: "field " + f.Name + " is declared twice"})
 					continue
@@ -216,7 +217,8 @@ func run(p *ir.Program, lean bool) *Result {
 				claim(f.ID)
 				fseen[f.Name] = true
 				ft, err := c.resolve(f.Type)
-				c.r.Facts = append(c.r.Facts, Fact{"fact": "field", "id": f.ID, "type": ft, "offset": i * 8})
+				c.r.Facts = append(c.r.Facts, Fact{"fact": "field", "id": f.ID, "type": ft, "offset": off})
+				off += fieldSize(f.Type)
 				if err != nil {
 					c.err(f.ID, "bad_type", err.Error())
 				} else if !scalar(ft) {
@@ -233,8 +235,10 @@ func run(p *ir.Program, lean bool) *Result {
 				continue
 			}
 			c.r.Funcs++
-			if len(fn.Params) > 6 {
-				c.err(fn.ID, "arity", fmt.Sprintf("%s has %d parameters; at most 6", fn.Name, len(fn.Params)))
+			// A bytes param is two words, and six words go in registers.
+			if w := paramWords(fn.Params); w > 6 {
+				c.issue(Issue{Code: "arity", ID: fn.ID, Message: fmt.Sprintf("%s has %d parameter words; at most 6", fn.Name, w),
+					Hint: "a bytes param counts two; pass a struct pointer for the rest"})
 			}
 			var ps, names []string
 			pseen := map[string]bool{}
@@ -544,6 +548,35 @@ func (c *checker) checkEntry(p *ir.Program) {
 	}
 }
 
+// SizeOf is the byte size of a struct with the fields fs: 8 per field,
+// 16 for a bytes, which the lowering splits in two.
+func SizeOf(fs []ir.Field) int {
+	n := 0
+	for _, f := range fs {
+		n += fieldSize(f.Type)
+	}
+	return n
+}
+
+func fieldSize(t string) int {
+	if t == "bytes" {
+		return 16
+	}
+	return 8
+}
+
+// paramWords counts the register words of params: two for a bytes.
+func paramWords(ps []ir.Param) int {
+	w := 0
+	for _, pa := range ps {
+		w++
+		if pa.Type == "bytes" {
+			w++
+		}
+	}
+	return w
+}
+
 // Signature renders fn the way it is written in source.
 func Signature(pkg string, fn *ir.Func) string {
 	var b strings.Builder
@@ -577,7 +610,7 @@ func ShowType(pkg, t string) string {
 }
 
 func scalar(t string) bool {
-	return t == "i64" || t == "bool" || strings.HasPrefix(t, "*") || t == "invalid"
+	return t == "i64" || t == "bool" || t == "bytes" || strings.HasPrefix(t, "*") || t == "invalid"
 }
 
 // resolve turns a source type into its full form (i64, bool, pkg.T, *pkg.T).
@@ -586,12 +619,12 @@ func (c *checker) resolve(t string) (string, error) {
 }
 
 func Resolve(pkg *ir.Package, t string, pkgs map[string]*ir.Package) (string, error) {
-	if t == "i64" || t == "bool" {
+	if t == "i64" || t == "bool" || t == "bytes" {
 		return t, nil
 	}
 	star := strings.HasPrefix(t, "*")
 	t = strings.TrimPrefix(t, "*")
-	if t == "i64" || t == "bool" {
+	if t == "i64" || t == "bool" || t == "bytes" {
 		return "", fmt.Errorf("cannot point at %s; use i64 for a raw address", t)
 	}
 	tpkg, name := pkg.Path, t
@@ -820,6 +853,12 @@ func (c *checker) stmt(e *env, s *ir.Node) {
 		if vt != ft && vt != "invalid" && ft != "invalid" {
 			c.mismatch(s.Val.ID, "field "+s.Name, vt, ft)
 		}
+	case "setbyte":
+		if t := c.expr(e, s.Base); s.Base.Op != "byte" && t != "invalid" {
+			c.issue(Issue{Code: "bad_type", ID: s.Base.ID, Message: "only a byte of a bytes can be assigned", Got: t,
+				Hint: "b[i] = v with b a bytes; a table is read-only"})
+		}
+		c.want(e, s.Val, "i64", "stored byte")
 	case "store8", "store16", "store32", "store64":
 		if s.Addr == nil {
 			c.builtinArity(e, s, 2)
@@ -986,10 +1025,47 @@ func (c *checker) expr0(e *env, n *ir.Node) string {
 		}
 		c.unknownName(n.ID, n.Name, e)
 		return "invalid"
+	case "str":
+		return "bytes"
+	case "bytes":
+		if n.Left == nil {
+			return c.builtinArity(e, n, 2)
+		}
+		c.want(e, n.Left, "i64", "address of bytes")
+		c.want(e, n.Right, "i64", "length of bytes")
+		return "bytes"
+	case "byte":
+		c.want(e, n.Base, "bytes", "indexed value")
+		c.want(e, n.Arg, "i64", "index")
+		return "i64"
+	case "slice":
+		c.want(e, n.Base, "bytes", "sliced value")
+		c.want(e, n.Left, "i64", "low bound")
+		c.want(e, n.Right, "i64", "high bound")
+		return "bytes"
+	case "blen":
+		c.want(e, n.Base, "bytes", "operand of len")
+		return "i64"
 	case "index", "len":
 		// A param or local of the name shadows a table, as it does a const.
 		var cn *ir.Const
-		if _, id, ok := e.lookup(n.Name); ok && n.Pkg == "" {
+		if t, id, ok := e.lookup(n.Name); ok && n.Pkg == "" && t == "bytes" {
+			// b[i] or len(b) on a bytes local: the node becomes the bytes
+			// form, with the parsed name node as its base.
+			c.use(id, n.ID, "name", c.fn.ID, n.NameSpan)
+			if !c.lean && n.Base != nil {
+				// The base is an expression show lists; its type, without
+				// a second use of the local.
+				c.r.Types[n.Base.ID] = "bytes"
+			}
+			if n.Op == "index" {
+				n.Op = "byte"
+				c.want(e, n.Arg, "i64", "index")
+				return "i64"
+			}
+			n.Op = "blen"
+			return "i64"
+		} else if _, id, ok := e.lookup(n.Name); ok && n.Pkg == "" {
 			c.use(id, n.ID, "name", c.fn.ID, n.NameSpan)
 			c.issue(Issue{Code: "bad_type", ID: n.ID, Message: n.Name + " is a variable, not a table",
 				Hint: "only a const declared [N]i64 can be indexed or measured"})
@@ -1001,6 +1077,10 @@ func (c *checker) expr0(e *env, n *ir.Node) string {
 		}
 		if cn == nil {
 			return "invalid"
+		}
+		if !c.lean && n.Base != nil {
+			// The base is an expression show lists: the table's type.
+			c.r.Types[n.Base.ID] = fmt.Sprintf("[%d]i64", len(cn.Values))
 		}
 		return "i64"
 	case "add", "sub", "mul", "div", "mod", "and", "or", "xor", "shl", "shr":
@@ -1026,6 +1106,8 @@ func (c *checker) expr0(e *env, n *ir.Node) string {
 		rt := c.expr(e, n.Right)
 		if lt != rt && lt != "invalid" && rt != "invalid" {
 			c.mismatch(n.Right.ID, "right of "+opText[n.Op], rt, lt)
+		} else if lt == "bytes" {
+			c.issue(Issue{Code: "bad_type", ID: n.ID, Message: "bytes cannot be compared with " + opText[n.Op], Hint: "ovid/mem.Eq(a, b) compares the bytes"})
 		}
 		return "bool"
 	case "land", "lor":
@@ -1049,6 +1131,10 @@ func (c *checker) expr0(e *env, n *ir.Node) string {
 			c.issue(Issue{Code: "opaque_type", ID: n.ID, Message: "a " + t + " cannot be made by a cast", Hint: "ovid/io's types are handles: get one from main or from an ovid/io func"})
 		}
 		src := c.expr(e, n.Arg)
+		if t == "bytes" || src == "bytes" {
+			c.issue(Issue{Code: "bad_type", ID: n.ID, Message: "a bytes cannot be cast; it is an address and a length", Hint: "bytes(p, n) makes one; b[i] and len(b) read it"})
+			return t
+		}
 		if c.opaque(src) {
 			c.issue(Issue{Code: "opaque_type", ID: n.ID, Message: "a " + src + " cannot be cast: it is not an address to compute with", Hint: "ovid/io's types are handles: ask an ovid/io func about one"})
 		}
@@ -1059,6 +1145,10 @@ func (c *checker) expr0(e *env, n *ir.Node) string {
 	case "sizeof":
 		if n.Type == "i64" || n.Type == "bool" {
 			c.issue(Issue{Code: "bad_type", ID: n.ID, Message: "sizeof(" + n.Type + ") is always 8", Hint: "write 8; sizeof takes a struct type"})
+			return "i64"
+		}
+		if n.Type == "bytes" {
+			c.issue(Issue{Code: "bad_type", ID: n.ID, Message: "sizeof(bytes) is always 16", Hint: "write 16; sizeof takes a struct type"})
 			return "i64"
 		}
 		if t, err := c.resolve(n.Type); err != nil {
@@ -1108,6 +1198,7 @@ var builtinForm = map[string]string{
 	"store8": "store8(addr, v)", "store16": "store16(addr, v)", "store32": "store32(addr, v)", "store64": "store64(addr, v)",
 	"bswap16": "bswap16(x) i64", "bswap32": "bswap32(x) i64", "bswap64": "bswap64(x) i64",
 	"ushr": "ushr(x, n) i64", "umulhi": "umulhi(a, b) i64", "udiv": "udiv(a, b) i64", "urem": "urem(a, b) i64", "ult": "ult(a, b) bool",
+	"bytes": "bytes(p, n) bytes",
 }
 
 // builtinArity reports builtin n called with other than want arguments,
@@ -1125,6 +1216,9 @@ func (c *checker) builtinArity(e *env, n *ir.Node, want int) string {
 	}
 	if n.Op == "ult" {
 		return "bool"
+	}
+	if n.Op == "bytes" {
+		return "bytes"
 	}
 	return "i64"
 }

@@ -1,0 +1,249 @@
+package demo
+import ovid/io
+// exit: 42
+// stdout: "WORLD\n"
+
+type Req struct {
+  id i64
+  path bytes
+  n i64
+}
+
+// Eq compares two bytes, byte by byte.
+func Eq(a bytes, b bytes) bool {
+  if len(a) != len(b) {
+    return false
+  }
+  var i i64 = 0
+  while i < len(a) {
+    if a[i] != b[i] {
+      return false
+    }
+    i = i + 1
+  }
+  return true
+}
+
+// Trim returns s without leading spaces: a slice of a param, returned.
+func Trim(s bytes) bytes {
+  var i i64 = 0
+  while i < len(s) && s[i] == 32 {
+    i = i + 1
+  }
+  return s[i:len(s)]
+}
+
+// Upper copies s uppercased into fresh memory.
+func Upper(io *ovid/io.Cap, s bytes) bytes {
+  var d bytes = bytes(ovid/io.Alloc(io, len(s)), len(s))
+  var i i64 = 0
+  while i < len(s) {
+    var c i64 = s[i]
+    if c >= 97 && c <= 122 {
+      c = c - 32
+    }
+    d[i] = c
+    i = i + 1
+  }
+  return d
+}
+
+// Field finds the n-th space-separated field of s, or an error code: a
+// (bytes, i64) result, three words.
+func Field(s bytes, n i64) (bytes, i64) {
+  var start i64 = 0
+  var i i64 = 0
+  while i <= len(s) {
+    if i == len(s) || s[i] == 32 {
+      if n == 0 {
+        return s[start:i], 0
+      }
+      n = n - 1
+      start = i + 1
+    }
+    i = i + 1
+  }
+  return s[0:0], 2
+}
+
+// Second forwards a three-word result.
+func Second(s bytes) (bytes, i64) {
+  return Field(s, 1)
+}
+
+// Tag returns its bytes with a code that is a local, and Tagged one
+// whose code is a call, in a func that otherwise calls nothing.
+func Tag(s bytes, n i64) (bytes, i64) {
+  var code i64 = n * 2
+  return s, code
+}
+
+func Tagged(s bytes, n i64) (bytes, i64) {
+  return s, Id(n)
+}
+
+// Bump adds one to r.n and returns r.path: a call that writes memory a
+// caller may have read just before it.
+func Bump(r *Req) bytes {
+  r.n = r.n + 1
+  return r.path
+}
+
+// Pick counts and returns r: a call in a store's address or a field
+// assignment's base.
+func Pick(c i64, r *Req) *Req {
+  Count(c)
+  return r
+}
+
+func NewReq(io *ovid/io.Cap, path bytes) *Req {
+  var r *Req = ovid/io.Alloc(io, sizeof(Req)) as *Req
+  r.id = 7
+  r.path = path
+  r.n = len(path)
+  return r
+}
+
+// Count returns how many times it was called: an argument with a side
+// effect, to check the order calls happen in.
+func Count(c i64) i64 {
+  store64(c, load64(c) + 1)
+  return load64(c)
+}
+
+func Three(a i64, b bytes, c i64) i64 {
+  return a * 100 + b[0] + c
+}
+
+func Id(v i64) i64 {
+  return v
+}
+
+func main(io *ovid/io.Cap) i64 {
+  var s bytes = "  hello world"
+  var t bytes = Trim(s)
+  if !Eq(t, "hello world") {
+    return 1
+  }
+  if len(t) != 11 || t[0] != 104 || t[10] != 100 {
+    return 2
+  }
+  var w bytes = t[6:11]
+  if !Eq(w, "world") {
+    return 3
+  }
+  var u bytes = Upper(io, w)
+  if !Eq(u, "WORLD") {
+    return 4
+  }
+  var r *Req = NewReq(io, t[0:5])
+  if r.n != 5 || !Eq(r.path, "hello") || r.path[1] != 101 {
+    return 5
+  }
+  r.path = u[1:3]
+  if !Eq(r.path, "OR") || sizeof(Req) != 32 {
+    return 6
+  }
+  // A slice of a slice, and an empty one.
+  var e bytes = Trim(t[5:5])
+  if len(e) != 0 {
+    return 7
+  }
+  // Three words: received, forwarded, and the error path.
+  var f bytes, fe i64 = Field(t, 1)
+  if fe != 0 || !Eq(f, "world") {
+    return 8
+  }
+  var g bytes, ge i64 = Second(t)
+  if ge != 0 || !Eq(g, "world") {
+    return 9
+  }
+  var h bytes, he i64 = Field(t, 5)
+  if he != 2 || len(h) != 0 {
+    return 10
+  }
+  f, fe = Field(t, 0)
+  if fe != 0 || !Eq(f, "hello") {
+    return 11
+  }
+  var _, de i64 = Field(t, 9)
+  if de != 2 {
+    return 12
+  }
+  // Under &&, the right side's checks run only when it is evaluated:
+  // the slice would trap on its own.
+  var k i64 = 20
+  if len(t) > 11 && len(t[k:k+1]) == 1 {
+    return 13
+  }
+  if len(t) > 11 || len(t[0:k-15]) != 5 {
+    return 14
+  }
+  // A while condition with a slice in it.
+  var i i64 = 0
+  while len(t[i:i+1]) == 1 && t[i] != 32 {
+    i = i + 1
+  }
+  if i != 5 {
+    return 15
+  }
+  // Calls in arguments happen in source order around a slice.
+  var c i64 = ovid/io.Alloc(io, 8)
+  if Three(Count(c), t[Count(c):Count(c) + 1], Count(c)) != 100 + 108 + 4 {
+    return 16
+  }
+  // A call-free argument before a slice, with a call after it: only the
+  // call moves (the two compilers must agree on what moves).
+  var q i64 = 2
+  if Three(q + 1, t[1:3], Id(q)) != 300 + 101 + 2 {
+    return 19
+  }
+  var tg bytes, tc i64 = Tag(t, 21)
+  if tc != 42 || !Eq(tg, t) {
+    return 20
+  }
+  tg, tc = Tagged(t, 7)
+  if tc != 7 || len(tg) != 11 {
+    return 21
+  }
+  // r.n is read before Bump writes it.
+  r.n = 5
+  if r.n + Bump(r)[0] != 5 + 79 || r.n != 6 {
+    return 22
+  }
+  // A store's address and a field assignment's base are evaluated
+  // before their value, when the value lowers a bytes call: the counts
+  // come out in source order.
+  store64(c, 0)
+  var arr i64 = ovid/io.Alloc(io, 32)
+  store64(arr + Count(c) * 8, Count(c) + len(Bump(r)))
+  if load64(arr + 8) != 2 + 2 {
+    return 23
+  }
+  Pick(c, r).n = Count(c) + len(Bump(r))
+  if r.n != 4 + 2 || load64(c) != 4 {
+    return 24
+  }
+  // The byte of a string literal, a slice of a call's result.
+  if "abc"[1] != 98 || len(Upper(io, "xy")[1:2]) != 1 {
+    return 17
+  }
+  var o bytes = Upper(io, w)
+  if Count(c) != 5 {
+    return 18
+  }
+  PrintLine(io, o)
+  return 42
+}
+
+func PrintLine(io *ovid/io.Cap, b bytes) i64 {
+  var i i64 = 0
+  var p i64 = ovid/io.Alloc(io, len(b) + 1)
+  while i < len(b) {
+    store8(p + i, b[i])
+    i = i + 1
+  }
+  store8(p + i, 10)
+  ovid/io.Stdout(p, len(b) + 1)
+  return 0
+}

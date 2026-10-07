@@ -1212,6 +1212,98 @@ func TestInWhile(io *ovid/io.Cap) i64 {
 	}
 }
 
+// TestBytesBounds: each check on a bytes traps with an illegal instruction
+// and the crash names the statement: an index at the length or negative,
+// a slice past the end, and a slice whose low bound passes its high.
+func TestBytesBounds(t *testing.T) {
+	dir := mkmod(t, map[string]string{
+		"demo/main.ov": "package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  return 0\n}\n",
+		"demo/main_test.ov": `package demo
+import ovid/io
+func At(b bytes, i i64) i64 {
+  return b[i]
+}
+func Put(b bytes, i i64) i64 {
+  b[i] = 1
+  return 0
+}
+func Cut(b bytes, i i64, j i64) i64 {
+  return len(b[i:j])
+}
+func TestPastEnd(io *ovid/io.Cap) i64 {
+  return At("abc", 3)
+}
+func TestNegative(io *ovid/io.Cap) i64 {
+  return At("abc", 0 - 1)
+}
+func TestStore(io *ovid/io.Cap) i64 {
+  return Put(bytes(ovid/io.Alloc(io, 4), 4), 4)
+}
+func TestHigh(io *ovid/io.Cap) i64 {
+  return Cut("abc", 1, 4)
+}
+func TestCrossed(io *ovid/io.Cap) i64 {
+  return Cut("abc", 2, 1)
+}
+func Nest(b bytes, i i64) i64 {
+  if len(b) > 0 && len(b[i:i + 1]) == 1 {
+    return 1
+  }
+  return 0
+}
+func TestNested(io *ovid/io.Cap) i64 {
+  return Nest("abc", 5)
+}
+func Scan(b bytes, k i64) i64 {
+  while len(b[k:k + 1]) == 1 {
+    k = k + 1
+  }
+  return k
+}
+func TestInWhile(io *ovid/io.Cap) i64 {
+  return Scan("abc", 5)
+}
+func TestNegativeLength(io *ovid/io.Cap) i64 {
+  var b bytes = bytes(ovid/io.Alloc(io, 4), 0 - 1)
+  return len(b)
+}
+func TestEdges(io *ovid/io.Cap) i64 {
+  var b bytes = bytes(ovid/io.Alloc(io, 4), 4)
+  Put(b, 0)
+  Put(b, 3)
+  return At(b, 0) + At(b, 3) + Cut(b, 0, 4) + Cut(b, 4, 4) + Cut(b, 0, 0) - 6
+}
+`,
+	})
+	needExec(t)
+	var b bytes.Buffer
+	if code := Test(dir, "", false, &b); code != ExitFail {
+		t.Fatalf("code %d %s", code, b.String())
+	}
+	got := map[string]map[string]any{}
+	for _, r := range lines(t, b.String()) {
+		if r["fact"] == "test" {
+			got[r["id"].(string)] = r
+		}
+	}
+	if got["fn:demo.TestEdges"]["ok"] != true {
+		t.Fatalf("edges %v", got["fn:demo.TestEdges"])
+	}
+	for name, src := range map[string]string{
+		"TestPastEnd": "  return b[i]", "TestNegative": "  return b[i]", "TestStore": "  b[i] = 1",
+		"TestHigh": "  return len(b[i:j])", "TestCrossed": "  return len(b[i:j])",
+		"TestNested":         "  if len(b) > 0 && len(b[i:i + 1]) == 1 {",
+		"TestInWhile":        "  while len(b[k:k + 1]) == 1 {",
+		"TestNegativeLength": "  var b bytes = bytes(ovid/io.Alloc(io, 4), 0 - 1)",
+	} {
+		r := got["fn:demo."+name]
+		at, _ := r["at"].(map[string]any)
+		if r["signal"] != "illegal instruction" || at["source"] != src {
+			t.Fatalf("%s: %v", name, r)
+		}
+	}
+}
+
 // TestTwoResultFuncIsNoTest: a TestX that returns a value and an error code
 // is not a test, since the runner would take its first result and drop the
 // code unseen.
@@ -1377,6 +1469,62 @@ func TestOutlineTable(t *testing.T) {
 	}
 	if sigs["cn:demo.Pow"] != "const Pow [3]i64" || sigs["cn:demo.K"] != "const K i64 = 7" {
 		t.Fatalf("sigs %v", sigs)
+	}
+}
+
+// TestShowIndexBase: the name a table read or a bytes index is on is an
+// expression of its own, listed with a type: the table's, or bytes.
+func TestShowIndexBase(t *testing.T) {
+	dir := mkmod(t, map[string]string{
+		"demo/main.ov": "package demo\nimport ovid/io\nimport util\nconst T [3]i64 = {1, 2, 3}\nconst E [0]i64 = {}\nfunc main(io *ovid/io.Cap) i64 {\n  var b bytes = \"ab\"\n  return T[1] + len(E) + util.Primes[0] + b[0] + len(b)\n}\n",
+		"util/util.ov": "package util\nconst Primes [2]i64 = {2, 3}\n",
+	})
+	var b bytes.Buffer
+	Show(dir, []string{"st:demo.main:2"}, true, true, false, &b)
+	types := map[string]any{}
+	for _, ln := range strings.Split(strings.TrimSpace(b.String()), "\n") {
+		var r map[string]any
+		if json.Unmarshal([]byte(ln), &r) == nil && r["exprs"] != nil {
+			for _, e := range r["exprs"].([]any) {
+				e := e.(map[string]any)
+				if e["text"] == "T" || e["text"] == "E" || e["text"] == "util.Primes" || e["text"] == "b" {
+					types[fmt.Sprint(e["text"])] = e["type"]
+				}
+			}
+		}
+	}
+	if types["T"] != "[3]i64" || types["E"] != "[0]i64" || types["util.Primes"] != "[2]i64" || types["b"] != "bytes" {
+		t.Fatalf("base types %v in %s", types, b.String())
+	}
+}
+
+// TestBytesFieldLayout: a bytes field is two words, and what outline and
+// check --facts say about a struct's size and its fields' offsets agree
+// with the code generator.
+func TestBytesFieldLayout(t *testing.T) {
+	dir := mkmod(t, demo("package demo\nimport ovid/io\ntype T struct {\n  b bytes\n  n i64\n}\nfunc main(io *ovid/io.Cap) i64 {\n  return sizeof(T)\n}\n"))
+	var b bytes.Buffer
+	Outline(dir, "demo", false, false, false, true, Page{}, &b)
+	for _, r := range lines(t, b.String()) {
+		if r["id"] == "ty:demo.T" && r["size"] != float64(24) {
+			t.Fatalf("outline size %v", r["size"])
+		}
+	}
+	b.Reset()
+	if code := Check(dir, true, &b); code != 0 {
+		t.Fatalf("check: %s", b.String())
+	}
+	got := map[string]any{}
+	for _, r := range lines(t, b.String()) {
+		switch r["fact"] {
+		case "type":
+			got[r["id"].(string)] = r["size"]
+		case "field":
+			got[r["id"].(string)] = r["offset"]
+		}
+	}
+	if got["ty:demo.T"] != float64(24) || got["fld:demo.T.b"] != float64(0) || got["fld:demo.T.n"] != float64(16) {
+		t.Fatalf("facts %v", got)
 	}
 }
 
@@ -1792,7 +1940,7 @@ func TestSelfHost(t *testing.T) {
 	// Both dumps are valid JSON and say the same thing. A literal's bytes
 	// that are not UTF-8 (prog's asm tests have some) come out as
 	// value_hex, which loses nothing.
-	lit := mkmod(t, demo("package demo\nimport ovid/io\nconst T [3]i64 = {-1, 0, 7}\nconst E [0]i64 = {}\nfunc Two(x i64) (i64, i64) {\n  return x, 0\n}\nfunc main(io *ovid/io.Cap) i64 {\n  var v i64, e i64 = Two(1)\n  v, e = Two(2)\n  var w i64, _ = Two(3)\n  return load8(strptr(\"\\xb8\\n\") + 1) + strlen(\"é\") + T[1] + len(T) + v + e + w\n}\n"))
+	lit := mkmod(t, demo("package demo\nimport ovid/io\nconst T [3]i64 = {-1, 0, 7}\nconst E [0]i64 = {}\ntype R struct {\n  s bytes\n}\nfunc Two(x i64) (i64, i64) {\n  return x, 0\n}\nfunc Cut(b bytes) (bytes, i64) {\n  return b[1:len(b)], 0\n}\nfunc main(io *ovid/io.Cap) i64 {\n  var v i64, e i64 = Two(1)\n  v, e = Two(2)\n  var w i64, _ = Two(3)\n  var s bytes = \"ab\"\n  var r *R = ovid/io.Alloc(io, sizeof(R)) as *R\n  r.s = bytes(ovid/io.Alloc(io, 2), 2)\n  r.s[0] = s[1]\n  var c bytes, ce i64 = Cut(r.s)\n  return load8(strptr(\"\\xb8\\n\") + 1) + strlen(\"é\") + T[1] + len(T) + v + e + w + len(c) + ce + len(r.s)\n}\n"))
 	for _, dir := range []string{prog, lit} {
 		b.Reset()
 		Dump(dir, "", "", &b)

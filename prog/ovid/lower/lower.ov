@@ -1,0 +1,1012 @@
+package ovid/lower
+
+import ovid/io
+import ovid/mem
+import ovid/parse
+
+// The lowering rewrites a checked program so that no bytes value is left
+// in it, which lets the code generator keep one word per value. It is
+// internal/lower in Ovid, statement for statement, so that both
+// compilers hand the code generator the same tree.
+//
+// A bytes is an address and a length. After lowering, every bytes local,
+// param, or field b is the pair of i64 b and b#n; a func returning bytes
+// returns two results, one returning (bytes, i64) three (the third word
+// rides in rcx: a return with a third value in args, a var2 or assign2
+// with a third name in args); b[i] is a bload (a checked load); b[i] = v
+// a chk and a store8; b[i:j] the pair (p + i, j - i) after two chks;
+// len(b) is b#n; "lit" is strptr and strlen; bytes(p, n) the pair.
+//
+// The checks and the pairs' parts must be simple operands (a name or a
+// constant), so anything else is first moved into a temp local (t#k)
+// by a statement placed before the one being lowered. Moving an
+// expression keeps evaluation order: every earlier expression in the
+// same statement that is not a simple operand is moved too (a memory
+// read left of a call that writes it must come first), and an operand of &&
+// or || or a while condition that needs a move is restructured into an
+// if, so the move runs exactly when the operand would have.
+//
+// Unlike the Go pass, this one works in place: a build is one process.
+
+type L struct {
+  io *ovid/io.Cap
+  mod *ovid/parse.Mod
+  pkg *ovid/parse.Pkg
+  env i64
+  nenv i64
+  tmp i64
+  typ i64
+  tyn i64
+  pa *ovid/parse.Node
+  pl *ovid/parse.Node
+  err i64
+}
+
+// Pre is a statement list being built: what runs before the statement
+// being lowered, then the statement itself.
+type Pre struct {
+  head *ovid/parse.Node
+  tail *ovid/parse.Node
+}
+
+const ENVREC i64 = 32
+const MAXENV i64 = 4096
+
+func NewPre(l *L) *Pre {
+  return ovid/io.Alloc(l.io, sizeof(Pre)) as *Pre
+}
+
+// Append puts n at the end of p.
+func Append(p *Pre, n *ovid/parse.Node) i64 {
+  n.next = 0 as *ovid/parse.Node
+  if p.tail == 0 as *ovid/parse.Node {
+    p.head = n
+  } else {
+    p.tail.next = n
+  }
+  p.tail = n
+  return 0
+}
+
+// InsertAfter puts n after mark in p, or first when mark is nil, and
+// returns n, the mark for the next insertion in order.
+func InsertAfter(p *Pre, mark *ovid/parse.Node, n *ovid/parse.Node) *ovid/parse.Node {
+  if mark == 0 as *ovid/parse.Node {
+    n.next = p.head
+    p.head = n
+  } else {
+    n.next = mark.next
+    mark.next = n
+  }
+  if mark == p.tail {
+    p.tail = n
+  }
+  return n
+}
+
+// Program lowers m in place.
+func Program(io *ovid/io.Cap, m *ovid/parse.Mod) i64 {
+  var l *L = ovid/io.Alloc(io, sizeof(L)) as *L
+  l.io = io
+  l.mod = m
+  l.env = ovid/io.Alloc(io, MAXENV * ENVREC)
+  // Signatures first, so a call site knows what its callee returns.
+  var k *ovid/parse.Pkg = m.pkgs
+  while k != 0 as *ovid/parse.Pkg {
+    var fn *ovid/parse.Decl = k.fs
+    while fn != 0 as *ovid/parse.Decl {
+      if IsBytes(fn.typp, fn.typn) {
+        fn.bres = 2
+        if fn.typ2n != 0 {
+          fn.bres = 3
+        }
+      }
+      fn = fn.next
+    }
+    k = k.next
+  }
+  // Every struct before any body, since a body may read another
+  // package's bytes field.
+  k = m.pkgs
+  while k != 0 as *ovid/parse.Pkg {
+    var t *ovid/parse.Decl = k.ts
+    while t != 0 as *ovid/parse.Decl {
+      Expand(l, t)
+      t = t.next
+    }
+    k = k.next
+  }
+  k = m.pkgs
+  while k != 0 as *ovid/parse.Pkg {
+    l.pkg = k
+    var f *ovid/parse.Decl = k.fs
+    while f != 0 as *ovid/parse.Decl {
+      Func(l, f)
+      f = f.next
+    }
+    k = k.next
+  }
+  return l.err
+}
+
+func IsBytes(tp i64, tn i64) bool {
+  return ovid/mem.Eq(tp, tn, strptr("bytes"), strlen("bytes"))
+}
+
+// NName is name#n, the length half of the pair of the bytes called name.
+func NName(l *L, np i64, nn i64) i64 {
+  var d i64 = ovid/io.Alloc(l.io, nn + 2)
+  ovid/mem.Copy(d, np, nn)
+  store8(d + nn, 35)
+  store8((d + nn) + 1, 110)
+  return d
+}
+
+// Expand splits every bytes field or param in the list under d into two
+// i64 decls, f and f#n.
+func Expand(l *L, d *ovid/parse.Decl) i64 {
+  var f *ovid/parse.Decl = d.sub
+  while f != 0 as *ovid/parse.Decl {
+    if IsBytes(f.typp, f.typn) {
+      f.typp = strptr("i64")
+      f.typn = 3
+      var g *ovid/parse.Decl = ovid/io.Alloc(l.io, sizeof(ovid/parse.Decl)) as *ovid/parse.Decl
+      g.namep = NName(l, f.namep, f.namen)
+      g.namen = f.namen + 2
+      g.typp = strptr("i64")
+      g.typn = 3
+      g.file = f.file
+      g.off = f.off
+      g.pkg = f.pkg
+      g.next = f.next
+      f.next = g
+      if d.subt == f {
+        d.subt = g
+      }
+      f = g
+    }
+    f = f.next
+  }
+  return 0
+}
+
+func Func(l *L, fn *ovid/parse.Decl) i64 {
+  l.nenv = 0
+  var pa *ovid/parse.Decl = fn.sub
+  while pa != 0 as *ovid/parse.Decl {
+    Bind(l, pa.namep, pa.namen, pa.typp, pa.typn)
+    pa = pa.next
+  }
+  Expand(l, fn)
+  if fn.bres != 0 {
+    fn.typp = strptr("i64")
+    fn.typn = 3
+    if fn.typ2n == 0 {
+      fn.typ2p = strptr("i64")
+      fn.typ2n = 3
+    }
+  }
+  fn.body = Stmts(l, fn.body)
+  return 0
+}
+
+func Bind(l *L, np i64, nn i64, tp i64, tn i64) i64 {
+  if l.nenv >= MAXENV {
+    return 0
+  }
+  var rec i64 = l.env + (l.nenv * ENVREC)
+  store64(rec, np)
+  store64(rec + 8, nn)
+  store64(rec + 16, tp)
+  store64(rec + 24, tn)
+  l.nenv = l.nenv + 1
+  return 0
+}
+
+// Lookup sets l.typ to the type of the local np[0:nn] and reports
+// whether there is one.
+func Lookup(l *L, np i64, nn i64) bool {
+  var i i64 = l.nenv - 1
+  while i >= 0 {
+    var rec i64 = l.env + (i * ENVREC)
+    if ovid/mem.Eq(load64(rec), load64(rec + 8), np, nn) {
+      l.typ = load64(rec + 16)
+      l.tyn = load64(rec + 24)
+      return true
+    }
+    i = i - 1
+  }
+  return false
+}
+
+func FindPkg(l *L, pp i64, pn i64) *ovid/parse.Pkg {
+  var k *ovid/parse.Pkg = l.mod.pkgs
+  while k != 0 as *ovid/parse.Pkg {
+    if ovid/mem.Eq(k.pathp, k.pathn, pp, pn) {
+      return k
+    }
+    k = k.next
+  }
+  return k
+}
+
+// FindType is the struct decl of the type *pkg.T written at tp[0:tn].
+func FindType(l *L, tp i64, tn i64) *ovid/parse.Decl {
+  if tn < 2 || load8(tp) != 42 {
+    return 0 as *ovid/parse.Decl
+  }
+  var p i64 = tp + 1
+  var n i64 = tn - 1
+  var dot i64 = -1
+  var i i64 = 0
+  while i < n {
+    if load8(p + i) == 46 {
+      dot = i
+    }
+    i = i + 1
+  }
+  if dot < 1 {
+    return 0 as *ovid/parse.Decl
+  }
+  var k *ovid/parse.Pkg = FindPkg(l, p, dot)
+  if k == 0 as *ovid/parse.Pkg {
+    return 0 as *ovid/parse.Decl
+  }
+  return ovid/parse.FindDecl(k.ts, (p + dot) + 1, (n - dot) - 1)
+}
+
+// FieldIsBytes says whether field f of the struct pointer type bt was
+// declared bytes: its decl has been expanded, so f#n follows it.
+func FieldIsBytes(l *L, bt *ovid/parse.Decl, fp i64, fnn i64) bool {
+  if bt == 0 as *ovid/parse.Decl {
+    return false
+  }
+  var f *ovid/parse.Decl = ovid/parse.FindDecl(bt.sub, fp, fnn)
+  if f == 0 as *ovid/parse.Decl || f.next == 0 as *ovid/parse.Decl {
+    return false
+  }
+  var g *ovid/parse.Decl = f.next
+  if g.namen != fnn + 2 {
+    return false
+  }
+  return ovid/mem.Eq(g.namep, fnn, fp, fnn) && load8(g.namep + fnn) == 35 && load8((g.namep + fnn) + 1) == 110
+}
+
+func Callee(l *L, n *ovid/parse.Node) *ovid/parse.Decl {
+  var pp i64 = l.pkg.pathp
+  var pn i64 = l.pkg.pathn
+  if n.pkgn != 0 {
+    pp = n.pkgp
+    pn = n.pkgn
+  }
+  return ovid/parse.FindFunc(l.mod, pp, pn, n.fnp, n.fnn)
+}
+
+// ResultWords is how many words a call to n returns: 1, or 2 or 3 for a
+// bytes result.
+func ResultWords(l *L, n *ovid/parse.Node) i64 {
+  var fn *ovid/parse.Decl = Callee(l, n)
+  if fn != 0 as *ovid/parse.Decl && fn.bres != 0 {
+    return fn.bres
+  }
+  return 1
+}
+
+func SetTy(l *L, tp i64, tn i64) i64 {
+  l.typ = tp
+  l.tyn = tn
+  return 0
+}
+
+// TypeOf leaves in l.typ the checker's type of n, for the shapes the
+// lowering asks about: whether something is a bytes, and a field's base.
+func TypeOf(l *L, n *ovid/parse.Node) i64 {
+  var op i64 = n.op
+  if op == ovid/parse.OP_NAME {
+    if n.pkgn == 0 && Lookup(l, n.namep, n.namen) {
+      return 0
+    }
+    return SetTy(l, strptr("i64"), 3)
+  }
+  if op == ovid/parse.OP_STR || op == ovid/parse.OP_SLICE || op == ovid/parse.OP_BYTES {
+    return SetTy(l, strptr("bytes"), 5)
+  }
+  if op == ovid/parse.OP_CAST {
+    return SetTy(l, n.typp, n.typn)
+  }
+  if op == ovid/parse.OP_FIELD {
+    TypeOf(l, n.base)
+    var bt *ovid/parse.Decl = FindType(l, l.typ, l.tyn)
+    if FieldIsBytes(l, bt, n.namep, n.namen) {
+      return SetTy(l, strptr("bytes"), 5)
+    }
+    if bt != 0 as *ovid/parse.Decl {
+      var f *ovid/parse.Decl = ovid/parse.FindDecl(bt.sub, n.namep, n.namen)
+      if f != 0 as *ovid/parse.Decl {
+        return SetTy(l, f.typp, f.typn)
+      }
+    }
+    return SetTy(l, strptr("i64"), 3)
+  }
+  if op == ovid/parse.OP_CALL {
+    if ResultWords(l, n) > 1 {
+      return SetTy(l, strptr("bytes"), 5)
+    }
+    var fn *ovid/parse.Decl = Callee(l, n)
+    if fn != 0 as *ovid/parse.Decl {
+      return SetTy(l, fn.typp, fn.typn)
+    }
+    return SetTy(l, strptr("i64"), 3)
+  }
+  if op == ovid/parse.OP_BOOL || (op >= ovid/parse.OP_LOR && op <= ovid/parse.OP_GE) || op == ovid/parse.OP_ULT || op == ovid/parse.OP_NOT {
+    return SetTy(l, strptr("bool"), 4)
+  }
+  return SetTy(l, strptr("i64"), 3)
+}
+
+func IsBytesExpr(l *L, n *ovid/parse.Node) bool {
+  TypeOf(l, n)
+  return IsBytes(l.typ, l.tyn)
+}
+
+func NewNode(l *L, op i64) *ovid/parse.Node {
+  var n *ovid/parse.Node = ovid/io.Alloc(l.io, sizeof(ovid/parse.Node)) as *ovid/parse.Node
+  n.op = op
+  return n
+}
+
+func Name(l *L, np i64, nn i64) *ovid/parse.Node {
+  var n *ovid/parse.Node = NewNode(l, ovid/parse.OP_NAME)
+  n.namep = np
+  n.namen = nn
+  return n
+}
+
+func Bin(l *L, op i64, a *ovid/parse.Node, b *ovid/parse.Node) *ovid/parse.Node {
+  var n *ovid/parse.Node = NewNode(l, op)
+  n.left = a
+  n.right = b
+  return n
+}
+
+func One(l *L) *ovid/parse.Node {
+  var n *ovid/parse.Node = NewNode(l, ovid/parse.OP_INT)
+  n.ival = 1
+  n.valk = 1
+  return n
+}
+
+func BoolNode(l *L, v bool) *ovid/parse.Node {
+  var n *ovid/parse.Node = NewNode(l, ovid/parse.OP_BOOL)
+  n.valk = 2
+  if v {
+    n.ival = 1
+  }
+  return n
+}
+
+// Simple says n can be an operand of a check or a pair without being
+// moved: a local or a constant.
+func Simple(n *ovid/parse.Node) bool {
+  var op i64 = n.op
+  return op == ovid/parse.OP_NAME || op == ovid/parse.OP_INT || op == ovid/parse.OP_STRLEN || op == ovid/parse.OP_STRPTR || op == ovid/parse.OP_SIZEOF || op == ovid/parse.OP_LEN
+}
+
+// TmpName makes the name t#k of a fresh temp, at l.typ (the address) and
+// l.tyn (its length), without touching the type the caller holds.
+func TmpName(l *L, out i64) i64 {
+  l.tmp = l.tmp + 1
+  var d i64 = ovid/io.Alloc(l.io, 24)
+  store8(d, 116)
+  store8(d + 1, 35)
+  var n i64 = 2 + ovid/mem.FormatI64(d + 2, l.tmp)
+  store64(out, d)
+  store64(out + 8, n)
+  return 0
+}
+
+// Temp declares a fresh local of type tp[0:tn] holding v, in p, and
+// returns a name node for it.
+func Temp(l *L, tp i64, tn i64, v *ovid/parse.Node, p *Pre) *ovid/parse.Node {
+  var cell i64 = ovid/io.Alloc(l.io, 16)
+  TmpName(l, cell)
+  var np i64 = load64(cell)
+  var nn i64 = load64(cell + 8)
+  Bind(l, np, nn, tp, tn)
+  var d *ovid/parse.Node = NewNode(l, ovid/parse.OP_VAR)
+  d.namep = np
+  d.namen = nn
+  d.typp = tp
+  d.typn = tn
+  d.val = v
+  Append(p, d)
+  return Name(l, np, nn)
+}
+
+// Copy is a fresh node with n's contents, off the list n is on.
+func Copy(l *L, n *ovid/parse.Node) *ovid/parse.Node {
+  var m *ovid/parse.Node = NewNode(l, n.op)
+  ovid/mem.Copy(m as i64, n as i64, sizeof(ovid/parse.Node))
+  m.next = 0 as *ovid/parse.Node
+  return m
+}
+
+// Become makes n, in place, the name node of np[0:nn]: its place on a
+// list and its id stay, everything else goes.
+func Become(l *L, n *ovid/parse.Node, np i64, nn i64) i64 {
+  var next *ovid/parse.Node = n.next
+  var num i64 = n.num
+  var off i64 = n.off
+  var end i64 = n.end
+  var z i64 = 0
+  ovid/mem.Copy(n as i64, NewNode(l, ovid/parse.OP_NAME) as i64, sizeof(ovid/parse.Node))
+  n.namep = np
+  n.namen = nn
+  n.next = next
+  n.num = num
+  n.off = off
+  n.end = end
+  return z
+}
+
+// Hoist lowers n and makes it a simple operand: itself, or a fresh temp
+// it is moved into, in place.
+func Hoist(l *L, n *ovid/parse.Node, p *Pre) *ovid/parse.Node {
+  Expr(l, n, p)
+  if Simple(n) {
+    return n
+  }
+  TypeOf(l, n)
+  var tp i64 = l.typ
+  var tn i64 = l.tyn
+  var t *ovid/parse.Node = Temp(l, tp, tn, Copy(l, n), p)
+  Become(l, n, t.namep, t.namen)
+  return n
+}
+
+// Pair lowers a bytes-typed expression to its address and length, both
+// simple operands, in l.pa and l.pl, placing in p the statements that
+// must run first.
+func Pair(l *L, n *ovid/parse.Node, p *Pre) i64 {
+  var op i64 = n.op
+  if op == ovid/parse.OP_NAME {
+    l.pa = Name(l, n.namep, n.namen)
+    l.pl = Name(l, NName(l, n.namep, n.namen), n.namen + 2)
+    return 0
+  }
+  if op == ovid/parse.OP_STR {
+    var sp *ovid/parse.Node = NewNode(l, ovid/parse.OP_STRPTR)
+    sp.valk = 3
+    sp.strp = n.strp
+    sp.strn = n.strn
+    var sl *ovid/parse.Node = NewNode(l, ovid/parse.OP_STRLEN)
+    sl.valk = 3
+    sl.strp = n.strp
+    sl.strn = n.strn
+    l.pa = sp
+    l.pl = sl
+    return 0
+  }
+  if op == ovid/parse.OP_BYTES {
+    var a *ovid/parse.Node = Hoist(l, n.left, p)
+    var ln *ovid/parse.Node = Hoist(l, n.right, p)
+    // n < 2^63 unsigned: a negative length would let every later
+    // check pass.
+    var lim *ovid/parse.Node = NewNode(l, ovid/parse.OP_INT)
+    lim.ival = (0 - 9223372036854775807) - 1
+    lim.valk = 1
+    var ck *ovid/parse.Node = NewNode(l, ovid/parse.OP_CHK)
+    ck.addr = ln
+    ck.val = lim
+    Append(p, ck)
+    l.pa = a
+    l.pl = ln
+    return 0
+  }
+  if op == ovid/parse.OP_FIELD {
+    var base *ovid/parse.Node = Hoist(l, n.base, p)
+    var fp *ovid/parse.Node = NewNode(l, ovid/parse.OP_FIELD)
+    fp.base = base
+    fp.namep = n.namep
+    fp.namen = n.namen
+    var fnn *ovid/parse.Node = NewNode(l, ovid/parse.OP_FIELD)
+    fnn.base = base
+    fnn.namep = NName(l, n.namep, n.namen)
+    fnn.namen = n.namen + 2
+    var fa *ovid/parse.Node = Temp(l, strptr("i64"), 3, fp, p)
+    var fl *ovid/parse.Node = Temp(l, strptr("i64"), 3, fnn, p)
+    l.pa = fa
+    l.pl = fl
+    return 0
+  }
+  if op == ovid/parse.OP_SLICE {
+    Pair(l, n.base, p)
+    var bp *ovid/parse.Node = l.pa
+    var bn *ovid/parse.Node = l.pl
+    var i *ovid/parse.Node = Hoist(l, n.left, p)
+    var j *ovid/parse.Node = Hoist(l, n.right, p)
+    // j <= n and i <= j, unsigned, so a negative bound trips too.
+    var c1 *ovid/parse.Node = NewNode(l, ovid/parse.OP_CHK)
+    c1.addr = j
+    c1.val = Bin(l, ovid/parse.OP_ADD, bn, One(l))
+    Append(p, c1)
+    var c2 *ovid/parse.Node = NewNode(l, ovid/parse.OP_CHK)
+    c2.addr = i
+    c2.val = Bin(l, ovid/parse.OP_ADD, j, One(l))
+    Append(p, c2)
+    var sa *ovid/parse.Node = Temp(l, strptr("i64"), 3, Bin(l, ovid/parse.OP_ADD, bp, i), p)
+    var sn *ovid/parse.Node = Temp(l, strptr("i64"), 3, Bin(l, ovid/parse.OP_SUB, j, i), p)
+    l.pa = sa
+    l.pl = sn
+    return 0
+  }
+  if op == ovid/parse.OP_CALL {
+    Expr(l, n, p)
+    var cell i64 = ovid/io.Alloc(l.io, 16)
+    TmpName(l, cell)
+    var tp i64 = load64(cell)
+    var tn i64 = load64(cell + 8)
+    Bind(l, tp, tn, strptr("i64"), 3)
+    var t2p i64 = NName(l, tp, tn)
+    Bind(l, t2p, tn + 2, strptr("i64"), 3)
+    var v2 *ovid/parse.Node = NewNode(l, ovid/parse.OP_VAR2)
+    v2.namep = tp
+    v2.namen = tn
+    v2.typp = strptr("i64")
+    v2.typn = 3
+    v2.name2p = t2p
+    v2.name2n = tn + 2
+    v2.typ2p = strptr("i64")
+    v2.typ2n = 3
+    v2.val = Copy(l, n)
+    Append(p, v2)
+    l.pa = Name(l, tp, tn)
+    l.pl = Name(l, t2p, tn + 2)
+    return 0
+  }
+  l.err = 1
+  return 0
+}
+
+// Grew says whether p gained statements since mark was its tail.
+func Grew(p *Pre, mark *ovid/parse.Node) bool {
+  return p.tail != mark
+}
+
+// MoveCalls moves every node in the list kept (a list of name-less
+// holder nodes whose base is the node to move, none simple) into a temp
+// placed after mark in p, in order, and returns the mark after the last
+// one.
+func MoveCalls(l *L, p *Pre, mark *ovid/parse.Node, kept *ovid/parse.Node) *ovid/parse.Node {
+  while kept != 0 as *ovid/parse.Node {
+    var n *ovid/parse.Node = kept.base
+    TypeOf(l, n)
+    var tp i64 = l.typ
+    var tn i64 = l.tyn
+    var cell i64 = ovid/io.Alloc(l.io, 16)
+    TmpName(l, cell)
+    var np i64 = load64(cell)
+    var nn i64 = load64(cell + 8)
+    Bind(l, np, nn, tp, tn)
+    var d *ovid/parse.Node = NewNode(l, ovid/parse.OP_VAR)
+    d.namep = np
+    d.namen = nn
+    d.typp = tp
+    d.typn = tn
+    d.val = Copy(l, n)
+    mark = InsertAfter(p, mark, d)
+    Become(l, n, np, nn)
+    kept = kept.next
+  }
+  return mark
+}
+
+// Keep adds n to the kept list (a holder node pointing at it) and
+// returns the new head.
+func Keep(l *L, kept *ovid/parse.Node, n *ovid/parse.Node) *ovid/parse.Node {
+  var h *ovid/parse.Node = NewNode(l, ovid/parse.OP_EXPR)
+  h.base = n
+  if kept == 0 as *ovid/parse.Node {
+    return h
+  }
+  var t *ovid/parse.Node = kept
+  while t.next != 0 as *ovid/parse.Node {
+    t = t.next
+  }
+  t.next = h
+  return kept
+}
+
+// Expr lowers the bytes operations inside an i64 or bool expression, in
+// place, placing in p what must run first. Children go in evaluation
+// order, and when one adds to p, every earlier child that is not a
+// simple operand is moved into a temp ahead of that addition, so what
+// it computes or reads still happens in source order.
+func Expr(l *L, n *ovid/parse.Node, p *Pre) i64 {
+  if n == 0 as *ovid/parse.Node {
+    return 0
+  }
+  var op i64 = n.op
+  if op == ovid/parse.OP_BYTE {
+    Pair(l, n.base, p)
+    var bp *ovid/parse.Node = l.pa
+    var bn *ovid/parse.Node = l.pl
+    var i *ovid/parse.Node = Hoist(l, n.arg, p)
+    n.op = ovid/parse.OP_BLOAD
+    n.base = bp
+    n.left = i
+    n.right = bn
+    n.arg = 0 as *ovid/parse.Node
+    return 0
+  }
+  if op == ovid/parse.OP_BLEN {
+    Pair(l, n.base, p)
+    var ln *ovid/parse.Node = l.pl
+    if ln.op == ovid/parse.OP_NAME {
+      Become(l, n, ln.namep, ln.namen)
+    } else {
+      // The length of a literal: strlen.
+      var next *ovid/parse.Node = n.next
+      ovid/mem.Copy(n as i64, ln as i64, sizeof(ovid/parse.Node))
+      n.next = next
+    }
+    return 0
+  }
+  if op == ovid/parse.OP_LAND || op == ovid/parse.OP_LOR {
+    Expr(l, n.left, p)
+    var rp *Pre = NewPre(l)
+    Expr(l, n.right, rp)
+    if rp.head == 0 as *ovid/parse.Node {
+      return 0
+    }
+    // The right side has statements: run them only when it is
+    // evaluated. var t bool = left; if t { rp; t = right } (or if !t
+    // for ||), and the expression is t.
+    var t *ovid/parse.Node = Temp(l, strptr("bool"), 4, n.left, p)
+    var set *ovid/parse.Node = NewNode(l, ovid/parse.OP_ASSIGN)
+    set.namep = t.namep
+    set.namen = t.namen
+    set.val = n.right
+    Append(rp, set)
+    var ifn *ovid/parse.Node = NewNode(l, ovid/parse.OP_IF)
+    ifn.then = rp.head
+    if op == ovid/parse.OP_LAND {
+      ifn.cond = Name(l, t.namep, t.namen)
+    } else {
+      var nt *ovid/parse.Node = NewNode(l, ovid/parse.OP_NOT)
+      nt.arg = Name(l, t.namep, t.namen)
+      ifn.cond = nt
+    }
+    Append(p, ifn)
+    Become(l, n, t.namep, t.namen)
+    return 0
+  }
+  if op == ovid/parse.OP_CALL || op == ovid/parse.OP_SYSCALL {
+    var out *Pre = NewPre(l)
+    var kept *ovid/parse.Node = 0 as *ovid/parse.Node
+    var a *ovid/parse.Node = n.args
+    while a != 0 as *ovid/parse.Node {
+      var nxt *ovid/parse.Node = a.next
+      a.next = 0 as *ovid/parse.Node
+      var at *ovid/parse.Node = p.tail
+      if IsBytesExpr(l, a) {
+        Pair(l, a, p)
+        if Grew(p, at) {
+          MoveCalls(l, p, at, kept)
+          kept = 0 as *ovid/parse.Node
+        }
+        Append(out, l.pa)
+        Append(out, l.pl)
+      } else {
+        Expr(l, a, p)
+        if Grew(p, at) {
+          MoveCalls(l, p, at, kept)
+          kept = 0 as *ovid/parse.Node
+        }
+        if !Simple(a) {
+          kept = Keep(l, kept, a)
+        }
+        Append(out, a)
+      }
+      a = nxt
+    }
+    n.args = out.head
+    return 0
+  }
+  return Ordered(l, p, n)
+}
+
+// Ordered lowers h's operands (left, right, arg, base, cond: an
+// expression's children, or a statement's operands put in a holder in
+// that order) in evaluation order, in place; when one adds to p, every
+// earlier operand that is not simple is moved into a temp ahead of
+// that addition, so what it computes or reads still happens in source
+// order.
+func Ordered(l *L, p *Pre, h *ovid/parse.Node) i64 {
+  var done *ovid/parse.Node = 0 as *ovid/parse.Node
+  var k i64 = 0
+  while k < 5 {
+    var ch *ovid/parse.Node = h.left
+    if k == 1 {
+      ch = h.right
+    } else if k == 2 {
+      ch = h.arg
+    } else if k == 3 {
+      ch = h.base
+    } else if k == 4 {
+      ch = h.cond
+    }
+    if ch != 0 as *ovid/parse.Node {
+      var at *ovid/parse.Node = p.tail
+      Expr(l, ch, p)
+      if Grew(p, at) {
+        var mk *ovid/parse.Node = at
+        var dn *ovid/parse.Node = done
+        while dn != 0 as *ovid/parse.Node {
+          if !Simple(dn.base) {
+            mk = MoveCalls(l, p, mk, Keep(l, 0 as *ovid/parse.Node, dn.base))
+          }
+          dn = dn.next
+        }
+        done = 0 as *ovid/parse.Node
+      }
+      done = Keep(l, done, ch)
+    }
+    k = k + 1
+  }
+  return 0
+}
+
+// Holder is a node whose left, right, and arg are a statement's
+// operands, for Ordered.
+func Holder(l *L, a *ovid/parse.Node, b *ovid/parse.Node, c *ovid/parse.Node) *ovid/parse.Node {
+  var h *ovid/parse.Node = NewNode(l, ovid/parse.OP_EXPR)
+  h.left = a
+  h.right = b
+  h.arg = c
+  return h
+}
+
+// Claim gives statement n and the generated statements under it the
+// id id, leaving statements that have one (the source's own) alone.
+func Claim(n *ovid/parse.Node, id i64) i64 {
+  if n.num != 0 {
+    return 0
+  }
+  n.num = id
+  ClaimList(n.then, id)
+  ClaimList(n.els, id)
+  ClaimList(n.body, id)
+  return 0
+}
+
+func ClaimList(n *ovid/parse.Node, id i64) i64 {
+  while n != 0 as *ovid/parse.Node {
+    Claim(n, id)
+    n = n.next
+  }
+  return 0
+}
+
+func Stmts(l *L, s *ovid/parse.Node) *ovid/parse.Node {
+  var save i64 = l.nenv
+  var out *Pre = NewPre(l)
+  while s != 0 as *ovid/parse.Node {
+    var nxt *ovid/parse.Node = s.next
+    var p *Pre = NewPre(l)
+    Stmt(l, s, p)
+    // What was placed before the statement is the statement's, for the
+    // crash report when a check in it fails: the statements themselves
+    // and what the restructuring of && or a while put under them.
+    var m *ovid/parse.Node = p.head
+    while m != 0 as *ovid/parse.Node {
+      Claim(m, s.num)
+      var mn *ovid/parse.Node = m.next
+      Append(out, m)
+      m = mn
+    }
+    s = nxt
+  }
+  l.nenv = save
+  return out.head
+}
+
+func ThirdName(l *L, s *ovid/parse.Node) i64 {
+  // var b bytes, e i64 = f(): b, b#n, and e, the third in rcx.
+  var third *ovid/parse.Node = Name(l, s.name2p, s.name2n)
+  if ovid/parse.IsBlank(s.namep, s.namen) {
+    s.name2p = s.namep
+    s.name2n = s.namen
+  } else {
+    s.name2p = NName(l, s.namep, s.namen)
+    s.name2n = s.namen + 2
+  }
+  if s.op == ovid/parse.OP_VAR2 {
+    s.typp = strptr("i64")
+    s.typn = 3
+    s.typ2p = strptr("i64")
+    s.typ2n = 3
+  } else {
+    s.typ2p = 0
+    s.typ2n = 0
+  }
+  s.args = third
+  return 0
+}
+
+// Stmt lowers s into p: what must run first, then s (or what replaces
+// it).
+func Stmt(l *L, s *ovid/parse.Node, p *Pre) i64 {
+  var op i64 = s.op
+  if op == ovid/parse.OP_VAR {
+    if IsBytes(s.typp, s.typn) {
+      if s.val.op == ovid/parse.OP_CALL {
+        Expr(l, s.val, p)
+        Bind(l, s.namep, s.namen, strptr("bytes"), 5)
+        s.op = ovid/parse.OP_VAR2
+        s.typp = strptr("i64")
+        s.typn = 3
+        s.name2p = NName(l, s.namep, s.namen)
+        s.name2n = s.namen + 2
+        s.typ2p = strptr("i64")
+        s.typ2n = 3
+        Append(p, s)
+        return 0
+      }
+      Pair(l, s.val, p)
+      Bind(l, s.namep, s.namen, strptr("bytes"), 5)
+      s.typp = strptr("i64")
+      s.typn = 3
+      s.val = l.pa
+      Append(p, s)
+      var v2 *ovid/parse.Node = NewNode(l, ovid/parse.OP_VAR)
+      v2.namep = NName(l, s.namep, s.namen)
+      v2.namen = s.namen + 2
+      v2.typp = strptr("i64")
+      v2.typn = 3
+      v2.val = l.pl
+      Append(p, v2)
+      return 0
+    }
+    Expr(l, s.val, p)
+    Bind(l, s.namep, s.namen, s.typp, s.typn)
+    Append(p, s)
+    return 0
+  }
+  if op == ovid/parse.OP_VAR2 || op == ovid/parse.OP_ASSIGN2 {
+    Expr(l, s.val, p)
+    if op == ovid/parse.OP_VAR2 {
+      Bind(l, s.namep, s.namen, s.typp, s.typn)
+      Bind(l, s.name2p, s.name2n, s.typ2p, s.typ2n)
+    }
+    if s.val.op == ovid/parse.OP_CALL && ResultWords(l, s.val) == 3 {
+      ThirdName(l, s)
+    }
+    Append(p, s)
+    return 0
+  }
+  if op == ovid/parse.OP_ASSIGN {
+    if Lookup(l, s.namep, s.namen) && IsBytes(l.typ, l.tyn) {
+      if s.val.op == ovid/parse.OP_CALL {
+        Expr(l, s.val, p)
+        s.op = ovid/parse.OP_ASSIGN2
+        s.name2p = NName(l, s.namep, s.namen)
+        s.name2n = s.namen + 2
+        Append(p, s)
+        return 0
+      }
+      Pair(l, s.val, p)
+      s.val = l.pa
+      Append(p, s)
+      var a2 *ovid/parse.Node = NewNode(l, ovid/parse.OP_ASSIGN)
+      a2.namep = NName(l, s.namep, s.namen)
+      a2.namen = s.namen + 2
+      a2.val = l.pl
+      Append(p, a2)
+      return 0
+    }
+    Expr(l, s.val, p)
+    Append(p, s)
+    return 0
+  }
+  if op == ovid/parse.OP_SETFIELD {
+    TypeOf(l, s.base)
+    if FieldIsBytes(l, FindType(l, l.typ, l.tyn), s.namep, s.namen) {
+      var base *ovid/parse.Node = Hoist(l, s.base, p)
+      Pair(l, s.val, p)
+      s.base = base
+      s.val = l.pa
+      Append(p, s)
+      var f2 *ovid/parse.Node = NewNode(l, ovid/parse.OP_SETFIELD)
+      f2.base = base
+      f2.namep = NName(l, s.namep, s.namen)
+      f2.namen = s.namen + 2
+      f2.val = l.pl
+      Append(p, f2)
+      return 0
+    }
+    Ordered(l, p, Holder(l, s.base, s.val, 0 as *ovid/parse.Node))
+    Append(p, s)
+    return 0
+  }
+  if op == ovid/parse.OP_SETBYTE {
+    var ix *ovid/parse.Node = s.base
+    Pair(l, ix.base, p)
+    var bp *ovid/parse.Node = l.pa
+    var bn *ovid/parse.Node = l.pl
+    var i *ovid/parse.Node = Hoist(l, ix.arg, p)
+    Expr(l, s.val, p)
+    var ck *ovid/parse.Node = NewNode(l, ovid/parse.OP_CHK)
+    ck.addr = i
+    ck.val = bn
+    Append(p, ck)
+    s.op = ovid/parse.OP_STORE8
+    s.base = 0 as *ovid/parse.Node
+    s.addr = Bin(l, ovid/parse.OP_ADD, bp, i)
+    Append(p, s)
+    return 0
+  }
+  if op == ovid/parse.OP_RETURN {
+    if s.val != 0 as *ovid/parse.Node && IsBytesExpr(l, s.val) {
+      if s.val.op == ovid/parse.OP_CALL && s.val2 == 0 as *ovid/parse.Node {
+        // Forwarded: the callee's results are this func's.
+        Expr(l, s.val, p)
+        Append(p, s)
+        return 0
+      }
+      var e *ovid/parse.Node = s.val2
+      Pair(l, s.val, p)
+      s.val = l.pa
+      s.val2 = l.pl
+      if e != 0 as *ovid/parse.Node {
+        // return b, e: the error code is the third word.
+        Expr(l, e, p)
+        s.args = e
+      }
+      Append(p, s)
+      return 0
+    }
+    Ordered(l, p, Holder(l, s.val, s.val2, 0 as *ovid/parse.Node))
+    Append(p, s)
+    return 0
+  }
+  if op == ovid/parse.OP_IF {
+    Expr(l, s.cond, p)
+    s.then = Stmts(l, s.then)
+    s.els = Stmts(l, s.els)
+    Append(p, s)
+    return 0
+  }
+  if op == ovid/parse.OP_WHILE {
+    var cp *Pre = NewPre(l)
+    Expr(l, s.cond, cp)
+    s.body = Stmts(l, s.body)
+    if cp.head == 0 as *ovid/parse.Node {
+      Append(p, s)
+      return 0
+    }
+    // The condition has statements, which must run before each test:
+    // var go bool = true; while go { cp; if cond { body } else { go =
+    // false } }.
+    var g *ovid/parse.Node = Temp(l, strptr("bool"), 4, BoolNode(l, true), p)
+    var stop *ovid/parse.Node = NewNode(l, ovid/parse.OP_ASSIGN)
+    stop.namep = g.namep
+    stop.namen = g.namen
+    stop.val = BoolNode(l, false)
+    var ifn *ovid/parse.Node = NewNode(l, ovid/parse.OP_IF)
+    ifn.cond = s.cond
+    ifn.then = s.body
+    ifn.els = stop
+    Append(cp, ifn)
+    // The checks in cp are the while's, for the crash report.
+    ClaimList(cp.head, s.num)
+    s.cond = Name(l, g.namep, g.namen)
+    s.body = cp.head
+    Append(p, s)
+    return 0
+  }
+  // expr, store*, chk: lower the expressions in place, in order.
+  Ordered(l, p, Holder(l, s.addr, s.val, s.val2))
+  Append(p, s)
+  return 0
+}

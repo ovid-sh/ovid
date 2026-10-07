@@ -205,6 +205,24 @@ func WOp(e *E, op i64) i64 {
   if op == OP_INDEX {
     return WL(e, strptr("index"), 5)
   }
+  if op == OP_SETBYTE {
+    return WL(e, strptr("setbyte"), 7)
+  }
+  if op == OP_STR {
+    return WL(e, strptr("str"), 3)
+  }
+  if op == OP_BYTES {
+    return WL(e, strptr("bytes"), 5)
+  }
+  if op == OP_BYTE {
+    return WL(e, strptr("byte"), 4)
+  }
+  if op == OP_SLICE {
+    return WL(e, strptr("slice"), 5)
+  }
+  if op == OP_BLEN {
+    return WL(e, strptr("blen"), 4)
+  }
   if op == OP_LEN {
     return WL(e, strptr("len"), 3)
   }
@@ -300,7 +318,7 @@ func EList(e *E, key i64, kn i64, n *Node) i64 {
 
 func ENode(e *E, n *Node) i64 {
   WC(e, 123)
-  if n.op <= OP_EXPR {
+  if IsStmt(n.op) {
     IdOpen(e, strptr("st:"), 3)
   } else {
     IdOpen(e, strptr("ex:"), 3)

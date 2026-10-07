@@ -42,8 +42,8 @@ program runs under ptrace; `fault_addr` for SIGSEGV and SIGBUS. `ovid test`
 reports crashes with the same fields. A ^C reaches the program, and ovid
 stays to report it (`"signal":"interrupt"`).
 
-`dump` writes the program tree as one JSON object. A `strptr`/`strlen`
-literal's bytes are its `"value"`, or, when they are not valid UTF-8 (a
+`dump` writes the program tree as one JSON object. A string literal's
+bytes (a `str` node, or a `strptr`/`strlen`) are its `"value"`, or, when they are not valid UTF-8 (a
 `\x` escape can make any byte), `"value_hex"`: two lowercase hex digits per
 byte. Any other JSON string, such as a diagnostic's `source`, has each
 byte that is not UTF-8 replaced by U+FFFD.

@@ -501,7 +501,7 @@ func (p *parser) parseType() (string, ir.Span) {
 	}
 	ns := p.tok(name)
 	if pkg == "" {
-		if name == "i64" || name == "bool" {
+		if name == "i64" || name == "bool" || name == "bytes" {
 			if star {
 				p.errorf("cannot use a pointer to %s", name)
 			}
@@ -645,6 +645,10 @@ func (p *parser) stmt(s int, id string) *ir.Node {
 			}
 			if e.Op == "field" {
 				return &ir.Node{Op: "setfield", Base: e.Base, Name: e.Name, Val: v, NameSpan: e.NameSpan}
+			}
+			if e.Op == "index" || e.Op == "byte" {
+				// b[i] = v stores the low byte of v.
+				return &ir.Node{Op: "setbyte", Base: e, Val: v}
 			}
 			p.errorf("cannot assign to this expression")
 		}
@@ -883,14 +887,25 @@ func (p *parser) postfix() *ir.Node {
 			continue
 		}
 		if p.peekByte('[') {
-			// Name[i] reads a table; the name node is replaced, not kept.
-			if e.Op != "name" {
-				p.errorf("only a table can be indexed")
-			}
+			// Name[i] reads a table or a bytes, which the checker tells
+			// apart (a local shadows a table); e[i] on any other base and
+			// e[i:j] are bytes operations.
 			p.expect('[')
 			i := p.parseExpr()
+			if p.peekByte(':') {
+				p.expect(':')
+				j := p.parseExpr()
+				p.expect(']')
+				e = &ir.Node{ID: p.eid(), Op: "slice", Base: e, Left: i, Right: j, Span: ir.Span{File: p.file, Off: e.Span.Off, End: p.last}}
+				continue
+			}
 			p.expect(']')
-			e = &ir.Node{ID: p.eid(), Op: "index", Name: e.Name, Pkg: e.Pkg, Arg: i, Span: ir.Span{File: p.file, Off: e.Span.Off, End: p.last}, NameSpan: e.NameSpan}
+			if e.Op != "name" {
+				e = &ir.Node{ID: p.eid(), Op: "byte", Base: e, Arg: i, Span: ir.Span{File: p.file, Off: e.Span.Off, End: p.last}}
+				continue
+			}
+			// The name node stays as the base, for a bytes.
+			e = &ir.Node{ID: p.eid(), Op: "index", Name: e.Name, Pkg: e.Pkg, Base: e, Arg: i, Span: ir.Span{File: p.file, Off: e.Span.Off, End: p.last}, NameSpan: e.NameSpan}
 			continue
 		}
 		return e
@@ -913,9 +928,6 @@ func (p *parser) primary0() *ir.Node {
 		p.expect(')')
 		return e
 	}
-	if p.peekByte('"') {
-		p.errorf("bare string literal; write strptr(\"...\") for the address and strlen(\"...\") for the length")
-	}
 	if p.isNum() {
 		return p.number()
 	}
@@ -930,15 +942,16 @@ func (p *parser) primary0() *ir.Node {
 		p.ident()
 		return p.callArgs("syscall", "", "", ir.Span{})
 	case p.peekLen():
-		// len(Table), a compile-time constant.
+		// len(Table), a compile-time constant, or len(b) of a bytes; a
+		// name is either, which the checker tells apart.
 		p.ident()
 		p.expect('(')
-		t := p.primary()
-		if t.Op != "name" {
-			p.errorf("len takes a table")
-		}
+		t := p.postfix()
 		p.expect(')')
-		return &ir.Node{ID: p.eid(), Op: "len", Name: t.Name, Pkg: t.Pkg, NameSpan: t.NameSpan}
+		if t.Op != "name" {
+			return &ir.Node{ID: p.eid(), Op: "blen", Base: t}
+		}
+		return &ir.Node{ID: p.eid(), Op: "len", Name: t.Name, Pkg: t.Pkg, Base: t, NameSpan: t.NameSpan}
 	case p.peekKw("ushr"), p.peekKw("umulhi"), p.peekKw("ult"), p.peekKw("udiv"), p.peekKw("urem"):
 		// The unsigned operations are binary operators spelled as calls.
 		op := p.ident()
@@ -958,7 +971,7 @@ func (p *parser) primary0() *ir.Node {
 		p.ident()
 		p.expect('(')
 		if p.peekByte('*') {
-			p.errorf("sizeof takes a struct type, not a pointer: sizeof(T) is 8 * T's fields")
+			p.errorf("sizeof takes a struct type, not a pointer: sizeof(T) is the size of a T")
 		}
 		t, ts := p.parseType()
 		p.expect(')')
@@ -969,6 +982,19 @@ func (p *parser) primary0() *ir.Node {
 		s := p.string()
 		p.expect(')')
 		return &ir.Node{ID: p.eid(), Op: op, ValK: 3, Str: s}
+	case p.peekKw("bytes"):
+		// bytes(p, n): a bytes value from an address and a length.
+		p.ident()
+		args, ok := p.builtinArgs(2)
+		if !ok {
+			return &ir.Node{ID: p.eid(), Op: "bytes", Args: args}
+		}
+		return &ir.Node{ID: p.eid(), Op: "bytes", Left: args[0], Right: args[1]}
+	}
+	if p.peekByte('"') {
+		// A string literal is a bytes value in rodata.
+		s := p.string()
+		return &ir.Node{ID: p.eid(), Op: "str", ValK: 3, Str: s}
 	}
 	if !p.peekIdent() {
 		p.errorf("expected an expression")

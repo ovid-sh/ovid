@@ -102,12 +102,13 @@ re-read).
 
 ## Language, briefly
 
-`i64`, `bool`, and pointers to structs (`*T`). Struct fields are 8 bytes and `sizeof(T)` gives a struct's size.
+`i64`, `bool`, `bytes`, and pointers to structs (`*T`). Struct fields are 8 bytes (a `bytes` field 16) and `sizeof(T)` gives a struct's size.
+A `bytes` is an address and a length: `"lit"` is one in read-only memory, `bytes(p, n)` one over memory of your own, `b[i]` the byte (and `b[i] = v` stores one), `b[i:j]` the subrange without a copy, `len(b)` the length; every index and bound is checked, and a failed check traps.
 Read-only constant tables (`const T [N]i64 = {...}`, read as `T[i]` with a bounds check, `len(T)`).
 No struct values, globals, function pointers, methods, generics, or implicit
-allocation. At most six parameters; one result, or a value and an error code (`func F() (i64, i64)`, received as `var v i64, e i64 = F()`; a call that is not received is a check error). Operators follow Go
-precedence and are signed; `>>` is arithmetic, and `ushr`, `umulhi`, `udiv`, `urem`, and `ult` are the unsigned forms. String literals exist only as `strptr("…")`
-and `strlen("…")`, and are read-only. Memory is `load8/16/32/64`, `store8/16/32/64`, `bswap16/32/64`, and
+allocation. Parameters take at most six words (a `bytes` is two); one result, or a value and an error code (`func F() (i64, i64)`, received as `var v i64, e i64 = F()`; a call that is not received is a check error). Operators follow Go
+precedence and are signed; `>>` is arithmetic, and `ushr`, `umulhi`, `udiv`, `urem`, and `ult` are the unsigned forms. `strptr("…")`
+and `strlen("…")` are a literal's address and length as two `i64`, for the std functions that take them. Memory is `load8/16/32/64`, `store8/16/32/64`, `bswap16/32/64`, and
 `ovid/io.Alloc`. `main` is `func main(io *ovid/io.Cap) i64`; `io` is the
 capability for argv, the heap, and syscalls, and `syscall` is only allowed in
 `ovid/io`. Other packages' funcs and consts spell the import path:
@@ -117,8 +118,8 @@ packages are a DAG.
 
 ## Self-hosting
 
-`prog/` is the compiler again, written in Ovid (about 6,200 lines across seven
-packages, including SHA-256, an x86-64 assembler, and an ELF writer). It reads `ovid.mod` and `.ov` files itself and offers only
+`prog/` is the compiler again, written in Ovid (about 11,000 lines across eight
+packages, including SHA-256, an x86-64 assembler, an ELF writer, and the `bytes` lowering). It reads `ovid.mod` and `.ov` files itself and offers only
 `check`, `build`, `dump`, and `refs`; give it the standard library with
 `--std <dir>`, since only the Go binary embeds it. Its `refs` prints what
 the Go toolchain's does, from the uses its checker records; the other
@@ -133,7 +134,7 @@ cmp /tmp/s1 /tmp/s2                        # byte-identical
 
 The two compilers emit byte-identical binaries for the same source, and
 `go test ./internal/tool -run TestSelfHost` checks it. The self-hosted
-compiler is about 130 KB, and `TestSelfHostSize` fails if it outgrows its
+compiler is about 155 KB (the `bytes` lowering added 15 KB, 2026-10-07), and `TestSelfHostSize` fails if it outgrows its
 budget. On starship (Ryzen 7 8745HS, 2026-10-04) it built `prog/` in 9 ms,
 against 27 ms for the Go one, and a generated program of 100,000 funcs
 (300,000 lines) in 0.57 s against 2.25 s. One command measures all of it:

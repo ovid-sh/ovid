@@ -3,9 +3,9 @@ package ovid/parse
 import ovid/io
 import ovid/mem
 
-// Op codes. Statements are 1..13; everything else is an expression, and
-// the binary operators (OP_LOR and up) come after every other expression,
-// so EvalConst can tell them apart by number.
+// Op codes. Statements are 1..OP_CHK (IsStmt); everything else is an
+// expression, and the binary operators (OP_LOR and up) come after every
+// other expression, so EvalConst can tell them apart by number.
 const OP_VAR i64 = 1
 const OP_VAR2 i64 = 2
 const OP_ASSIGN i64 = 3
@@ -19,33 +19,41 @@ const OP_RETURN i64 = 10
 const OP_IF i64 = 11
 const OP_WHILE i64 = 12
 const OP_EXPR i64 = 13
-const OP_INT i64 = 14
-const OP_BOOL i64 = 15
-const OP_NAME i64 = 16
-const OP_CALL i64 = 17
-const OP_SYSCALL i64 = 18
-const OP_FIELD i64 = 19
-const OP_CAST i64 = 20
-const OP_NOT i64 = 21
-const OP_NEG i64 = 22
-const OP_BNOT i64 = 23
-const OP_LOAD8 i64 = 24
-const OP_LOAD16 i64 = 25
-const OP_LOAD32 i64 = 26
-const OP_LOAD64 i64 = 27
-const OP_STRPTR i64 = 28
-const OP_STRLEN i64 = 29
-const OP_SIZEOF i64 = 30
-const OP_BSWAP16 i64 = 31
-const OP_BSWAP32 i64 = 32
-const OP_BSWAP64 i64 = 33
-const OP_USHR i64 = 34
-const OP_UMULHI i64 = 35
-const OP_UDIV i64 = 36
-const OP_UREM i64 = 37
-const OP_ULT i64 = 38
-const OP_INDEX i64 = 39
-const OP_LEN i64 = 40
+const OP_SETBYTE i64 = 14
+const OP_CHK i64 = 15
+const OP_INT i64 = 16
+const OP_BOOL i64 = 17
+const OP_NAME i64 = 18
+const OP_CALL i64 = 19
+const OP_SYSCALL i64 = 20
+const OP_FIELD i64 = 21
+const OP_CAST i64 = 22
+const OP_NOT i64 = 23
+const OP_NEG i64 = 24
+const OP_BNOT i64 = 25
+const OP_LOAD8 i64 = 26
+const OP_LOAD16 i64 = 27
+const OP_LOAD32 i64 = 28
+const OP_LOAD64 i64 = 29
+const OP_STRPTR i64 = 30
+const OP_STRLEN i64 = 31
+const OP_SIZEOF i64 = 32
+const OP_BSWAP16 i64 = 33
+const OP_BSWAP32 i64 = 34
+const OP_BSWAP64 i64 = 35
+const OP_USHR i64 = 36
+const OP_UMULHI i64 = 37
+const OP_UDIV i64 = 38
+const OP_UREM i64 = 39
+const OP_ULT i64 = 40
+const OP_INDEX i64 = 41
+const OP_LEN i64 = 42
+const OP_STR i64 = 43
+const OP_BYTES i64 = 44
+const OP_BYTE i64 = 45
+const OP_SLICE i64 = 46
+const OP_BLEN i64 = 47
+const OP_BLOAD i64 = 48
 const OP_LOR i64 = 50
 const OP_LAND i64 = 51
 const OP_EQ i64 = 52
@@ -69,6 +77,11 @@ const OP_SHR i64 = 67
 // OpWidth is the width in bits of one of them.
 func LoadOp(op i64) bool {
   return op >= OP_LOAD8 && op <= OP_LOAD64
+}
+
+// IsStmt says whether op names a statement.
+func IsStmt(op i64) bool {
+  return op >= OP_VAR && op <= OP_CHK
 }
 
 func StoreOp(op i64) bool {
@@ -102,7 +115,9 @@ func OpWidth(op i64) i64 {
 // (args, then, els, body) are chained through next. A var2 or assign2
 // receives a call's two results into name and name2 (typ and typ2 for a
 // var2; "_" discards; loc2 is the second local); a return with val2
-// returns two. valk selects the JSON
+// returns two. After the lowering, a var2 or assign2 may receive a third
+// word, named by a name node in args (loc3 its local), and a return may
+// return a third, in args. valk selects the JSON
 // value: 1 int, 2 bool, 3 string. loc is for the code generator: on a var,
 // an assign, or a name, the local it is, by number from 1 (0 for none). The
 // heap is never reused, so Alloc memory starts zeroed.
@@ -144,6 +159,7 @@ type Node struct {
   end i64
   loc i64
   loc2 i64
+  loc3 i64
 }
 
 // Decl is an import (name = path), const, type, field, func, or param.
@@ -154,7 +170,9 @@ type Node struct {
 // sets dup on a func whose name was already declared in its package. A
 // table (const Name [N]i64) has istab set, its N elements at tab, and ro,
 // once the code generator has placed them in rodata, their offset + 1. A
-// func with two results has the second, its error code, in typ2.
+// func with two results has the second, its error code, in typ2. The
+// lowering sets bres on a func declared to return bytes: 2 result words,
+// or 3 for (bytes, i64).
 type Decl struct {
   namep i64
   namen i64
@@ -179,6 +197,7 @@ type Decl struct {
   typ2n i64
   tytok i64
   ty2tok i64
+  bres i64
 }
 
 // What a use is, as refs and rename see it: the node spells the target's
@@ -919,6 +938,13 @@ func Stmt(p *P, s i64, id i64) *Node {
       sf.val = v
       return sf
     }
+    if e.op == OP_INDEX || e.op == OP_BYTE {
+      // b[i] = v stores the low byte of v.
+      var sb *Node = NewNode(p, OP_SETBYTE)
+      sb.base = e
+      sb.val = v
+      return sb
+    }
     Errorf(p, strptr("cannot assign to this expression"), strlen("cannot assign to this expression"))
   }
   var x *Node = NewNode(p, OP_EXPR)
@@ -1220,24 +1246,48 @@ func Postfix(p *P) *Node {
       c.end = p.last
       e = c
     } else if PeekByte(p, 91) {
-      // Name[i] reads a table; the name node is replaced, not kept.
-      if e.op != OP_NAME {
-        Errorf(p, strptr("only a table can be indexed"), strlen("only a table can be indexed"))
-        return e
-      }
+      // Name[i] reads a table or a bytes, which the checker tells apart
+      // (a local shadows a table); e[i] on any other base and e[i:j] are
+      // bytes operations.
       Expect(p, 91)
       var ix *Node = ParseExpr(p)
-      Expect(p, 93)
-      var t *Node = NewNode(p, OP_INDEX)
-      t.num = Eid(p)
-      t.namep = e.namep
-      t.namen = e.namen
-      t.pkgp = e.pkgp
-      t.pkgn = e.pkgn
-      t.arg = ix
-      t.off = e.off
-      t.end = p.last
-      e = t
+      if PeekByte(p, 58) {
+        Expect(p, 58)
+        var jx *Node = ParseExpr(p)
+        Expect(p, 93)
+        var sl *Node = NewNode(p, OP_SLICE)
+        sl.num = Eid(p)
+        sl.base = e
+        sl.left = ix
+        sl.right = jx
+        sl.off = e.off
+        sl.end = p.last
+        e = sl
+      } else {
+        Expect(p, 93)
+        if e.op != OP_NAME {
+          var bx *Node = NewNode(p, OP_BYTE)
+          bx.num = Eid(p)
+          bx.base = e
+          bx.arg = ix
+          bx.off = e.off
+          bx.end = p.last
+          e = bx
+        } else {
+          // The name node stays as the base, for a bytes.
+          var t *Node = NewNode(p, OP_INDEX)
+          t.num = Eid(p)
+          t.namep = e.namep
+          t.namen = e.namen
+          t.pkgp = e.pkgp
+          t.pkgn = e.pkgn
+          t.base = e
+          t.arg = ix
+          t.off = e.off
+          t.end = p.last
+          e = t
+        }
+      }
     } else {
       return e
     }
@@ -1262,9 +1312,22 @@ func Primary0(p *P) *Node {
     Expect(p, 41)
     return e
   }
+  if PeekKw(p, strptr("bytes"), 5) {
+    // bytes(p, n): a bytes value from an address and a length.
+    Ident(p)
+    var bm *Node = Builtin(p, OP_BYTES, ArgList(p), 2)
+    bm.num = Eid(p)
+    return bm
+  }
   if PeekByte(p, 34) {
-    Errorf(p, strptr("bare string literal; write strptr(\"...\") for the address and strlen(\"...\") for the length"), strlen("bare string literal; write strptr(\"...\") for the address and strlen(\"...\") for the length"))
-    return NewNode(p, OP_NAME)
+    // A string literal is a bytes value in rodata.
+    ParseString(p)
+    var st *Node = NewNode(p, OP_STR)
+    st.num = Eid(p)
+    st.valk = 3
+    st.strp = p.tp
+    st.strn = p.tn
+    return st
   }
   if IsNum(p) {
     return Number(p)
@@ -1284,17 +1347,21 @@ func Primary0(p *P) *Node {
     return CallArgs(p, OP_SYSCALL, 0, 0, 0, 0)
   }
   if PeekLen(p) {
-    // len(Table), a compile-time constant.
+    // len(Table), a compile-time constant, or len(b) of a bytes; a name
+    // is either, which the checker tells apart.
     Ident(p)
     Expect(p, 40)
-    var tn *Node = Primary(p)
-    if tn.op != OP_NAME {
-      Errorf(p, strptr("len takes a table"), strlen("len takes a table"))
-      return tn
-    }
+    var tn *Node = Postfix(p)
     Expect(p, 41)
+    if tn.op != OP_NAME {
+      var bl *Node = NewNode(p, OP_BLEN)
+      bl.num = Eid(p)
+      bl.base = tn
+      return bl
+    }
     var ln *Node = NewNode(p, OP_LEN)
     ln.num = Eid(p)
+    ln.base = tn
     ln.namep = tn.namep
     ln.namen = tn.namen
     ln.pkgp = tn.pkgp
@@ -1352,7 +1419,7 @@ func Primary0(p *P) *Node {
     Ident(p)
     Expect(p, 40)
     if PeekByte(p, 42) {
-      Errorf(p, strptr("sizeof takes a struct type, not a pointer: sizeof(T) is 8 * T's fields"), strlen("sizeof takes a struct type, not a pointer: sizeof(T) is 8 * T's fields"))
+      Errorf(p, strptr("sizeof takes a struct type, not a pointer: sizeof(T) is the size of a T"), strlen("sizeof takes a struct type, not a pointer: sizeof(T) is the size of a T"))
     }
     ParseType(p)
     var zp i64 = p.tp

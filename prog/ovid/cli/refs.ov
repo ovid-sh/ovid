@@ -90,7 +90,7 @@ func FindVar(s *ovid/parse.Node, num i64) *ovid/parse.Node {
 // list s.
 func HasExpr(s *ovid/parse.Node, num i64) bool {
   while s != 0 as *ovid/parse.Node {
-    if s.op > ovid/parse.OP_EXPR && s.num == num {
+    if !ovid/parse.IsStmt(s.op) && s.num == num {
       return true
     }
     if HasExpr(s.left, num) || HasExpr(s.right, num) || HasExpr(s.arg, num) || HasExpr(s.base, num) {

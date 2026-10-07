@@ -197,7 +197,7 @@ func declLine(m *module.Module, l *module.Loc) map[string]any {
 	switch n := l.Node.(type) {
 	case *ir.TypeDecl:
 		// What to pass ovid/io.Alloc for one of these.
-		r["size"] = 8 * len(n.Fields)
+		r["size"] = check.SizeOf(n.Fields)
 	case *ir.Func:
 		if isTest(n) {
 			r["test"] = true

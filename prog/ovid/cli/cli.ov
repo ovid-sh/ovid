@@ -4,6 +4,7 @@ import ovid/io
 import ovid/mem
 import ovid/check
 import ovid/cg
+import ovid/lower
 import ovid/parse
 
 // Args holds the parsed command line: the module dir, --std, and -o.
@@ -194,6 +195,8 @@ func CmdBuild(io *ovid/io.Cap) i64 {
   }
   var errp i64 = ovid/io.Alloc(io, 8)
   store64(errp, 0)
+  // A bytes is two words; the code generator sees only one per value.
+  ovid/lower.Program(io, m)
   var b *ovid/mem.Buf = ovid/cg.Compile(io, m, errp)
   if load64(errp) != 0 {
     var msg *ovid/mem.Buf = load64(errp) as *ovid/mem.Buf
