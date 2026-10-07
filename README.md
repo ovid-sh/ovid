@@ -118,8 +118,8 @@ packages are a DAG.
 
 ## Self-hosting
 
-`prog/` is the compiler again, written in Ovid (about 6,200 lines across seven
-packages, including SHA-256, an x86-64 assembler, and an ELF writer). It reads `ovid.mod` and `.ov` files itself and offers only
+`prog/` is the compiler again, written in Ovid (about 11,000 lines across eight
+packages, including SHA-256, an x86-64 assembler, an ELF writer, and the `bytes` lowering). It reads `ovid.mod` and `.ov` files itself and offers only
 `check`, `build`, `dump`, and `refs`; give it the standard library with
 `--std <dir>`, since only the Go binary embeds it. Its `refs` prints what
 the Go toolchain's does, from the uses its checker records; the other
@@ -134,7 +134,7 @@ cmp /tmp/s1 /tmp/s2                        # byte-identical
 
 The two compilers emit byte-identical binaries for the same source, and
 `go test ./internal/tool -run TestSelfHost` checks it. The self-hosted
-compiler is about 130 KB, and `TestSelfHostSize` fails if it outgrows its
+compiler is about 155 KB (the `bytes` lowering added 15 KB, 2026-10-07), and `TestSelfHostSize` fails if it outgrows its
 budget. On starship (Ryzen 7 8745HS, 2026-10-04) it built `prog/` in 9 ms,
 against 27 ms for the Go one, and a generated program of 100,000 funcs
 (300,000 lines) in 0.57 s against 2.25 s. One command measures all of it:

@@ -389,7 +389,7 @@ func ParseType(p *P) i64 {
   }
   p.ttok = namep
   if pkgp == 0 {
-    if ovid/mem.Eq(namep, namen, strptr("i64"), 3) || ovid/mem.Eq(namep, namen, strptr("bool"), 4) {
+    if ovid/mem.Eq(namep, namen, strptr("i64"), 3) || ovid/mem.Eq(namep, namen, strptr("bool"), 4) || ovid/mem.Eq(namep, namen, strptr("bytes"), 5) {
       if star {
         Errorf2(p, strptr("cannot use a pointer to "), strlen("cannot use a pointer to "), namep, namen)
       }
