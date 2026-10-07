@@ -4,10 +4,6 @@
 # so both changes survive whichever order they land in.
 set -e
 ovid rename fn:ovid/parse.FindDecl LookupDecl
-# rename leaves the decl's doc comment opening with the old name (#160, fixed
-# by #162); until that lands, the comment is renamed by hand, as every agent
-# in the recorded runs did.
-sed -i.bak 's|^// FindDecl returns|// LookupDecl returns|' ovid/parse/ast.ov && rm ovid/parse/ast.ov.bak
 ovid append ovid/parse --file ovid/parse/ast.ov <<'EOF2'
 // LastDecl returns the last decl of the list that starts at d, or d when
 // the list is empty.
