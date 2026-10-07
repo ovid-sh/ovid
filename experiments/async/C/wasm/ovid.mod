@@ -1,0 +1,2 @@
+module cwasm
+entry handler

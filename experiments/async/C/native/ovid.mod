@@ -1,0 +1,2 @@
+module cnative
+entry server

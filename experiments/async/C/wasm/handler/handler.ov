@@ -1,0 +1,43 @@
+package handler
+
+import ovid/io
+import ovid/http
+import ovid/task
+
+// POC C, wasm: the host gives each request an instance; /w2's ten upstream
+// calls are ten tasks, each a JSPI call of its own, suspended in its host
+// timer while the others run.
+
+const UPSTREAM_MS i64 = 10
+const FANOUT i64 = 10
+
+// call is the task of one /w2 upstream call.
+func call(io *ovid/io.Cap, arg i64) i64 {
+  return ovid/task.Sleep(io, UPSTREAM_MS)
+}
+
+func handle(io *ovid/io.Cap, req *ovid/http.Request, res *ovid/http.Response) i64 {
+  if ovid/http.PathIs(req, strptr("/w1"), 3) {
+    if ovid/task.Sleep(io, UPSTREAM_MS) != 0 {
+      return 1
+    }
+    ovid/http.Write(io, res, strptr("ok"), 2)
+    return 0
+  }
+  if ovid/http.PathIs(req, strptr("/w2"), 3) {
+    var g *ovid/task.Group = ovid/task.NewGroup(io)
+    var i i64 = 0
+    while i < FANOUT {
+      ovid/task.Go(io, g, taskfn(call), 0)
+      i = i + 1
+    }
+    if ovid/task.Wait(io, g) != 0 {
+      return 1
+    }
+    ovid/http.Write(io, res, strptr("ok "), 3)
+    ovid/http.WriteInt(io, res, FANOUT)
+    return 0
+  }
+  ovid/http.SetStatus(res, 404)
+  return 0
+}
