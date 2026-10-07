@@ -1245,6 +1245,15 @@ func TestHigh(io *ovid/io.Cap) i64 {
 func TestCrossed(io *ovid/io.Cap) i64 {
   return Cut("abc", 2, 1)
 }
+func Nest(b bytes, i i64) i64 {
+  if len(b) > 0 && len(b[i:i + 1]) == 1 {
+    return 1
+  }
+  return 0
+}
+func TestNested(io *ovid/io.Cap) i64 {
+  return Nest("abc", 5)
+}
 func TestEdges(io *ovid/io.Cap) i64 {
   var b bytes = bytes(ovid/io.Alloc(io, 4), 4)
   Put(b, 0)
@@ -1270,6 +1279,7 @@ func TestEdges(io *ovid/io.Cap) i64 {
 	for name, src := range map[string]string{
 		"TestPastEnd": "  return b[i]", "TestNegative": "  return b[i]", "TestStore": "  b[i] = 1",
 		"TestHigh": "  return len(b[i:j])", "TestCrossed": "  return len(b[i:j])",
+		"TestNested": "  if len(b) > 0 && len(b[i:i + 1]) == 1 {",
 	} {
 		r := got["fn:demo."+name]
 		at, _ := r["at"].(map[string]any)

@@ -89,6 +89,13 @@ func Bump(r *Req) bytes {
   return r.path
 }
 
+// Pick counts and returns r: a call in a store's address or a field
+// assignment's base.
+func Pick(c i64, r *Req) *Req {
+  Count(c)
+  return r
+}
+
 func NewReq(io *ovid/io.Cap, path bytes) *Req {
   var r *Req = ovid/io.Alloc(io, sizeof(Req)) as *Req
   r.id = 7
@@ -203,6 +210,19 @@ func main(io *ovid/io.Cap) i64 {
   r.n = 5
   if r.n + Bump(r)[0] != 5 + 79 || r.n != 6 {
     return 22
+  }
+  // A store's address and a field assignment's base are evaluated
+  // before their value, when the value lowers a bytes call: the counts
+  // come out in source order.
+  store64(c, 0)
+  var arr i64 = ovid/io.Alloc(io, 32)
+  store64(arr + Count(c) * 8, Count(c) + len(Bump(r)))
+  if load64(arr + 8) != 2 + 2 {
+    return 23
+  }
+  Pick(c, r).n = Count(c) + len(Bump(r))
+  if r.n != 4 + 2 || load64(c) != 4 {
+    return 24
   }
   // The byte of a string literal, a slice of a call's result.
   if "abc"[1] != 98 || len(Upper(io, "xy")[1:2]) != 1 {

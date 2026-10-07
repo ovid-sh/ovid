@@ -374,18 +374,29 @@ func (l *lowerer) expr(n *ir.Node, p *pre) (*ir.Node, error) {
 		return &m, nil
 	}
 	m := *n
-	var done []**ir.Node // earlier children lowered in place
-	for _, f := range []**ir.Node{&m.Left, &m.Right, &m.Arg, &m.Base, &m.Cond} {
+	if err := l.ordered(p, &m.Left, &m.Right, &m.Arg, &m.Base, &m.Cond); err != nil {
+		return nil, err
+	}
+	return &m, nil
+}
+
+// ordered lowers the operands in evaluation order, in place; when one
+// adds to p, every earlier operand that is not simple is moved into a
+// temp ahead of that addition, so what it computes or reads still
+// happens in source order. Expression children and a statement's
+// operands both go through it.
+func (l *lowerer) ordered(p *pre, fields ...**ir.Node) error {
+	var done []**ir.Node // earlier operands lowered in place
+	for _, f := range fields {
 		if *f == nil {
 			continue
 		}
 		at := len(*p)
 		v, err := l.expr(*f, p)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		if len(*p) > at {
-			// Earlier siblings not simple move ahead of this addition.
 			for _, g := range done {
 				if !simple(*g) {
 					l.insertTemp(p, at, g)
@@ -397,7 +408,7 @@ func (l *lowerer) expr(n *ir.Node, p *pre) (*ir.Node, error) {
 		*f = v
 		done = append(done, f)
 	}
-	return &m, nil
+	return nil
 }
 
 // keepOrder is expr's reordering for call arguments: when lowering the
@@ -437,15 +448,29 @@ func (l *lowerer) stmts(ss []*ir.Node) ([]*ir.Node, error) {
 			return nil, err
 		}
 		// What was placed before the statement is the statement's, for
-		// the crash report when a check in it fails.
+		// the crash report when a check in it fails: the statements
+		// themselves and what the restructuring of && or a while put
+		// under them.
 		for _, m := range lowered {
-			if m.ID == "" {
-				m.ID = s.ID
-			}
+			claim(m, s.ID)
 		}
 		out = append(out, lowered...)
 	}
 	return out, nil
+}
+
+// claim gives statement n and the generated statements under it the id
+// id, leaving statements that have one (the source's own) alone.
+func claim(n *ir.Node, id string) {
+	if n.ID != "" {
+		return
+	}
+	n.ID = id
+	for _, b := range [][]*ir.Node{n.Then, n.Else, n.Body} {
+		for _, m := range b {
+			claim(m, id)
+		}
+	}
 }
 
 func (l *lowerer) stmt(s *ir.Node) ([]*ir.Node, error) {
@@ -537,16 +562,10 @@ func (l *lowerer) stmt(s *ir.Node) ([]*ir.Node, error) {
 			return append(p, &ir.Node{ID: s.ID, Op: "setfield", Base: base, Name: s.Name, Val: a},
 				&ir.Node{Op: "setfield", Base: base, Name: s.Name + "#n", Val: ln}), nil
 		}
-		base, err := l.expr(s.Base, &p)
-		if err != nil {
-			return nil, err
-		}
-		v, err := l.expr(s.Val, &p)
-		if err != nil {
-			return nil, err
-		}
 		m := *s
-		m.Base, m.Val = base, v
+		if err := l.ordered(&p, &m.Base, &m.Val); err != nil {
+			return nil, err
+		}
 		return append(p, &m), nil
 	case "setbyte":
 		ix := s.Base
@@ -590,11 +609,7 @@ func (l *lowerer) stmt(s *ir.Node) ([]*ir.Node, error) {
 			return append(p, m), nil
 		}
 		m := *s
-		var err error
-		if m.Val, err = l.expr(s.Val, &p); err != nil {
-			return nil, err
-		}
-		if m.Val2, err = l.expr(s.Val2, &p); err != nil {
+		if err := l.ordered(&p, &m.Val, &m.Val2); err != nil {
 			return nil, err
 		}
 		return append(p, &m), nil
@@ -638,16 +653,10 @@ func (l *lowerer) stmt(s *ir.Node) ([]*ir.Node, error) {
 			Body: append(cp, &ir.Node{Op: "if", Cond: cond, Then: body, Else: []*ir.Node{stop}})}
 		return append(p, loop), nil
 	}
-	// expr, store*, chk: lower the expressions in place.
+	// expr, store*, chk: lower the expressions in place, in order.
 	m := *s
-	var err error
-	for _, f := range []**ir.Node{&m.Addr, &m.Val, &m.Val2} {
-		if *f == nil {
-			continue
-		}
-		if *f, err = l.expr(*f, &p); err != nil {
-			return nil, err
-		}
+	if err := l.ordered(&p, &m.Addr, &m.Val, &m.Val2); err != nil {
+		return nil, err
 	}
 	return append(p, &m), nil
 }

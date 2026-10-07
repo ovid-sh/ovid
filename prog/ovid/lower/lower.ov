@@ -608,24 +608,6 @@ func Keep(l *L, kept *ovid/parse.Node, n *ovid/parse.Node) *ovid/parse.Node {
   return kept
 }
 
-// Child is the k-th child of n in evaluation order: left, right, arg,
-// base, cond.
-func Child(n *ovid/parse.Node, k i64) *ovid/parse.Node {
-  if k == 0 {
-    return n.left
-  }
-  if k == 1 {
-    return n.right
-  }
-  if k == 2 {
-    return n.arg
-  }
-  if k == 3 {
-    return n.base
-  }
-  return n.cond
-}
-
 // Expr lowers the bytes operations inside an i64 or bool expression, in
 // place, placing in p what must run first. Children go in evaluation
 // order, and when one adds to p, every earlier child that is not a
@@ -722,28 +704,77 @@ func Expr(l *L, n *ovid/parse.Node, p *Pre) i64 {
     n.args = out.head
     return 0
   }
+  return Ordered(l, p, n)
+}
+
+// Ordered lowers h's operands (left, right, arg, base, cond: an
+// expression's children, or a statement's operands put in a holder in
+// that order) in evaluation order, in place; when one adds to p, every
+// earlier operand that is not simple is moved into a temp ahead of
+// that addition, so what it computes or reads still happens in source
+// order.
+func Ordered(l *L, p *Pre, h *ovid/parse.Node) i64 {
   var done *ovid/parse.Node = 0 as *ovid/parse.Node
   var k i64 = 0
   while k < 5 {
-    var ch *ovid/parse.Node = Child(n, k)
+    var ch *ovid/parse.Node = h.left
+    if k == 1 {
+      ch = h.right
+    } else if k == 2 {
+      ch = h.arg
+    } else if k == 3 {
+      ch = h.base
+    } else if k == 4 {
+      ch = h.cond
+    }
     if ch != 0 as *ovid/parse.Node {
       var at *ovid/parse.Node = p.tail
       Expr(l, ch, p)
       if Grew(p, at) {
-        // Earlier siblings not simple move ahead of this addition.
         var mk *ovid/parse.Node = at
-        var d *ovid/parse.Node = done
-        while d != 0 as *ovid/parse.Node {
-          if !Simple(d.base) {
-            mk = MoveCalls(l, p, mk, Keep(l, 0 as *ovid/parse.Node, d.base))
+        var dn *ovid/parse.Node = done
+        while dn != 0 as *ovid/parse.Node {
+          if !Simple(dn.base) {
+            mk = MoveCalls(l, p, mk, Keep(l, 0 as *ovid/parse.Node, dn.base))
           }
-          d = d.next
+          dn = dn.next
         }
         done = 0 as *ovid/parse.Node
       }
       done = Keep(l, done, ch)
     }
     k = k + 1
+  }
+  return 0
+}
+
+// Holder is a node whose left, right, and arg are a statement's
+// operands, for Ordered.
+func Holder(l *L, a *ovid/parse.Node, b *ovid/parse.Node, c *ovid/parse.Node) *ovid/parse.Node {
+  var h *ovid/parse.Node = NewNode(l, ovid/parse.OP_EXPR)
+  h.left = a
+  h.right = b
+  h.arg = c
+  return h
+}
+
+// Claim gives statement n and the generated statements under it the
+// id id, leaving statements that have one (the source's own) alone.
+func Claim(n *ovid/parse.Node, id i64) i64 {
+  if n.num != 0 {
+    return 0
+  }
+  n.num = id
+  ClaimList(n.then, id)
+  ClaimList(n.els, id)
+  ClaimList(n.body, id)
+  return 0
+}
+
+func ClaimList(n *ovid/parse.Node, id i64) i64 {
+  while n != 0 as *ovid/parse.Node {
+    Claim(n, id)
+    n = n.next
   }
   return 0
 }
@@ -756,12 +787,11 @@ func Stmts(l *L, s *ovid/parse.Node) *ovid/parse.Node {
     var p *Pre = NewPre(l)
     Stmt(l, s, p)
     // What was placed before the statement is the statement's, for the
-    // crash report when a check in it fails.
+    // crash report when a check in it fails: the statements themselves
+    // and what the restructuring of && or a while put under them.
     var m *ovid/parse.Node = p.head
     while m != 0 as *ovid/parse.Node {
-      if m.num == 0 {
-        m.num = s.num
-      }
+      Claim(m, s.num)
       var mn *ovid/parse.Node = m.next
       Append(out, m)
       m = mn
@@ -886,8 +916,7 @@ func Stmt(l *L, s *ovid/parse.Node, p *Pre) i64 {
       Append(p, f2)
       return 0
     }
-    Expr(l, s.base, p)
-    Expr(l, s.val, p)
+    Ordered(l, p, Holder(l, s.base, s.val, 0 as *ovid/parse.Node))
     Append(p, s)
     return 0
   }
@@ -928,8 +957,7 @@ func Stmt(l *L, s *ovid/parse.Node, p *Pre) i64 {
       Append(p, s)
       return 0
     }
-    Expr(l, s.val, p)
-    Expr(l, s.val2, p)
+    Ordered(l, p, Holder(l, s.val, s.val2, 0 as *ovid/parse.Node))
     Append(p, s)
     return 0
   }
@@ -966,10 +994,8 @@ func Stmt(l *L, s *ovid/parse.Node, p *Pre) i64 {
     Append(p, s)
     return 0
   }
-  // expr, store*, chk: lower the expressions in place.
-  Expr(l, s.addr, p)
-  Expr(l, s.val, p)
-  Expr(l, s.val2, p)
+  // expr, store*, chk: lower the expressions in place, in order.
+  Ordered(l, p, Holder(l, s.addr, s.val, s.val2))
   Append(p, s)
   return 0
 }
