@@ -50,7 +50,7 @@ else
 	cp "$wasmdir/worker.js" "$tmp/w/"
 fi
 cat >"$tmp/w/wrangler.jsonc" <<EOF
-{ "name": "ovid-async-$label", "main": "worker.js", "compatibility_date": "2026-10-01" }
+{ "name": "ovid-async-$(echo "$label" | tr 'A-Z_' 'a-z-')", "main": "worker.js", "compatibility_date": "2026-10-01" }
 EOF
 
 (cd "$wasmdir" && exec setsid "$wasmdir/node_modules/.bin/wrangler" dev -c "$tmp/w/wrangler.jsonc" --ip 127.0.0.1 --port "$PORT" \
