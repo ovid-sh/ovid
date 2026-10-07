@@ -40,6 +40,8 @@ type C struct {
   live i64
   localBytes i64
   epi i64
+  traps *ovid/mem.Buf
+  cell i64
   err i64
   peak i64
   typ i64
@@ -166,11 +168,13 @@ func TableOf(c *C, n *ovid/parse.Node) *ovid/parse.Decl {
 // ArithOp: the binary operators that EmitArith evaluates into rax, the
 // unsigned builtins among them.
 func ArithOp(op i64) bool {
-  return (op >= ovid/parse.OP_ADD && op <= ovid/parse.OP_SHR) || ovid/parse.UnsignedOp(op)
+  return (op >= ovid/parse.OP_ADD && op <= ovid/parse.OP_SHR) || (ovid/parse.UnsignedOp(op) && op != ovid/parse.OP_ULT)
 }
 
+// CmpOp groups the comparisons, ult among them: each sets the flags and
+// is a condition code, so a branch on one needs no bool.
 func CmpOp(op i64) bool {
-  return op >= ovid/parse.OP_EQ && op <= ovid/parse.OP_GE
+  return (op >= ovid/parse.OP_EQ && op <= ovid/parse.OP_GE) || op == ovid/parse.OP_ULT
 }
 
 func UnaryOp(op i64) bool {
@@ -210,6 +214,8 @@ func IndexProg(c *C) i64 {
   c.locs = ovid/io.Alloc(c.io, MAXLOC * LOCSIZE)
   c.scope = ovid/io.Alloc(c.io, MAXLOC * 8)
   c.saved = ovid/io.Alloc(c.io, 64)
+  c.traps = ovid/mem.New(c.io, 64)
+  c.cell = ovid/io.Alloc(c.io, 8)
   c.free = ovid/io.Alloc(c.io, 64)
   c.tregs = ovid/io.Alloc(c.io, 64)
   while k != 0 as *ovid/parse.Pkg {
@@ -1243,12 +1249,6 @@ func ArithRcx(c *C, op i64) i64 {
     ovid/asm.MovRegReg(c.code, 0, 2)
     return 0
   }
-  if op == ovid/parse.OP_ULT {
-    ovid/asm.CmpRaxRcx(c.code)
-    ovid/asm.SetccAl(c.code, 0x92)
-    ovid/asm.MovzxRaxAl(c.code)
-    return 0
-  }
   return FailIn(c, strptr("bad arith op in "), strlen("bad arith op in "))
 }
 
@@ -1333,11 +1333,20 @@ func CcOf(op i64) i64 {
   if op == ovid/parse.OP_LE {
     return 0xE
   }
+  if op == ovid/parse.OP_ULT {
+    return 0x2
+  }
   return 0xF
 }
 
 // CcSwap is the condition for the operands the other way round.
 func CcSwap(cc i64) i64 {
+  if cc == 0x2 {
+    return 0x7
+  }
+  if cc == 0x7 {
+    return 0x2
+  }
   if cc == 0xC {
     return 0xF
   }
@@ -1918,7 +1927,8 @@ func EmitExpr(c *C, n *ovid/parse.Node, lv i64) i64 {
   }
   if op == ovid/parse.OP_INDEX {
     // rax = table[rax], after an unsigned check of rax against the
-    // length, so a negative index trips it too; ud2 is the trap.
+    // length, so a negative index trips it too; the trap is the
+    // func's ud2.
     var it *ovid/parse.Decl = TableOf(c, n)
     if it == 0 as *ovid/parse.Decl {
       return FailIn(c, strptr("no table in "), strlen("no table in "))
@@ -1929,10 +1939,7 @@ func EmitExpr(c *C, n *ovid/parse.Node, lv i64) i64 {
     ovid/asm.MovRegImm64(c.code, 1, 0)
     ovid/asm.AbsHere(c.code, it.ro - 1)
     ovid/asm.AluRegImm(c.code, 7, 0, it.tabn)
-    var ok i64 = ovid/asm.NewLabel(c.code)
-    ovid/asm.Jcc(c.code, 0x82, ok)
-    ovid/asm.Ud2(c.code)
-    ovid/asm.Mark(c.code, ok)
+    ovid/asm.Jcc(c.code, 0x83, TrapLabel(c))
     ovid/asm.LoadMem(c.code, 64, 1, 48, 0)
     return 0
   }
@@ -2216,6 +2223,7 @@ func EmitFunc(c *C, fn *ovid/parse.Decl) i64 {
     frame = frame + 8
   }
   c.epi = ovid/asm.NewLabel(c.code)
+  c.traps.len = 0
   ovid/asm.Mark(c.code, fn.lab)
   ovid/asm.PushReg(c.code, 5)
   ovid/asm.MovRegReg(c.code, 5, 4)
@@ -2263,7 +2271,22 @@ func EmitFunc(c *C, fn *ovid/parse.Decl) i64 {
   }
   ovid/asm.Leave(c.code)
   ovid/asm.Ret(c.code)
+  i = 0
+  while i < c.traps.len {
+    ovid/asm.Mark(c.code, load64(c.traps.data + i))
+    ovid/asm.Ud2(c.code)
+    i = i + 8
+  }
   return 0
+}
+
+// TrapLabel is where a failed check jumps: its own ud2 out of line,
+// after the func's ret, so the fall-through of every check is its load.
+func TrapLabel(c *C) i64 {
+  var lab i64 = ovid/asm.NewLabel(c.code)
+  store64(c.cell, lab)
+  ovid/mem.WBytes(c.io, c.traps, c.cell, 8)
+  return lab
 }
 
 // MarkLive flags fn as reachable and queues it for LiveFrom. Only live

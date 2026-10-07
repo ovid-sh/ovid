@@ -153,6 +153,8 @@ type cg struct {
 	consts     map[string]int64
 	localBytes int32
 	epi        int
+	traps      []trap      // the func's failed-check stubs, emitted after its ret
+	stmt       string      // the id of the statement being emitted
 	last       *ir.Node    // the func's final statement when it is a return
 	regs       map[int]int // locals that live in a register
 	saved      []int       // callee-saved registers the func uses
@@ -374,6 +376,7 @@ func (c *cg) emitFunc(pkg *ir.Package, fn *ir.Func) error {
 	c.b.Mark(lab)
 	c.mark(fn.ID)
 	c.epi = c.b.NewLabel()
+	c.traps = nil
 	c.b.PushReg(asm.RBP)
 	c.b.MovRegReg(asm.RBP, asm.RSP)
 	// The frame is not cleared: the checker lets no local be read before
@@ -412,7 +415,28 @@ func (c *cg) emitFunc(pkg *ir.Package, fn *ir.Func) error {
 	}
 	c.b.Leave()
 	c.b.Ret()
+	for _, t := range c.traps {
+		c.b.Mark(t.label)
+		c.mark(t.stmt)
+		c.b.Ud2()
+	}
 	return nil
+}
+
+// trap is a failed check's ud2: out of line, after the func's ret, and
+// marked with the check's statement so a crash still names it.
+type trap struct {
+	label int
+	stmt  string
+}
+
+// trapLabel is where a failed check jumps. Out of line, the fall-through
+// of every check is its load; in line, the ud2 cost a loop over a table
+// half again as much (255 ms against 171 ms for 400M reads on a Zen 4).
+func (c *cg) trapLabel() int {
+	t := trap{c.b.NewLabel(), c.stmt}
+	c.traps = append(c.traps, t)
+	return t.label
 }
 
 // local is a param or a var. Each declaration has its own, with its own
@@ -824,6 +848,7 @@ func (c *cg) emitStmts(stmts []*ir.Node) error {
 			continue
 		}
 		c.mark(s.ID)
+		c.stmt = s.ID
 		if err := c.emitStmt(s); err != nil {
 			return err
 		}
@@ -1270,10 +1295,6 @@ func (c *cg) arithRcx(op string) {
 		c.b.XorEdxEdx()
 		c.b.DivRcx()
 		c.b.MovRegReg(asm.RAX, asm.RDX)
-	case "ult":
-		c.b.CmpRaxRcx()
-		c.b.SetccAl(0x92)
-		c.b.MovzxRaxAl()
 	}
 }
 
@@ -1344,12 +1365,16 @@ func (c *cg) emitArith(n *ir.Node, lv int) error {
 // Condition codes: the low nibble shared by setcc (0F 9x) and jcc (0F 8x).
 // Flipping bit 0 negates one.
 func ccOf(op string) byte {
-	return map[string]byte{"eq": 0x4, "ne": 0x5, "lt": 0xC, "ge": 0xD, "le": 0xE, "gt": 0xF}[op]
+	return map[string]byte{"eq": 0x4, "ne": 0x5, "lt": 0xC, "ge": 0xD, "le": 0xE, "gt": 0xF, "ult": 0x2}[op]
 }
 
 // ccSwap is the condition for the operands the other way round.
 func ccSwap(cc byte) byte {
 	switch cc {
+	case 0x2:
+		return 0x7
+	case 0x7:
+		return 0x2
 	case 0xC:
 		return 0xF
 	case 0xF:
@@ -1418,7 +1443,7 @@ func (c *cg) tempReg(lv int, right *ir.Node) (int, bool) {
 
 func isCmp(op string) bool {
 	switch op {
-	case "eq", "ne", "lt", "le", "gt", "ge":
+	case "eq", "ne", "lt", "le", "gt", "ge", "ult":
 		return true
 	}
 	return false
@@ -1789,7 +1814,8 @@ func (c *cg) emitExpr(n *ir.Node, lv int) error {
 		return nil
 	case "index":
 		// rax = table[rax], after an unsigned check of rax against the
-		// length, so a negative index trips it too; ud2 is the trap.
+		// length, so a negative index trips it too; the trap is the
+		// func's ud2.
 		off, cnt, err := c.table(n)
 		if err != nil {
 			return err
@@ -1800,10 +1826,7 @@ func (c *cg) emitExpr(n *ir.Node, lv int) error {
 		c.b.MovRegImm64(asm.RCX, 0)
 		c.b.AbsImmLabel(off)
 		c.b.AluRegImm(aluCmp, asm.RAX, int32(cnt))
-		ok := c.b.NewLabel()
-		c.b.Jcc(0x82, ok)
-		c.b.Ud2()
-		c.b.Mark(ok)
+		c.b.Jcc(0x83, c.trapLabel())
 		c.b.LoadMem(64, asm.RCX, asm.RAX|3<<4, 0)
 		return nil
 	case "strlen":
@@ -1831,9 +1854,9 @@ func (c *cg) emitExpr(n *ir.Node, lv int) error {
 			return nil
 		}
 		return fmt.Errorf("name %s", n.Name)
-	case "add", "sub", "mul", "div", "mod", "and", "or", "xor", "shl", "shr", "ushr", "umulhi", "udiv", "urem", "ult":
+	case "add", "sub", "mul", "div", "mod", "and", "or", "xor", "shl", "shr", "ushr", "umulhi", "udiv", "urem":
 		return c.emitArith(n, lv)
-	case "eq", "ne", "lt", "le", "gt", "ge":
+	case "eq", "ne", "lt", "le", "gt", "ge", "ult":
 		cc, err := c.emitCmp(n, lv)
 		if err != nil {
 			return err

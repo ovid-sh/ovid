@@ -44,5 +44,13 @@ func main(io *ovid/io.Cap) i64 {
   if n != 3 {
     return 9
   }
+  // As a value, against a constant too wide for an immediate, and with
+  // the constant on the left.
+  var big i64 = 1 << 40
+  var lo bool = ult(n, big)
+  var hi bool = ult(big, n)
+  if !lo || hi || !ult(n, 1 << 40) || ult(1 << 40, n) || !ult(2, n) {
+    return 10
+  }
   return 0
 }
