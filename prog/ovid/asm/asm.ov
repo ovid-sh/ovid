@@ -49,16 +49,16 @@ func New(io *ovid/io.Cap) *Code {
   return c
 }
 
-// Double returns a zeroed copy of the n bytes at p with room for 2n.
-func Double(c *Code, p i64, n i64) i64 {
-  var d i64 = ovid/io.Alloc(c.io, n * 2)
-  ovid/mem.CopyN(d, p, n)
+// Double returns a zeroed copy of s with room for twice its length.
+func Double(c *Code, s bytes) i64 {
+  var d i64 = ovid/io.Alloc(c.io, len(s) * 2)
+  ovid/mem.CopyN(d, ptr(s), len(s))
   return d
 }
 
 func E(c *Code, b i64) i64 {
   if c.len >= c.cap {
-    c.data = Double(c, c.data, c.cap)
+    c.data = Double(c, bytes(c.data, c.cap))
     c.cap = c.cap * 2
   }
   store8(c.data + c.len, b & 255)
@@ -97,7 +97,7 @@ func PutU64(p i64, v i64) i64 {
 func NewLabel(c *Code) i64 {
   var id i64 = c.nlab
   if id >= c.labcap {
-    c.labs = Double(c, c.labs, c.labcap * 8)
+    c.labs = Double(c, bytes(c.labs, c.labcap * 8))
     c.labcap = c.labcap * 2
   }
   store64(c.labs + (id * 8), 0 - 1)
@@ -113,7 +113,7 @@ func Mark(c *Code, id i64) i64 {
 
 func AddFix(c *Code, at i64, end i64, lab i64) i64 {
   if c.nfix >= c.fixcap {
-    c.fixes = Double(c, c.fixes, c.fixcap * 24)
+    c.fixes = Double(c, bytes(c.fixes, c.fixcap * 24))
     c.fixcap = c.fixcap * 2
   }
   var p i64 = c.fixes + (c.nfix * 24)
@@ -450,7 +450,7 @@ func Leave(c *Code) i64 {
 
 func AbsHere(c *Code, roOff i64) i64 {
   if c.nabs >= c.abscap {
-    c.abss = Double(c, c.abss, c.abscap * 16)
+    c.abss = Double(c, bytes(c.abss, c.abscap * 16))
     c.abscap = c.abscap * 2
   }
   var p i64 = c.abss + (c.nabs * 16)
@@ -534,15 +534,15 @@ func Ud2(c *Code) i64 {
   return 0
 }
 
-// RoBytes appends n bytes at p to rodata and returns their offset.
-func RoBytes(c *Code, p i64, n i64) i64 {
-  while (c.ron + n) > c.rocap {
-    c.ro = Double(c, c.ro, c.rocap)
+// RoBytes appends s to rodata and returns its offset.
+func RoBytes(c *Code, s bytes) i64 {
+  while (c.ron + len(s)) > c.rocap {
+    c.ro = Double(c, bytes(c.ro, c.rocap))
     c.rocap = c.rocap * 2
   }
   var off i64 = c.ron
-  ovid/mem.CopyN(c.ro + off, p, n)
-  c.ron = off + n
+  ovid/mem.CopyN(c.ro + off, ptr(s), len(s))
+  c.ron = off + len(s)
   return off
 }
 
@@ -858,27 +858,27 @@ func MovR12MemRsp(c *Code) i64 {
   return 0
 }
 
-func StrHash(p i64, n i64) i64 {
+func StrHash(s bytes) i64 {
   var h i64 = 5381
   var i i64 = 0
-  while i < n {
-    h = ((h << 5) + h) + load8(p + i)
+  while i < len(s) {
+    h = ((h << 5) + h) + load8(ptr(s) + i)
     i = i + 1
   }
   return h
 }
 
-// StrSlot returns the address of the stab slot that holds p[0:n], or of
+// StrSlot returns the address of the stab slot that holds s, or of
 // the empty slot where it belongs.
-func StrSlot(c *Code, p i64, n i64) i64 {
-  var h i64 = StrHash(p, n) & c.smask
+func StrSlot(c *Code, s bytes) i64 {
+  var h i64 = StrHash(s) & c.smask
   while true {
     var r i64 = c.stab + (h * 16)
     var off i64 = load64(r)
     if off == 0 {
       return r
     }
-    if ovid/mem.Eq(bytes((c.ro + off) - 1, load64(r + 8)), bytes(p, n)) {
+    if ovid/mem.Eq(bytes((c.ro + off) - 1, load64(r + 8)), s) {
       return r
     }
     h = (h + 1) & c.smask
@@ -886,24 +886,24 @@ func StrSlot(c *Code, p i64, n i64) i64 {
   return 0
 }
 
-// Intern returns the offset of p[0:n] in the read-only pool, adding it
+// Intern returns the offset of s in the read-only pool, adding it
 // (NUL-terminated) the first time. Only identical strings share storage,
 // like the Go compiler's map, so every literal stays NUL-terminated.
-func Intern(c *Code, p i64, n i64) i64 {
-  var r i64 = StrSlot(c, p, n)
+func Intern(c *Code, s bytes) i64 {
+  var r i64 = StrSlot(c, s)
   if load64(r) != 0 {
     return load64(r) - 1
   }
-  while (c.ron + n + 1) > c.rocap {
-    c.ro = Double(c, c.ro, c.rocap)
+  while (c.ron + len(s) + 1) > c.rocap {
+    c.ro = Double(c, bytes(c.ro, c.rocap))
     c.rocap = c.rocap * 2
   }
   var off i64 = c.ron
-  ovid/mem.CopyN(c.ro + off, p, n)
-  store8(c.ro + off + n, 0)
-  c.ron = off + n + 1
+  ovid/mem.CopyN(c.ro + off, ptr(s), len(s))
+  store8(c.ro + off + len(s), 0)
+  c.ron = off + len(s) + 1
   store64(r, off + 1)
-  store64(r + 8, n)
+  store64(r + 8, len(s))
   c.nstr = c.nstr + 1
   if (c.nstr * 2) > c.smask {
     var old i64 = c.stab
@@ -914,7 +914,7 @@ func Intern(c *Code, p i64, n i64) i64 {
     while i < oldn {
       var o i64 = old + (i * 16)
       if load64(o) != 0 {
-        var d i64 = StrSlot(c, (c.ro + load64(o)) - 1, load64(o + 8))
+        var d i64 = StrSlot(c, bytes((c.ro + load64(o)) - 1, load64(o + 8)))
         store64(d, load64(o))
         store64(d + 8, load64(o + 8))
       }

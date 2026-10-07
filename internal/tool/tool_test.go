@@ -217,7 +217,7 @@ import ovid/sha
 func main(io *ovid/io.Cap) i64 {
   var raw i64 = ovid/io.Alloc(io, 32)
   var hex i64 = ovid/io.Alloc(io, 80)
-  ovid/sha.Sum(io, strptr("abc"), strlen("abc"), raw)
+  ovid/sha.Sum(io, "abc", raw)
   ovid/sha.Hex(hex, raw)
   ovid/io.Stdout(bytes(hex, 64))
   return 0

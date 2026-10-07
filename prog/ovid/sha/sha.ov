@@ -123,19 +123,19 @@ func Init(h i64) i64 {
   return 0
 }
 
-func Sum(io *ovid/io.Cap, data i64, n i64, out i64) i64 {
+func Sum(io *ovid/io.Cap, data bytes, out i64) i64 {
   var h i64 = ovid/io.Alloc(io, 64)
   var w i64 = ovid/io.Alloc(io, 512)
   var pad i64 = ovid/io.Alloc(io, 128)
   var k i64 = KTable(io)
   Init(h)
   var off i64 = 0
-  while (off + 64) <= n {
-    Block(h, data + off, w, k)
+  while (off + 64) <= len(data) {
+    Block(h, ptr(data) + off, w, k)
     off = off + 64
   }
-  var tlen i64 = n - off
-  ovid/mem.CopyN(pad, data + off, tlen)
+  var tlen i64 = len(data) - off
+  ovid/mem.CopyN(pad, ptr(data) + off, tlen)
   store8(pad + tlen, 128)
   tlen = tlen + 1
   if tlen > 56 {
@@ -150,7 +150,7 @@ func Sum(io *ovid/io.Cap, data i64, n i64, out i64) i64 {
     store8(pad + tlen, 0)
     tlen = tlen + 1
   }
-  var bits i64 = n * 8
+  var bits i64 = len(data) * 8
   var bi i64 = 7
   while bi >= 0 {
     store8((pad + 56) + bi, bits & 255)

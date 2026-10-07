@@ -19,7 +19,7 @@ func ServeHost(m *Mod) i64 {
   if e == 0 as *Pkg {
     return 0
   }
-  if FindDecl(e.fs, strptr("main"), 4) != 0 as *Decl || FindDecl(e.fs, strptr("handle"), 6) == 0 as *Decl {
+  if FindDecl(e.fs, "main") != 0 as *Decl || FindDecl(e.fs, "handle") == 0 as *Decl {
     return 0
   }
   var io *ovid/io.Cap = m.io
