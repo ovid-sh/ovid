@@ -420,9 +420,10 @@ planned in memory over the ones before it, and only when every one has
 passed are the files written, together, as one edit's are; `--dry-run`
 touches no file.
 `refs` counts the uses the checker resolved to the declaration, the same
-ones `ovid refs` lists; rename rewrites exactly their name tokens and the
-declaration's own, so a field, local, or declaration of the same spelling
-in another namespace is never touched.
+ones `ovid refs` lists; rename rewrites their name tokens, the declaration's own, and the
+first word of its doc comment when that is the name (`doc` in the receipt),
+and `edits` counts all of them; a field, local, or declaration of the same
+spelling in another namespace is never touched.
 
 ## Concurrency
 
