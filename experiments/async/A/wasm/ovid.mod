@@ -1,0 +1,2 @@
+module awasm
+entry main

@@ -1,0 +1,150 @@
+package server
+
+import ovid/io
+import ovid/http
+import ovid/mem
+import ovid/async
+
+// POC A, natively: the reference server (experiments/async/baseline) with
+// async funcs. Each connection is a spawned task with an arena of its own;
+// /w2's ten upstream calls are ten spawned tasks, then joined.
+//
+//   server <port> <upstream port>
+
+const UPSTREAM_MS i64 = 10
+const FANOUT i64 = 10
+
+func atoi(p i64) i64 {
+  var v i64 = 0
+  var i i64 = 0
+  while load8(p + i) >= 48 && load8(p + i) <= 57 {
+    v = (v * 10) + (load8(p + i) - 48)
+    i = i + 1
+  }
+  return v
+}
+
+// upstream makes one upstream call: 0, or a negated error code.
+async func upstream(io *ovid/io.Cap, port i64) i64 {
+  var fd i64 = await ovid/async.Connect(io, port)
+  if fd < 0 {
+    return fd
+  }
+  var w i64 = await ovid/async.Write(fd, strptr("10\n"), 3)
+  if w < 0 {
+    ovid/io.Close(fd)
+    return w
+  }
+  var buf i64 = ovid/io.Alloc(io, 8)
+  var got i64 = 0
+  while got < 3 {
+    var n i64 = await ovid/async.Read(fd, buf + got, 8 - got)
+    if n <= 0 {
+      ovid/io.Close(fd)
+      return 0 - ovid/io.E_IO
+    }
+    got = got + n
+  }
+  ovid/io.Close(fd)
+  return 0
+}
+
+async func handle(io *ovid/io.Cap, req *ovid/http.Request, res *ovid/http.Response, up i64) i64 {
+  if ovid/http.PathIs(req, strptr("/w1"), 3) {
+    var r i64 = await upstream(io, up)
+    if r != 0 {
+      return 1
+    }
+    ovid/http.Write(io, res, strptr("ok"), 2)
+    return 0
+  }
+  if ovid/http.PathIs(req, strptr("/w2"), 3) {
+    var tasks i64 = ovid/io.Alloc(io, FANOUT * 8)
+    var i i64 = 0
+    while i < FANOUT {
+      var t i64 = spawn upstream(io, up)
+      store64(tasks + (i * 8), t)
+      i = i + 1
+    }
+    var failed i64 = 0
+    i = 0
+    while i < FANOUT {
+      var r i64 = await ovid/async.Join(load64(tasks + (i * 8)))
+      if r != 0 {
+        failed = failed + 1
+      }
+      i = i + 1
+    }
+    if failed != 0 {
+      return 1
+    }
+    ovid/http.Write(io, res, strptr("ok "), 3)
+    ovid/http.WriteInt(io, res, FANOUT)
+    return 0
+  }
+  ovid/http.SetStatus(res, 404)
+  return 0
+}
+
+func headEnd(p i64, n i64) i64 {
+  var i i64 = 3
+  while i < n {
+    if load8(p + (i - 3)) == 13 && load8(p + (i - 2)) == 10 && load8(p + (i - 1)) == 13 && load8(p + i) == 10 {
+      return i + 1
+    }
+    i = i + 1
+  }
+  return -1
+}
+
+// serve answers one connection, then gives its arena back.
+async func serve(io *ovid/io.Cap, a *ovid/async.Arena, fd i64, up i64) i64 {
+  var cap i64 = 4096
+  var buf i64 = ovid/io.Alloc(io, cap)
+  var n i64 = 0
+  var h i64 = -1
+  while h < 0 && n < cap {
+    var k i64 = await ovid/async.Read(fd, buf + n, cap - n)
+    if k <= 0 {
+      h = -2
+    } else {
+      n = n + k
+      h = headEnd(buf, n)
+    }
+  }
+  if h > 0 {
+    var req *ovid/http.Request = ovid/http.NewRequest(io, 0, 0, 0, 0)
+    var res *ovid/http.Response = ovid/http.NewResponse(io)
+    var result i64 = 0
+    if ovid/http.Parse(req, buf, h) == 0 {
+      result = await handle(io, req, res, up)
+    }
+    var out *ovid/mem.Buf = ovid/http.Format(io, req, res, result)
+    await ovid/async.Write(fd, out.data, out.len)
+  }
+  ovid/io.Close(fd)
+  ovid/async.Release(ovid/async.Self(), a)
+  return 0
+}
+
+async func main(io *ovid/io.Cap) i64 {
+  if ovid/io.Argc(io) < 3 {
+    ovid/io.Eprint(strptr("usage: server <port> <upstream port>\n"))
+    return 64
+  }
+  var port i64 = atoi(ovid/io.Arg(io, 1))
+  var up i64 = atoi(ovid/io.Arg(io, 2))
+  var ln i64, e i64 = ovid/io.Listen(io, port, ovid/io.SOCK_NONBLOCK | ovid/io.SOCK_CLOEXEC, false)
+  if e != 0 {
+    ovid/io.Eprint(ovid/io.ErrText(e))
+    return 1
+  }
+  while true {
+    var fd i64 = await ovid/async.Accept(ln)
+    if fd >= 0 {
+      var a *ovid/async.Arena = ovid/async.NewArena(ovid/async.Self())
+      spawn serve(ovid/async.ArenaCap(a), a, fd, up)
+    }
+  }
+  return 0
+}

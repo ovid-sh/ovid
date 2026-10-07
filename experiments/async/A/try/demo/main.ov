@@ -1,0 +1,35 @@
+package demo
+
+import ovid/io
+import ovid/async
+
+// A smoke test of the lowering: spawn, join, await, and an await inside
+// an if, without any I/O. Prints 22.
+
+async func add(a i64, b i64) i64 {
+  var t i64 = spawn twice(a)
+  var x i64 = await twice(b)
+  var y i64 = await ovid/async.Join(t)
+  if x > 0 {
+    var z i64 = await twice(x)
+    x = z
+  }
+  var i i64 = 0
+  while i < 3 {
+    var w i64 = await twice(1)
+    x = x + w - 2
+    i = i + 1
+  }
+  return x + y
+}
+
+async func twice(a i64) i64 {
+  return a * 2
+}
+
+async func main(io *ovid/io.Cap) i64 {
+  var r i64 = await add(3, 4)
+  ovid/io.PrintInt(io, r)
+  ovid/io.Print(strptr("\n"))
+  return 0
+}

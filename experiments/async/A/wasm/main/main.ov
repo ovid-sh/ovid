@@ -1,0 +1,64 @@
+package main
+
+import ovid/io
+import ovid/http
+import ovid/async
+
+// POC A under wasm: the host gives each request its own instance, with the
+// request on standard input. An upstream call is a 10 ms host timer; /w2's
+// ten run as ten spawned tasks, so it takes about 10 ms, not 100.
+
+const UPSTREAM_MS i64 = 10
+const FANOUT i64 = 10
+
+async func upstream(ms i64) i64 {
+  var r i64 = await ovid/async.Sleep(ms)
+  return r
+}
+
+async func handle(io *ovid/io.Cap, req *ovid/http.Request, res *ovid/http.Response) i64 {
+  if ovid/http.PathIs(req, strptr("/w1"), 3) {
+    var r i64 = await upstream(UPSTREAM_MS)
+    if r != 0 {
+      return 1
+    }
+    ovid/http.Write(io, res, strptr("ok"), 2)
+    return 0
+  }
+  if ovid/http.PathIs(req, strptr("/w2"), 3) {
+    var tasks i64 = ovid/io.Alloc(io, FANOUT * 8)
+    var i i64 = 0
+    while i < FANOUT {
+      var t i64 = spawn upstream(UPSTREAM_MS)
+      store64(tasks + (i * 8), t)
+      i = i + 1
+    }
+    var failed i64 = 0
+    i = 0
+    while i < FANOUT {
+      var r i64 = await ovid/async.Join(load64(tasks + (i * 8)))
+      if r != 0 {
+        failed = failed + 1
+      }
+      i = i + 1
+    }
+    if failed != 0 {
+      return 1
+    }
+    ovid/http.Write(io, res, strptr("ok "), 3)
+    ovid/http.WriteInt(io, res, FANOUT)
+    return 0
+  }
+  ovid/http.SetStatus(res, 404)
+  return 0
+}
+
+async func main(io *ovid/io.Cap) i64 {
+  var req *ovid/http.Request = ovid/http.ReadStdio(io)
+  var res *ovid/http.Response = ovid/http.NewResponse(io)
+  var result i64 = 0
+  if ovid/http.Err(req) == 0 {
+    result = await handle(io, req, res)
+  }
+  return ovid/http.WriteStdio(io, req, res, result)
+}
