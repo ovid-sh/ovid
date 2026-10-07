@@ -206,7 +206,7 @@ const USE_RESULT i64 = 7
 // decl (a func, type, field, const, or param), or vnode, the var statement
 // that declares a local (vsecond: its second name). node spells the use,
 // or udecl does when the use is a field's, param's, or result's own type.
-// in is the func or type the use sits in; tokp/tokn is the name token in
+// in is the func or type the use sits in; tok is the name token in
 // the source. Mod keeps them in source order.
 type Use struct {
   kind i64
@@ -1491,7 +1491,7 @@ func Imported(p *P, sp i64, sn i64) bool {
 }
 
 // TryPkgCall reads the rest of path/to/pkg.Name after its first segment.
-// On success the path is in ptr(p.path)/len(p.path) and the name in ptr(p.tok)/len(p.tok); on
+// On success the path is in p.path and the name in p.tok; on
 // failure the caller restores the cursor.
 func TryPkgCall(p *P, fp i64, fn i64) bool {
   if !PeekByte(p, 47) {
@@ -1732,7 +1732,7 @@ func Utf8Len(q i64, m i64) i64 {
   return need + 1
 }
 
-// ParseString reads a "..." literal; the decoded bytes are ptr(p.tok)/len(p.tok).
+// ParseString reads a "..." literal; the decoded bytes are p.tok.
 func ParseString(p *P) i64 {
   p.tok = bytes(ptr(p.src), 0)
   if !PeekByte(p, 34) {
