@@ -55,7 +55,7 @@ Change code (or edit the .ov files directly; both are fine):
   ovid rename <id|name> <new>  rename a decl and all its uses
   ovid move <id|name>... <pkg> move funcs/types/consts to another package
 
-Also: ovid build [-o out], ovid dump (program as JSON), ovid version
+Also: ovid build [-o out] [--target wasm], ovid dump (program as JSON), ovid version
 (commit and binary hash: which ovid is this?), ovid help <topic>.
 All commands take -C <dir> (default: the module containing the cwd).
 
@@ -251,6 +251,10 @@ ovid build [-o out]          default out: <module>/bin/<module name>;
   {"ok",output,bytes,syscalls}: syscalls lists the system call numbers the
   program can make (reachable from main, plus startup's mmap, exit, write),
   enough to run it under a filter that allows nothing else.
+  --target wasm: a WebAssembly module instead (default out ends .wasm);
+  syscall is its import env.syscall, exports memory and _start(argc, argv);
+  ends {"ok",output,bytes,"target":"wasm"}. A proof of concept: see
+  examples/workers.
 ovid run [--] [args...]      program stdio and exit code pass through;
                              if the build fails: errors as JSON, exit 125.
   A program run by run or test gets its arguments and stdio and an empty

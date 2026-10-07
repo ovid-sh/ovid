@@ -1,0 +1,9 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "ovid-hello",
+  "main": "src/worker.js",
+  "compatibility_date": "2026-10-01",
+  // Each request instantiates src/hello.wasm (ovid build --target wasm),
+  // which wrangler bundles as a compiled WebAssembly.Module.
+  "observability": { "enabled": true }
+}

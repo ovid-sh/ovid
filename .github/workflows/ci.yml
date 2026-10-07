@@ -28,7 +28,14 @@ jobs:
           for t in linux/arm64 windows/amd64; do
             GOOS=${t%/*} GOARCH=${t#*/} go vet ./... || exit 1
           done
+      # node runs the wasm corpus (TestCorpusWasm); OVID_WASM_NODE makes
+      # the test fail rather than skip if node goes missing.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
       - run: go test -count=1 ./...
+        env:
+          OVID_WASM_NODE: 1
       # Build time and size of the self-hosted compiler, kept with the run
       # (#11). A shared runner is noisy, so this is a record, not a check;
       # TestSelfHostSize is the check.
@@ -37,6 +44,7 @@ jobs:
           { echo '```'; grep -E '^(cpu|Benchmark)' bench.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
   # Everything that does not execute an emitted binary must pass on a Mac too (#9).
+  # The wasm corpus runs here too: under node, Ovid output executes on a Mac.
   macos:
     runs-on: macos-latest
     steps:
@@ -44,7 +52,12 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
       - run: go test -count=1 ./...
+        env:
+          OVID_WASM_NODE: 1
 
   # The flake (#151): nix flake check on each system it builds here. On
   # Linux that includes a NixOS VM test, which needs KVM: install-nix-action
