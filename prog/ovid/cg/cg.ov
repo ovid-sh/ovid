@@ -16,7 +16,7 @@ const LOCSIZE i64 = 56
 const LOC_WEIGHT i64 = 40
 const LOC_REG i64 = 48
 
-// C is the code generator's state. pkg/pathp/fn are the func being
+// C is the code generator's state. pkg/path/fn are the func being
 // emitted; locs holds its params and vars, nloc of them. While they are
 // bound, scope holds the numbers of the nscope in scope, innermost last;
 // live is the most that were in scope at once. err is set by the first
@@ -30,8 +30,7 @@ type C struct {
   nwork i64
   workcap i64
   pkg *ovid/parse.Pkg
-  pathp i64
-  pathn i64
+  path bytes
   fn *ovid/parse.Decl
   locs i64
   nloc i64
@@ -116,7 +115,7 @@ func FailCall(c *C, n *ovid/parse.Node) i64 {
 // FailIn fails with what followed by the func being emitted, pkg.Name.
 func FailIn(c *C, what i64, whatn i64) i64 {
   Fail(c, what, whatn)
-  return AddQual(c, c.pathp, c.pathn, c.fn.namep, c.fn.namen)
+  return AddQual(c, ptr(c.path), len(c.path), c.fn.namep, c.fn.namen)
 }
 
 // FailField fails with "field f on T", for a field fp[0:fnn] that type
@@ -142,8 +141,8 @@ func LeafOp(op i64) bool {
 // TableOf finds the table an index or len node names, placing its elements
 // in rodata on first use.
 func TableOf(c *C, n *ovid/parse.Node) *ovid/parse.Decl {
-  var pp i64 = c.pkg.pathp
-  var pn i64 = c.pkg.pathn
+  var pp i64 = ptr(c.pkg.path)
+  var pn i64 = len(c.pkg.path)
   if n.pkgn != 0 {
     pp = n.pkgp
     pn = n.pkgn
@@ -187,7 +186,7 @@ func UnaryOp(op i64) bool {
 func FindPkg(c *C, pp i64, pn i64) *ovid/parse.Pkg {
   var k *ovid/parse.Pkg = c.mod.pkgs
   while k != 0 as *ovid/parse.Pkg {
-    if ovid/mem.Eq(bytes(k.pathp, k.pathn), bytes(pp, pn)) {
+    if ovid/mem.Eq(k.path, bytes(pp, pn)) {
       return k
     }
     k = k.next
@@ -585,7 +584,7 @@ func TypeOf(c *C, n *ovid/parse.Node) i64 {
     return 0
   }
   if op == ovid/parse.OP_CALL {
-    var fn *ovid/parse.Decl = Callee(c, n, c.pathp, c.pathn)
+    var fn *ovid/parse.Decl = Callee(c, n, ptr(c.path), len(c.path))
     if fn == 0 as *ovid/parse.Decl {
       return FailCall(c, n)
     }
@@ -1837,7 +1836,7 @@ func EmitArgs(c *C, args *ovid/parse.Node, sys bool, lv i64) i64 {
 }
 
 func EmitCall(c *C, n *ovid/parse.Node, lv i64) i64 {
-  var fn *ovid/parse.Decl = Callee(c, n, c.pathp, c.pathn)
+  var fn *ovid/parse.Decl = Callee(c, n, ptr(c.path), len(c.path))
   if fn == 0 as *ovid/parse.Decl {
     return FailCall(c, n)
   }
@@ -2275,8 +2274,7 @@ func EmitFunc(c *C, fn *ovid/parse.Decl) i64 {
   c.live = 0
   c.err = 0
   c.pkg = fn.pkg
-  c.pathp = fn.pkg.pathp
-  c.pathn = fn.pkg.pathn
+  c.path = fn.pkg.path
   c.fn = fn
   var pa *ovid/parse.Decl = c.fn.sub
   while pa != 0 as *ovid/parse.Decl {
@@ -2396,7 +2394,7 @@ func LiveFrom(c *C, fn *ovid/parse.Decl) i64 {
   while c.nwork > 0 {
     c.nwork = c.nwork - 1
     var f *ovid/parse.Decl = load64(c.work + (c.nwork * 8)) as *ovid/parse.Decl
-    WalkLive(c, f.body, f.pkg.pathp, f.pkg.pathn)
+    WalkLive(c, f.body, ptr(f.pkg.path), len(f.pkg.path))
   }
   return 0
 }
@@ -2517,10 +2515,10 @@ func Compile(io *ovid/io.Cap, m *ovid/parse.Mod, errp i64) *ovid/mem.Buf {
     store64(errp, c.msg as i64)
     return z as *ovid/mem.Buf
   }
-  var mainFn *ovid/parse.Decl = ovid/parse.FindFunc(m, m.entryp, m.entryn, strptr("main"), strlen("main"))
+  var mainFn *ovid/parse.Decl = ovid/parse.FindFunc(m, ptr(m.entry), len(m.entry), strptr("main"), strlen("main"))
   if mainFn == 0 as *ovid/parse.Decl {
     Fail(c, strptr("missing "), strlen("missing "))
-    Add(c, m.entryp, m.entryn)
+    Add(c, ptr(m.entry), len(m.entry))
     Add(c, strptr(".main"), strlen(".main"))
     store64(errp, c.msg as i64)
     return z as *ovid/mem.Buf
