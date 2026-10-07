@@ -48,11 +48,12 @@ message strings in one file.
 On `16-two-writers-prog` (0c33973, below), where one agent renames a func
 used from three packages while another adds a func to the file that
 defines it, every agent, told or not, used `ovid rename` for the rename
-(10 of 10), and the guided ones added their func with `ovid append`
-(5 of 5) where the plain ones used Edit. All ten runs met the goal at
-$0.03 to $0.04: Claude Code's Edit replaces one string in a file it
-reads at that moment, so the stale-copy overwrite the task was built to
-provoke never happened, and the guard was not needed. What every agent
+(10 of 10), and the guided ones added their func through ovid (`append`
+once, `edit` four times) where the plain ones used Edit. All ten runs met
+the goal, at a median of $0.03 (plain) and $0.04 (guided): Claude Code's
+Edit replaces one string in a file it reads at that moment, so the
+stale-copy overwrite the task was built to provoke never happened, and
+the guard was not needed. What every agent
 did need and did not get: `rename` leaves the decl's own doc comment
 starting with the old name, and all ten fixed it by hand (#160).
 
@@ -154,8 +155,10 @@ What it shows:
 - **Told to, agents add a decl through ovid.** Every guided agent b
   appended `LastDecl` with `ovid append` or an `ovid edit` request; every
   plain agent b used the Edit tool after `grep -n CountDecls`.
-- **The race the task was built for did not happen.** Both agents finish
-  in under ten seconds, and Edit rewrites one string in the file as it is
+- **The race the task was built for did not happen.** The median run is
+  nine seconds and the two agents' edits land seconds apart (one guided
+  agent a took 294 s, after both edits were in), and Edit rewrites one
+  string in the file as it is
   at that moment, so b never overwrote a's rename. On this toolchain the
   lost update needs a whole-file rewrite from a stale read (python, or
   `cat > file`), which these agents did not do here. The guard's value on
