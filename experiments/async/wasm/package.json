@@ -1,0 +1,12 @@
+{
+  "name": "ovid-async-wasm-bench",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "wrangler": "^4"
+  },
+  "allowScripts": {
+    "esbuild": true,
+    "workerd": true
+  }
+}

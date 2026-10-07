@@ -1,0 +1,2 @@
+module baselinewasm
+entry handler
