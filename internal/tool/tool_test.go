@@ -876,6 +876,11 @@ func TestEditInsertAppend(t *testing.T) {
 	if again, _ := os.ReadFile(filepath.Join(dir, "demo/main.ov")); string(again) != want {
 		t.Fatal("file changed after rejected edit")
 	}
+	// The parser's hint for a known slip reaches the receipt.
+	r, code = editJSON(t, dir, []any{map[string]any{"op": "append", "into": "fn:demo.main", "expect": hashOf(t, dir, "fn:demo.main"), "text": "var n = 3"}})
+	if code == 0 || r["error"] != "syntax" || r["hint"] != "every local is declared with its type: var n i64 = ...; nothing was written" {
+		t.Fatalf("syntax hint %d %v", code, r)
+	}
 }
 
 func TestRename(t *testing.T) {

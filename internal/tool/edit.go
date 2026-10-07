@@ -438,8 +438,12 @@ func planSplices(w io.Writer, dir string, m *module.Module, base map[string][]by
 					op = s.op
 				}
 			}
+			hint := "nothing was written"
+			if perr.Hint != "" {
+				hint = perr.Hint + "; " + hint
+			}
 			emit(w, map[string]any{"ok": false, "error": "syntax", "message": perr.Msg, "op": op, "file": rel(m, abs),
-				"line": pos.Line, "col": pos.Col, "source": f.Line(pos.Line), "hint": "nothing was written"})
+				"line": pos.Line, "col": pos.Col, "source": f.Line(pos.Line), "hint": hint})
 			return nil, ExitFail
 		}
 	}
