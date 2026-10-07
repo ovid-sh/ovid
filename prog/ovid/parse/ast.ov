@@ -1677,8 +1677,8 @@ func ParseInt(p *P, s i64, e i64) i64 {
   return 0 - v
 }
 
-// Utf8Len is the length of the valid UTF-8 sequence at q (at most m bytes
-// available), or 0 if it is invalid, like utf8.DecodeRune's RuneError/1.
+// Utf8Len is the length of the valid UTF-8 sequence at the start of q, or
+// 0 if it is invalid, like utf8.DecodeRune's RuneError/1.
 func Utf8Len(q bytes) i64 {
   var c i64 = load8(ptr(q))
   if c < 128 {
