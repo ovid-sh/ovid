@@ -35,8 +35,9 @@ func EqN(a i64, an i64, b i64, bn i64) bool {
   return true
 }
 
-// EqC compares the NUL-terminated string at p with lit:
-// ovid/mem.EqC(ovid/io.ArgC(io, 1), "-v").
+// EqC compares the NUL-terminated string at p with lit. For an
+// argument, ovid/mem.Eq(ovid/io.Arg(io, 1), "-v") is the form: Arg is
+// empty past the last argument, where ArgC is 0.
 func EqC(p i64, lit bytes) bool {
   return EqN(p, ovid/io.CLen(p), ptr(lit), len(lit))
 }
