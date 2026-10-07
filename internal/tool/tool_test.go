@@ -878,7 +878,11 @@ func TestEditInsertAppend(t *testing.T) {
 	}
 	// The parser's hint for a known slip reaches the receipt.
 	r, code = editJSON(t, dir, []any{map[string]any{"op": "append", "into": "fn:demo.main", "expect": hashOf(t, dir, "fn:demo.main"), "text": "var n = 3"}})
-	if code == 0 || r["error"] != "syntax" || r["hint"] != "every local is declared with its type: var n i64 = ...; nothing was written" {
+	if code == 0 || r["error"] != "syntax" || r["hint"] != "every local is declared with its type: var n i64 = ... (nothing was written)" {
+		t.Fatalf("syntax hint %d %v", code, r)
+	}
+	r, code = editJSON(t, dir, []any{map[string]any{"op": "append", "into": "fn:demo.main", "expect": hashOf(t, dir, "fn:demo.main"), "text": "x = 1; x = 2"}})
+	if code == 0 || r["error"] != "syntax" || r["hint"] != "statements are one per line; there is no ; (nothing was written)" {
 		t.Fatalf("syntax hint %d %v", code, r)
 	}
 }
