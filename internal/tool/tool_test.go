@@ -1205,6 +1205,73 @@ func TestEdges(io *ovid/io.Cap) i64 {
 	}
 }
 
+// TestBytesBounds: each check on a bytes traps with an illegal instruction
+// and the crash names the statement: an index at the length or negative,
+// a slice past the end, and a slice whose low bound passes its high.
+func TestBytesBounds(t *testing.T) {
+	dir := mkmod(t, map[string]string{
+		"demo/main.ov": "package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  return 0\n}\n",
+		"demo/main_test.ov": `package demo
+import ovid/io
+func At(b bytes, i i64) i64 {
+  return b[i]
+}
+func Put(b bytes, i i64) i64 {
+  b[i] = 1
+  return 0
+}
+func Cut(b bytes, i i64, j i64) i64 {
+  return len(b[i:j])
+}
+func TestPastEnd(io *ovid/io.Cap) i64 {
+  return At("abc", 3)
+}
+func TestNegative(io *ovid/io.Cap) i64 {
+  return At("abc", 0 - 1)
+}
+func TestStore(io *ovid/io.Cap) i64 {
+  return Put(bytes(ovid/io.Alloc(io, 4), 4), 4)
+}
+func TestHigh(io *ovid/io.Cap) i64 {
+  return Cut("abc", 1, 4)
+}
+func TestCrossed(io *ovid/io.Cap) i64 {
+  return Cut("abc", 2, 1)
+}
+func TestEdges(io *ovid/io.Cap) i64 {
+  var b bytes = bytes(ovid/io.Alloc(io, 4), 4)
+  Put(b, 0)
+  Put(b, 3)
+  return At(b, 0) + At(b, 3) + Cut(b, 0, 4) + Cut(b, 4, 4) + Cut(b, 0, 0) - 6
+}
+`,
+	})
+	needExec(t)
+	var b bytes.Buffer
+	if code := Test(dir, "", false, &b); code != ExitFail {
+		t.Fatalf("code %d %s", code, b.String())
+	}
+	got := map[string]map[string]any{}
+	for _, r := range lines(t, b.String()) {
+		if r["fact"] == "test" {
+			got[r["id"].(string)] = r
+		}
+	}
+	if got["fn:demo.TestEdges"]["ok"] != true {
+		t.Fatalf("edges %v", got["fn:demo.TestEdges"])
+	}
+	for name, src := range map[string]string{
+		"TestPastEnd": "  return b[i]", "TestNegative": "  return b[i]", "TestStore": "  b[i] = 1",
+		"TestHigh": "  return len(b[i:j])", "TestCrossed": "  return len(b[i:j])",
+	} {
+		r := got["fn:demo."+name]
+		at, _ := r["at"].(map[string]any)
+		if r["signal"] != "illegal instruction" || at["source"] != src {
+			t.Fatalf("%s: %v", name, r)
+		}
+	}
+}
+
 // TestTwoResultFuncIsNoTest: a TestX that returns a value and an error code
 // is not a test, since the runner would take its first result and drop the
 // code unseen.

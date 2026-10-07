@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math/bits"
+	"ovid/internal/lower"
 	"sort"
 	"strings"
 
@@ -62,6 +63,12 @@ type Output struct {
 
 // CompileAll is CompileMap plus the system calls the program can make.
 func CompileAll(p *ir.Program) (*Output, error) {
+	// A bytes is two words; the code generator sees only one per value,
+	// in a copy of the tree, since the module's own is read by id after.
+	p = lower.Clone(p)
+	if err := lower.Program(p); err != nil {
+		return nil, err
+	}
 	bin, c, err := compileProg(p)
 	if err != nil {
 		return nil, err
@@ -147,6 +154,7 @@ type cg struct {
 	pkgs       map[string]*ir.Package
 	locals     []local          // the func's params and vars, one per declaration
 	ref2       map[*ir.Node]int // the second local of a var2 or assign2
+	ref3       map[*ir.Node]int // the third, when a lowered bytes result has one
 	ref        map[*ir.Node]int // a var, an assign, or a local's name: its local
 	scope      []int            // the locals in scope while binding, innermost last
 	live       int              // the most locals in scope at once
@@ -458,6 +466,7 @@ func (c *cg) bindFunc(fn *ir.Func) {
 	c.locals = nil
 	c.ref = map[*ir.Node]int{}
 	c.ref2 = map[*ir.Node]int{}
+	c.ref3 = map[*ir.Node]int{}
 	c.scope = nil
 	c.live = 0
 	for _, pa := range fn.Params {
@@ -511,6 +520,10 @@ func (c *cg) bindStmts(stmts []*ir.Node) {
 				c.declare(nil, s.Two.Name, s.Two.Type)
 				c.ref2[s] = len(c.locals) - 1
 			}
+			if len(s.Args) == 1 && s.Args[0].Name != "_" {
+				c.declare(nil, s.Args[0].Name, "i64")
+				c.ref3[s] = len(c.locals) - 1
+			}
 		case "assign":
 			c.bindName(s, s.Name)
 		case "assign2":
@@ -519,6 +532,14 @@ func (c *cg) bindStmts(stmts []*ir.Node) {
 				if c.locals[c.scope[j]].name == s.Two.Name {
 					c.ref2[s] = c.scope[j]
 					break
+				}
+			}
+			if len(s.Args) == 1 {
+				for j := len(c.scope) - 1; j >= 0; j-- {
+					if c.locals[c.scope[j]].name == s.Args[0].Name {
+						c.ref3[s] = c.scope[j]
+						break
+					}
 				}
 			}
 		}
@@ -771,6 +792,9 @@ func stmtMax(s *ir.Node) int {
 	case "var", "assign", "expr", "var2", "assign2":
 		return exprMax(s.Val, 0)
 	case "return":
+		if len(s.Args) == 1 {
+			return max2(max2(exprMax(s.Args[0], 0), exprMax(s.Val2, 1), 1), exprMax(s.Val, 2), 1)
+		}
 		if s.Val2 != nil {
 			// The error code waits in temp 0 while the value is evaluated.
 			return max2(exprMax(s.Val2, 0), exprMax(s.Val, 1), 0)
@@ -778,7 +802,7 @@ func stmtMax(s *ir.Node) int {
 		return exprMax(s.Val, 0)
 	case "setfield":
 		return max2(exprMax(s.Base, 0), exprMax(s.Val, 1), 1)
-	case "store8", "store16", "store32", "store64":
+	case "store8", "store16", "store32", "store64", "chk":
 		return max2(exprMax(s.Addr, 0), exprMax(s.Val, 1), 1)
 	case "if":
 		m := exprMax(s.Cond, 0)
@@ -801,6 +825,8 @@ func exprMax(n *ir.Node, lv int) int {
 		return -1
 	case "index":
 		return exprMax(n.Arg, lv)
+	case "bload":
+		return max2(max2(exprMax(n.Base, lv), exprMax(n.Left, lv+1), lv+1), exprMax(n.Right, lv+1), lv+1)
 	case "add", "sub", "mul", "div", "mod", "and", "or", "xor", "shl", "shr", "ushr", "umulhi", "udiv", "urem", "ult", "eq", "ne", "lt", "le", "gt", "ge":
 		return max2(exprMax(n.Left, lv), exprMax(n.Right, lv+1), lv)
 	case "land", "lor":
@@ -889,10 +915,14 @@ func (c *cg) emitStmt(s *ir.Node) error {
 		}
 		return nil
 	case "var2", "assign2":
-		// The call leaves its results in rax and rdx, which no local lives
-		// in, so storing one cannot disturb the other.
+		// The call leaves its results in rax and rdx (and rcx for a
+		// lowered (bytes, i64)), which no local lives in, so storing one
+		// cannot disturb another.
 		if err := c.emitExpr(s.Val, 0); err != nil {
 			return err
+		}
+		if k, ok := c.ref3[s]; ok {
+			c.setLocal(k, asm.RCX)
 		}
 		if j, ok := c.ref2[s]; ok {
 			c.setLocal(j, asm.RDX)
@@ -909,10 +939,35 @@ func (c *cg) emitStmt(s *ir.Node) error {
 		return c.emitStore(s.Base, s.Val, 64, off)
 	case "store8", "store16", "store32", "store64":
 		return c.emitStore(s.Addr, s.Val, storeWidth[s.Op], 0)
+	case "chk":
+		// A lowered bounds check: Addr < Val unsigned, or the trap.
+		cc, err := c.emitCmp(&ir.Node{Op: "ult", Left: s.Addr, Right: s.Val}, 0)
+		if err != nil {
+			return err
+		}
+		c.b.Jcc(0x80|(cc^1), c.trapLabel())
+		return nil
 	case "expr":
 		return c.emitExpr(s.Val, 0)
 	case "return":
-		if s.Val2 != nil {
+		if len(s.Args) == 1 {
+			// A lowered return b, e: the error code into rcx by way of
+			// temp 0, the length into rdx by way of temp 1, the address
+			// into rax.
+			if err := c.emitExpr(s.Args[0], 0); err != nil {
+				return err
+			}
+			c.storeTemp(0)
+			if err := c.emitExpr(s.Val2, 1); err != nil {
+				return err
+			}
+			c.storeTemp(1)
+			if err := c.emitExpr(s.Val, 2); err != nil {
+				return err
+			}
+			c.loadTempReg(asm.RDX, 1)
+			c.loadTempReg(asm.RCX, 0)
+		} else if s.Val2 != nil {
 			// return v, e: e into rdx by way of temp 0, then v into rax.
 			if err := c.emitExpr(s.Val2, 0); err != nil {
 				return err
@@ -1916,6 +1971,15 @@ func (c *cg) emitExpr(n *ir.Node, lv int) error {
 		return c.emitExpr(n.Arg, lv)
 	case "field", "load8", "load16", "load32", "load64":
 		return c.emitLoad(n, lv, asm.RAX)
+	case "bload":
+		// A lowered b[i]: b is (Base, Right) and i is Left, all simple
+		// operands, so cmp i, n; jae trap; movzx rax, [p + i].
+		cc, err := c.emitCmp(&ir.Node{Op: "ult", Left: n.Left, Right: n.Right}, lv)
+		if err != nil {
+			return err
+		}
+		c.b.Jcc(0x80|(cc^1), c.trapLabel())
+		return c.emitLoad(&ir.Node{Op: "load8", Arg: &ir.Node{Op: "add", Left: n.Base, Right: n.Left}}, lv, asm.RAX)
 	case "bswap16", "bswap32", "bswap64":
 		if err := c.emitExpr(n.Arg, lv); err != nil {
 			return err
@@ -2043,7 +2107,7 @@ func (c *cg) typeOf(n *ir.Node) string {
 		return "invalid"
 	}
 	switch n.Op {
-	case "int", "strptr", "strlen", "sizeof", "add", "sub", "mul", "div", "mod", "and", "or", "xor", "shl", "shr", "ushr", "umulhi", "udiv", "urem", "neg", "bnot", "index", "len", "load8", "load16", "load32", "load64", "bswap16", "bswap32", "bswap64", "syscall":
+	case "int", "strptr", "strlen", "sizeof", "add", "sub", "mul", "div", "mod", "and", "or", "xor", "shl", "shr", "ushr", "umulhi", "udiv", "urem", "neg", "bnot", "index", "len", "load8", "load16", "load32", "load64", "bswap16", "bswap32", "bswap64", "syscall", "bload":
 		return "i64"
 	case "bool", "eq", "ne", "lt", "le", "gt", "ge", "ult", "land", "lor", "not":
 		return "bool"
