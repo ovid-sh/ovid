@@ -127,7 +127,7 @@ func TestRenameTypeNotField(t *testing.T) {
 	dir := mkmod(t, demo(treeSrc))
 	bins := renameText(t, dir, "ty:demo.Node", "Item",
 		[]string{"type Item struct", "  Node *Item\n  Item *Item\n", "var n *Item = t.Node", "t.Node = ovid/io.Alloc(io, sizeof(Item)) as *Item",
-			"t.Node.v = 7", "t.Item.v = 9", `// Node is a tree node; strlen("Node")`, `strlen("Node") - 4`},
+			"t.Node.v = 7", "t.Item.v = 9", `// Item is a tree node; strlen("Node")`, `strlen("Node") - 4`},
 		[]string{"t.Item\n  return n.v"})
 	// And back: the module is what it was.
 	var b bytes.Buffer
@@ -353,5 +353,64 @@ func Make(io *ovid/io.Cap, x i64) *Point {
 			}
 			renameKeeps(t, mkmod(t, fs), c.q, c.to, 15, c.want, c.gone)
 		})
+	}
+}
+
+// TestRenameDocComment: a doc comment that opens with the decl's name is
+// renamed with it; one that does not, and other mentions, are left alone.
+func TestRenameDocComment(t *testing.T) {
+	dir := mkmod(t, demo(`package demo
+
+import ovid/io
+
+// Twice doubles x. Twice is used by main; see also Thrice.
+func Twice(x i64) i64 {
+  return x + x
+}
+
+// A helper: calls Twice twice.
+func Four(x i64) i64 {
+  return Twice(Twice(x))
+}
+
+func main(io *ovid/io.Cap) i64 {
+  return Four(1)
+}
+`))
+	var b bytes.Buffer
+	if code := Rename(dir, "Twice", "Double", false, &b); code != 0 {
+		t.Fatal(b.String())
+	}
+	r := last(t, b.String())
+	if r["doc"] != true || r["edits"] != 4.0 {
+		t.Fatalf("receipt %v", r)
+	}
+	src := sources(t, dir)
+	for _, want := range []string{"// Double doubles x. Twice is used by main; see also Thrice.\nfunc Double(x i64) i64", "// A helper: calls Twice twice.\nfunc Four", "return Double(Double(x))"} {
+		if !strings.Contains(src, want) {
+			t.Fatalf("missing %q in:\n%s", want, src)
+		}
+	}
+	b.Reset()
+	if code := Rename(dir, "Four", "Quad", false, &b); code != 0 {
+		t.Fatal(b.String())
+	}
+	if r := last(t, b.String()); r["doc"] != false || r["edits"] != 2.0 {
+		t.Fatalf("receipt %v", r)
+	}
+	if src := sources(t, dir); !strings.Contains(src, "// A helper: calls Twice twice.\nfunc Quad") {
+		t.Fatalf("doc comment changed:\n%s", src)
+	}
+	// A tab after the slashes is leading space too.
+	dir = mkmod(t, demo("package demo\n\nimport ovid/io\n\n//\tOne is one.\nfunc One() i64 {\n  return 1\n}\n\nfunc main(io *ovid/io.Cap) i64 {\n  return One()\n}\n"))
+	b.Reset()
+	if code := Rename(dir, "One", "Uno", false, &b); code != 0 {
+		t.Fatal(b.String())
+	}
+	if r := last(t, b.String()); r["doc"] != true {
+		t.Fatalf("receipt %v", r)
+	}
+	if src := sources(t, dir); !strings.Contains(src, "//\tUno is one.\nfunc Uno") {
+		t.Fatalf("tab doc comment not renamed:\n%s", src)
 	}
 }
