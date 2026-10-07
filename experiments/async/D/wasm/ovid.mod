@@ -1,0 +1,2 @@
+module dwasm
+entry handler

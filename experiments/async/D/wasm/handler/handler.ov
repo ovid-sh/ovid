@@ -1,0 +1,35 @@
+package handler
+
+import ovid/io
+import ovid/http
+
+// The reference handler for wasm: the host gives each request its own
+// instance, and an upstream call is a 10 ms host timer (HostSleep), so /w2
+// waits for its ten calls one after another.
+
+const UPSTREAM_MS i64 = 10
+const FANOUT i64 = 10
+
+func handle(io *ovid/io.Cap, req *ovid/http.Request, res *ovid/http.Response) i64 {
+  if ovid/http.PathIs(req, strptr("/w1"), 3) {
+    if ovid/io.HostSleep(UPSTREAM_MS) != 0 {
+      return 1
+    }
+    ovid/http.Write(io, res, strptr("ok"), 2)
+    return 0
+  }
+  if ovid/http.PathIs(req, strptr("/w2"), 3) {
+    var i i64 = 0
+    while i < FANOUT {
+      if ovid/io.HostSleep(UPSTREAM_MS) != 0 {
+        return 1
+      }
+      i = i + 1
+    }
+    ovid/http.Write(io, res, strptr("ok "), 3)
+    ovid/http.WriteInt(io, res, FANOUT)
+    return 0
+  }
+  ovid/http.SetStatus(res, 404)
+  return 0
+}
