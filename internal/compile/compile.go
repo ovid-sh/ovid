@@ -1985,8 +1985,8 @@ func (c *cg) emitExpr(n *ir.Node, lv int) error {
 	case "field", "load8", "load16", "load32", "load64":
 		return c.emitLoad(n, lv, asm.RAX)
 	case "bload":
-		// A lowered b[i]: b is (Base, Right) and i is Left, all simple
-		// operands, so cmp i, n; jae trap; movzx rax, [p + i].
+		// A lowered b[i]: b is (Base, Right) and i is Left, simple
+		// operands or field loads, so cmp i, n; jae trap; movzx rax, [p + i].
 		cc, err := c.emitCmp(&ir.Node{Op: "ult", Left: n.Left, Right: n.Right}, lv)
 		if err != nil {
 			return err
