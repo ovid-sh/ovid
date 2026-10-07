@@ -1270,10 +1270,6 @@ func (c *cg) arithRcx(op string) {
 		c.b.XorEdxEdx()
 		c.b.DivRcx()
 		c.b.MovRegReg(asm.RAX, asm.RDX)
-	case "ult":
-		c.b.CmpRaxRcx()
-		c.b.SetccAl(0x92)
-		c.b.MovzxRaxAl()
 	}
 }
 
@@ -1344,12 +1340,16 @@ func (c *cg) emitArith(n *ir.Node, lv int) error {
 // Condition codes: the low nibble shared by setcc (0F 9x) and jcc (0F 8x).
 // Flipping bit 0 negates one.
 func ccOf(op string) byte {
-	return map[string]byte{"eq": 0x4, "ne": 0x5, "lt": 0xC, "ge": 0xD, "le": 0xE, "gt": 0xF}[op]
+	return map[string]byte{"eq": 0x4, "ne": 0x5, "lt": 0xC, "ge": 0xD, "le": 0xE, "gt": 0xF, "ult": 0x2}[op]
 }
 
 // ccSwap is the condition for the operands the other way round.
 func ccSwap(cc byte) byte {
 	switch cc {
+	case 0x2:
+		return 0x7
+	case 0x7:
+		return 0x2
 	case 0xC:
 		return 0xF
 	case 0xF:
@@ -1418,7 +1418,7 @@ func (c *cg) tempReg(lv int, right *ir.Node) (int, bool) {
 
 func isCmp(op string) bool {
 	switch op {
-	case "eq", "ne", "lt", "le", "gt", "ge":
+	case "eq", "ne", "lt", "le", "gt", "ge", "ult":
 		return true
 	}
 	return false
@@ -1831,9 +1831,9 @@ func (c *cg) emitExpr(n *ir.Node, lv int) error {
 			return nil
 		}
 		return fmt.Errorf("name %s", n.Name)
-	case "add", "sub", "mul", "div", "mod", "and", "or", "xor", "shl", "shr", "ushr", "umulhi", "udiv", "urem", "ult":
+	case "add", "sub", "mul", "div", "mod", "and", "or", "xor", "shl", "shr", "ushr", "umulhi", "udiv", "urem":
 		return c.emitArith(n, lv)
-	case "eq", "ne", "lt", "le", "gt", "ge":
+	case "eq", "ne", "lt", "le", "gt", "ge", "ult":
 		cc, err := c.emitCmp(n, lv)
 		if err != nil {
 			return err

@@ -166,11 +166,13 @@ func TableOf(c *C, n *ovid/parse.Node) *ovid/parse.Decl {
 // ArithOp: the binary operators that EmitArith evaluates into rax, the
 // unsigned builtins among them.
 func ArithOp(op i64) bool {
-  return (op >= ovid/parse.OP_ADD && op <= ovid/parse.OP_SHR) || ovid/parse.UnsignedOp(op)
+  return (op >= ovid/parse.OP_ADD && op <= ovid/parse.OP_SHR) || (ovid/parse.UnsignedOp(op) && op != ovid/parse.OP_ULT)
 }
 
+// CmpOp groups the comparisons, ult among them: each sets the flags and
+// is a condition code, so a branch on one needs no bool.
 func CmpOp(op i64) bool {
-  return op >= ovid/parse.OP_EQ && op <= ovid/parse.OP_GE
+  return (op >= ovid/parse.OP_EQ && op <= ovid/parse.OP_GE) || op == ovid/parse.OP_ULT
 }
 
 func UnaryOp(op i64) bool {
@@ -1243,12 +1245,6 @@ func ArithRcx(c *C, op i64) i64 {
     ovid/asm.MovRegReg(c.code, 0, 2)
     return 0
   }
-  if op == ovid/parse.OP_ULT {
-    ovid/asm.CmpRaxRcx(c.code)
-    ovid/asm.SetccAl(c.code, 0x92)
-    ovid/asm.MovzxRaxAl(c.code)
-    return 0
-  }
   return FailIn(c, strptr("bad arith op in "), strlen("bad arith op in "))
 }
 
@@ -1333,11 +1329,20 @@ func CcOf(op i64) i64 {
   if op == ovid/parse.OP_LE {
     return 0xE
   }
+  if op == ovid/parse.OP_ULT {
+    return 0x2
+  }
   return 0xF
 }
 
 // CcSwap is the condition for the operands the other way round.
 func CcSwap(cc i64) i64 {
+  if cc == 0x2 {
+    return 0x7
+  }
+  if cc == 0x7 {
+    return 0x2
+  }
   if cc == 0xC {
     return 0xF
   }
