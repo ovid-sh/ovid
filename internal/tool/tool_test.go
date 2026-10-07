@@ -1495,9 +1495,6 @@ func TestShowIndexBase(t *testing.T) {
 	}
 }
 
-// TestBytesFieldLayout: a bytes field is two words, and what outline and
-// check --facts say about a struct's size and its fields' offsets agree
-// with the code generator.
 // TestBytesFieldCodegen: a bytes field read in a loop condition and in
 // ptr() compiles to the same code as the pointer+length pair of i64 fields
 // it stands for; the lowering reads it in place, not through temps.
@@ -1526,6 +1523,9 @@ func TestBytesFieldCodegen(t *testing.T) {
 	}
 }
 
+// TestBytesFieldLayout: a bytes field is two words, and what outline and
+// check --facts say about a struct's size and its fields' offsets agree
+// with the code generator.
 func TestBytesFieldLayout(t *testing.T) {
 	dir := mkmod(t, demo("package demo\nimport ovid/io\ntype T struct {\n  b bytes\n  n i64\n}\nfunc main(io *ovid/io.Cap) i64 {\n  return sizeof(T)\n}\n"))
 	var b bytes.Buffer
