@@ -1498,6 +1498,34 @@ func TestShowIndexBase(t *testing.T) {
 // TestBytesFieldLayout: a bytes field is two words, and what outline and
 // check --facts say about a struct's size and its fields' offsets agree
 // with the code generator.
+// TestBytesFieldCodegen: a bytes field read in a loop condition and in
+// ptr() compiles to the same code as the pointer+length pair of i64 fields
+// it stands for; the lowering reads it in place, not through temps.
+func TestBytesFieldCodegen(t *testing.T) {
+	skip := "func Skip(p *P) i64 {\n  var c i64 = 0\n  while p.i < len(p.src) && At(p, p.i) != 10 {\n    p.i = p.i + 1\n    c = c + 1\n  }\n  if p.i >= len(p.src) || (p.nl && p.i > 0) {\n    return c + 1\n  }\n  return c\n}\n"
+	pair := mkmod(t, demo("package demo\nimport ovid/io\ntype P struct {\n  src i64\n  n i64\n  i i64\n  nl bool\n}\nfunc At(p *P, k i64) i64 { return load8(p.src + k) }\n"+
+		strings.NewReplacer("len(p.src)", "p.n").Replace(skip)+
+		"func main(io *ovid/io.Cap) i64 {\n  var p *P = ovid/io.Alloc(io, sizeof(P)) as *P\n  p.src = strptr(\"abc\\ndef\")\n  p.n = strlen(\"abc\\ndef\")\n  return Skip(p)\n}\n"))
+	field := mkmod(t, demo("package demo\nimport ovid/io\ntype P struct {\n  src bytes\n  i i64\n  nl bool\n}\nfunc At(p *P, k i64) i64 { return load8(ptr(p.src) + k) }\n"+skip+
+		"func main(io *ovid/io.Cap) i64 {\n  var p *P = ovid/io.Alloc(io, sizeof(P)) as *P\n  p.src = \"abc\\ndef\"\n  return Skip(p)\n}\n"))
+	var out [2][]byte
+	for i, dir := range []string{pair, field} {
+		bin := filepath.Join(t.TempDir(), "x")
+		var b bytes.Buffer
+		if code := Build(dir, bin, &b); code != 0 {
+			t.Fatalf("build %d: %s", i, b.String())
+		}
+		data, err := os.ReadFile(bin)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out[i] = data
+	}
+	if !bytes.Equal(out[0], out[1]) {
+		t.Fatalf("a bytes field compiles to %d bytes, the pair of i64 fields to %d", len(out[1]), len(out[0]))
+	}
+}
+
 func TestBytesFieldLayout(t *testing.T) {
 	dir := mkmod(t, demo("package demo\nimport ovid/io\ntype T struct {\n  b bytes\n  n i64\n}\nfunc main(io *ovid/io.Cap) i64 {\n  return sizeof(T)\n}\n"))
 	var b bytes.Buffer
