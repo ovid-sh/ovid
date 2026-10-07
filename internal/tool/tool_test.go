@@ -1472,6 +1472,32 @@ func TestOutlineTable(t *testing.T) {
 	}
 }
 
+// TestShowIndexBase: the name a table read or a bytes index is on is an
+// expression of its own, listed with a type: the table's, or bytes.
+func TestShowIndexBase(t *testing.T) {
+	dir := mkmod(t, map[string]string{
+		"demo/main.ov": "package demo\nimport ovid/io\nimport util\nconst T [3]i64 = {1, 2, 3}\nconst E [0]i64 = {}\nfunc main(io *ovid/io.Cap) i64 {\n  var b bytes = \"ab\"\n  return T[1] + len(E) + util.Primes[0] + b[0] + len(b)\n}\n",
+		"util/util.ov": "package util\nconst Primes [2]i64 = {2, 3}\n",
+	})
+	var b bytes.Buffer
+	Show(dir, []string{"st:demo.main:2"}, true, true, false, &b)
+	types := map[string]any{}
+	for _, ln := range strings.Split(strings.TrimSpace(b.String()), "\n") {
+		var r map[string]any
+		if json.Unmarshal([]byte(ln), &r) == nil && r["exprs"] != nil {
+			for _, e := range r["exprs"].([]any) {
+				e := e.(map[string]any)
+				if e["text"] == "T" || e["text"] == "E" || e["text"] == "util.Primes" || e["text"] == "b" {
+					types[fmt.Sprint(e["text"])] = e["type"]
+				}
+			}
+		}
+	}
+	if types["T"] != "[3]i64" || types["E"] != "[0]i64" || types["util.Primes"] != "[2]i64" || types["b"] != "bytes" {
+		t.Fatalf("base types %v in %s", types, b.String())
+	}
+}
+
 // TestBytesFieldLayout: a bytes field is two words, and what outline and
 // check --facts say about a struct's size and its fields' offsets agree
 // with the code generator.
