@@ -3,7 +3,7 @@ package ovid/sha
 import ovid/io
 import ovid/mem
 
-// HexIs hashes n bytes at p and compares the hex digest with want.
+// HexIs hashes s and compares the hex digest with want.
 func HexIs(io *ovid/io.Cap, s bytes, want i64) bool {
   var raw i64 = ovid/io.Alloc(io, 32)
   var hex i64 = ovid/io.Alloc(io, 64)
