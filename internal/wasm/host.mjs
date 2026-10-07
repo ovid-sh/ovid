@@ -25,8 +25,9 @@ export class Exit extends Error {
 
 // run instantiates module (a WebAssembly.Module) afresh, so no request sees
 // another's memory, feeds it stdin and args (strings), and returns its exit
-// code and output. No syscall can wait: a host op that would returns
-// ENOSYS. opts.ops adds syscalls: {number: (h, a1, ..., a6) => BigInt}.
+// code, its output, and the size its linear memory grew to (memoryBytes).
+// No syscall can wait: a host op that would returns ENOSYS. opts.ops adds
+// syscalls: {number: (h, a1, ..., a6) => BigInt}.
 export function run(module, stdin, args = [], opts = {}) {
   const h = host(stdin, false, opts);
   const inst = new WebAssembly.Instance(module, { env: { syscall: h.syscall } });
@@ -40,7 +41,7 @@ export function run(module, stdin, args = [], opts = {}) {
     if (!(e instanceof Exit)) throw e;
     code = e.code;
   }
-  return { code, stdout: concat(h.out), stderr: concat(h.err) };
+  return { code, stdout: concat(h.out), stderr: concat(h.err), memoryBytes: h.memory.buffer.byteLength };
 }
 
 // runAsync is run where a syscall may wait: the import is a JSPI
@@ -60,7 +61,7 @@ export async function runAsync(module, stdin, args = [], opts = {}) {
     if (!(e instanceof Exit)) throw e;
     code = e.code;
   }
-  return { code, stdout: concat(h.out), stderr: concat(h.err) };
+  return { code, stdout: concat(h.out), stderr: concat(h.err), memoryBytes: h.memory.buffer.byteLength };
 }
 
 // host is the state of one instance and its syscall function. h.memory is

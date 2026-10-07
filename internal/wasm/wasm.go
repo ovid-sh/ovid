@@ -17,14 +17,24 @@ package wasm
 import (
 	"encoding/binary"
 	"fmt"
+	"os"
+	"strconv"
 	"strings"
 
 	"ovid/internal/ir"
 )
 
 // HeapSize is the first heap region _start maps. It is smaller than the
-// native 128 MiB: a Worker isolate has 128 MiB in all.
-const HeapSize int64 = 32 << 20
+// native 128 MiB: a Worker isolate has 128 MiB in all. OVID_WASM_HEAP (a
+// byte count) overrides it, for the async experiments (#75, POC D).
+var HeapSize int64 = heapSize()
+
+func heapSize() int64 {
+	if v, err := strconv.ParseInt(os.Getenv("OVID_WASM_HEAP"), 10, 64); err == nil && v > 0 {
+		return v
+	}
+	return 32 << 20
+}
 
 // roBase is where rodata starts. The bytes below it stay zero, so a load
 // through a null pointer reads zeros rather than rodata.
