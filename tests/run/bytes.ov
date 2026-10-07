@@ -232,6 +232,12 @@ func main(io *ovid/io.Cap) i64 {
   if Count(c) != 5 {
     return 18
   }
+  // ptr(b) is the address a bytes starts at; ptr, like len, is a keyword
+  // only before a parenthesis, so a local may bear the name.
+  var ptr i64 = ptr(o)
+  if load8(ptr) != 87 || ptr + len(o) != ptr(o) + 5 {
+    return 25
+  }
   PrintLine(io, o)
   return 42
 }

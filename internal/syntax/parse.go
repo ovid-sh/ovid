@@ -229,7 +229,14 @@ func (p *parser) peekKw(k string) bool {
 // and tabs between: len is a keyword only there, so a variable may still
 // be named len.
 func (p *parser) peekLen() bool {
-	if !p.peekKw("len") {
+	return p.peekCall("len")
+}
+
+// peekCall says whether the keyword kw is next and a ( follows it (after
+// spaces or tabs): len and ptr are keywords only as calls, so a variable
+// may bear either name.
+func (p *parser) peekCall(kw string) bool {
+	if !p.peekKw(kw) {
 		return false
 	}
 	m := p.save()
@@ -990,7 +997,7 @@ func (p *parser) primary0() *ir.Node {
 			return &ir.Node{ID: p.eid(), Op: "bytes", Args: args}
 		}
 		return &ir.Node{ID: p.eid(), Op: "bytes", Left: args[0], Right: args[1]}
-	case p.peekKw("ptr"):
+	case p.peekCall("ptr"):
 		// ptr(b): the address a bytes starts at, for a syscall.
 		p.ident()
 		args, ok := p.builtinArgs(1)

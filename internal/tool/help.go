@@ -167,7 +167,8 @@ statement). No == on bytes (ovid/mem.Eq), no cast to or from i64.
   }
 A func may return (bytes, i64), received as var b bytes, e i64 = f(...).
 bytes(p, n) is a bytes over n bytes at address p (your own memory, from
-ovid/io.Alloc), ptr(b) the address b starts at, for a syscall path.
+ovid/io.Alloc), ptr(b) the address b starts at, for a syscall path (ptr,
+like len, is a keyword only before a parenthesis).
 strptr("hi\n") and strlen("hi\n") are a literal's address and length as
 two i64; the literal is NUL-terminated in memory, for a syscall path.
   ovid/io.Print("total: ")             // Eprint writes to stderr

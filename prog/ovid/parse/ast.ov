@@ -1320,7 +1320,7 @@ func Primary0(p *P) *Node {
     bm.num = Eid(p)
     return bm
   }
-  if PeekKw(p, strptr("ptr"), 3) {
+  if PeekCall(p, strptr("ptr"), 3) {
     // ptr(b): the address a bytes starts at, for a syscall.
     Ident(p)
     var ad *Node = Builtin(p, OP_PTR, ArgList(p), 1)

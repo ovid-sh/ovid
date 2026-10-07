@@ -266,7 +266,14 @@ func Ident(p *P) i64 {
 // and tabs between: len is a keyword only there, so a variable may still
 // be named len.
 func PeekLen(p *P) bool {
-  if !PeekKw(p, strptr("len"), 3) {
+  return PeekCall(p, strptr("len"), 3)
+}
+
+// PeekCall says whether the keyword lit[0:n] is next and a ( follows it
+// (after spaces or tabs): len and ptr are keywords only as calls, so a
+// variable may bear either name.
+func PeekCall(p *P, lit i64, n i64) bool {
+  if !PeekKw(p, lit, n) {
     return false
   }
   var e i64 = p.kwend
