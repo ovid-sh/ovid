@@ -2166,11 +2166,20 @@ func EmitStmt(c *C, s *ovid/parse.Node) i64 {
     cmp.op = ovid/parse.OP_ULT
     cmp.left = s.addr
     cmp.right = s.val
+    var when i64 = 1
+    if s.val.op == ovid/parse.OP_INT && s.val.ival == (0 - 9223372036854775807) - 1 {
+      // Against 2^63, the sign of addr says it: cmp with 0 and jl, in
+      // place of the 64-bit immediate.
+      cmp.op = ovid/parse.OP_LT
+      cmp.right = ovid/io.Alloc(c.io, sizeof(ovid/parse.Node)) as *ovid/parse.Node
+      cmp.right.op = ovid/parse.OP_INT
+      when = 0
+    }
     var ccc i64 = EmitCmp(c, cmp, 0)
     if ccc < 0 {
       return c.err
     }
-    ovid/asm.Jcc(c.code, 0x80 | (ccc ^ 1), TrapLabel(c))
+    ovid/asm.Jcc(c.code, 0x80 | (ccc ^ when), TrapLabel(c))
     return 0
   }
   if op == ovid/parse.OP_EXPR {

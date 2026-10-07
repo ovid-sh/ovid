@@ -1264,6 +1264,10 @@ func TestNegativeLength(io *ovid/io.Cap) i64 {
   var b bytes = bytes(ovid/io.Alloc(io, 4), 0 - 1)
   return len(b)
 }
+func TestNegativeLiteral(io *ovid/io.Cap) i64 {
+  var b bytes = bytes(ovid/io.Alloc(io, 4), -1)
+  return len(b)
+}
 func TestEdges(io *ovid/io.Cap) i64 {
   var b bytes = bytes(ovid/io.Alloc(io, 4), 4)
   Put(b, 0)
@@ -1292,6 +1296,7 @@ func TestEdges(io *ovid/io.Cap) i64 {
 		"TestNested":         "  if len(b) > 0 && len(b[i:i + 1]) == 1 {",
 		"TestInWhile":        "  while len(b[k:k + 1]) == 1 {",
 		"TestNegativeLength": "  var b bytes = bytes(ovid/io.Alloc(io, 4), 0 - 1)",
+		"TestNegativeLiteral": "  var b bytes = bytes(ovid/io.Alloc(io, 4), -1)",
 	} {
 		r := got["fn:demo."+name]
 		at, _ := r["at"].(map[string]any)
