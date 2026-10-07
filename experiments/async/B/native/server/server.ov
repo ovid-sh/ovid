@@ -1,0 +1,376 @@
+package server
+
+import ovid/io
+import ovid/http
+import ovid/mem
+
+// POC B: one process, one epoll loop, every socket non-blocking. With no
+// function values there are no callbacks: each thing being waited on is a
+// struct whose first field says what it is and whose state field says
+// where it is, and the loop dispatches on both. Serves W1 and W2 as
+// baseline/ does.
+//
+//   server <port> <upstream port>
+//
+// A connection:  READING -> (UPSTREAM) -> WRITING -> closed
+// An upstream:   CONNECTING -> SENDING -> RECEIVING -> done
+//
+// Nothing is freed by ResetHeap: requests interleave, so no point in the
+// heap's life belongs to one request. Conn and Up structs, with their
+// buffers, go back on free lists instead.
+
+const UPSTREAM_MS i64 = 10
+const FANOUT i64 = 10
+
+// What a registered struct is: the first field of each.
+const KIND_LISTEN i64 = 1
+const KIND_CONN i64 = 2
+const KIND_UP i64 = 3
+
+// Conn states.
+const READING i64 = 1
+const UPSTREAM i64 = 2
+const WRITING i64 = 3
+
+// Up states.
+const CONNECTING i64 = 1
+const SENDING i64 = 2
+const RECEIVING i64 = 3
+
+// BUF is the most bytes of request head a connection takes.
+const BUF i64 = 8192
+
+// MAXEVENTS is how many events one epoll_wait returns at most.
+const MAXEVENTS i64 = 256
+
+const NONBLOCK i64 = 526336 // SOCK_NONBLOCK | SOCK_CLOEXEC
+
+type Server struct {
+  kind i64
+  fd i64
+  ep i64
+  port i64
+  freeConn *Conn
+  freeUp *Up
+}
+
+type Conn struct {
+  kind i64
+  fd i64
+  state i64
+  buf i64
+  n i64
+  req *ovid/http.Request
+  out *ovid/mem.Buf
+  sent i64
+  pending i64
+  failed bool
+  calls i64
+  next *Conn
+}
+
+type Up struct {
+  kind i64
+  fd i64
+  state i64
+  conn *Conn
+  buf i64
+  got i64
+  sent i64
+  next *Up
+}
+
+func atoi(p i64) i64 {
+  var v i64 = 0
+  var i i64 = 0
+  while load8(p + i) >= 48 && load8(p + i) <= 57 {
+    v = (v * 10) + (load8(p + i) - 48)
+    i = i + 1
+  }
+  return v
+}
+
+func headEnd(p i64, n i64) i64 {
+  var i i64 = 3
+  while i < n {
+    if load8(p + (i - 3)) == 13 && load8(p + (i - 2)) == 10 && load8(p + (i - 1)) == 13 && load8(p + i) == 10 {
+      return i + 1
+    }
+    i = i + 1
+  }
+  return -1
+}
+
+// newConn takes a Conn off the free list, or makes one.
+func newConn(io *ovid/io.Cap, s *Server, fd i64) *Conn {
+  var c *Conn = s.freeConn
+  if c == 0 as *Conn {
+    c = ovid/io.Alloc(io, sizeof(Conn)) as *Conn
+    c.kind = KIND_CONN
+    c.buf = ovid/io.Alloc(io, BUF)
+    c.req = ovid/http.NewRequest(io, 0, 0, 0, 0)
+    c.out = ovid/mem.New(io, 256)
+  } else {
+    s.freeConn = c.next
+  }
+  c.fd = fd
+  c.state = READING
+  c.n = 0
+  c.sent = 0
+  c.pending = 0
+  c.failed = false
+  c.calls = 0
+  c.out.len = 0
+  c.next = 0 as *Conn
+  return c
+}
+
+func freeConn(s *Server, c *Conn) i64 {
+  ovid/io.Close(c.fd)
+  c.fd = -1
+  c.next = s.freeConn
+  s.freeConn = c
+  return 0
+}
+
+func newUp(io *ovid/io.Cap, s *Server, c *Conn) *Up {
+  var u *Up = s.freeUp
+  if u == 0 as *Up {
+    u = ovid/io.Alloc(io, sizeof(Up)) as *Up
+    u.kind = KIND_UP
+    u.buf = ovid/io.Alloc(io, 8)
+  } else {
+    s.freeUp = u.next
+  }
+  u.fd = -1
+  u.state = CONNECTING
+  u.conn = c
+  u.got = 0
+  u.sent = 0
+  u.next = 0 as *Up
+  return u
+}
+
+// acceptAll takes every connection waiting on the listener.
+func acceptAll(io *ovid/io.Cap, s *Server) i64 {
+  while true {
+    var fd i64, e i64 = ovid/io.Accept(s.fd, NONBLOCK)
+    if e != 0 {
+      return 0
+    }
+    var c *Conn = newConn(io, s, fd)
+    if ovid/io.EpollCtl(io, s.ep, ovid/io.EPOLL_CTL_ADD, fd, ovid/io.EPOLLIN, c as i64) != 0 {
+      freeConn(s, c)
+    }
+  }
+  return 0
+}
+
+// respond formats the answer into c.out and starts writing it.
+func respond(io *ovid/io.Cap, s *Server, c *Conn, status i64, body i64, bodyn i64) i64 {
+  var b *ovid/mem.Buf = c.out
+  b.len = 0
+  if status == 200 {
+    ovid/mem.WBytes(io, b, strptr("HTTP/1.1 200 OK\r\n"), strlen("HTTP/1.1 200 OK\r\n"))
+  } else if status == 404 {
+    ovid/mem.WBytes(io, b, strptr("HTTP/1.1 404 Not Found\r\n"), strlen("HTTP/1.1 404 Not Found\r\n"))
+  } else if status == 400 {
+    ovid/mem.WBytes(io, b, strptr("HTTP/1.1 400 Bad Request\r\n"), strlen("HTTP/1.1 400 Bad Request\r\n"))
+  } else {
+    ovid/mem.WBytes(io, b, strptr("HTTP/1.1 500 Internal Server Error\r\n"), strlen("HTTP/1.1 500 Internal Server Error\r\n"))
+  }
+  ovid/mem.WBytes(io, b, strptr("Content-Length: "), strlen("Content-Length: "))
+  ovid/mem.Grow(io, b, 24)
+  b.len = b.len + ovid/mem.FormatI64(b.data + b.len, bodyn)
+  ovid/mem.WBytes(io, b, strptr("\r\n\r\n"), 4)
+  ovid/mem.WBytes(io, b, body, bodyn)
+  c.state = WRITING
+  c.sent = 0
+  // Most answers fit the socket buffer: write now, and wait for EPOLLOUT
+  // only for what is left.
+  return onWrite(io, s, c)
+}
+
+func onWrite(io *ovid/io.Cap, s *Server, c *Conn) i64 {
+  while c.sent < c.out.len {
+    var w i64, e i64 = ovid/io.WriteSome(c.fd, c.out.data + c.sent, c.out.len - c.sent)
+    if e == ovid/io.E_AGAIN {
+      return ovid/io.EpollCtl(io, s.ep, ovid/io.EPOLL_CTL_MOD, c.fd, ovid/io.EPOLLOUT, c as i64)
+    }
+    if e != 0 {
+      return freeConn(s, c)
+    }
+    c.sent = c.sent + w
+  }
+  return freeConn(s, c)
+}
+
+// startUpstream begins one upstream call for c.
+func startUpstream(io *ovid/io.Cap, s *Server, c *Conn) i64 {
+  var u *Up = newUp(io, s, c)
+  var fd i64, e i64 = ovid/io.Connect(io, s.port, NONBLOCK)
+  if e != 0 && e != ovid/io.E_INPROGRESS {
+    u.next = s.freeUp
+    s.freeUp = u
+    return upDone(io, s, c, true)
+  }
+  u.fd = fd
+  // Connected or not, EPOLLOUT says when the socket can take the request.
+  if ovid/io.EpollCtl(io, s.ep, ovid/io.EPOLL_CTL_ADD, fd, ovid/io.EPOLLOUT, u as i64) != 0 {
+    return finishUp(io, s, u, true)
+  }
+  return 0
+}
+
+// upDone counts one upstream call of c as over, and answers c after the last.
+func upDone(io *ovid/io.Cap, s *Server, c *Conn, failed bool) i64 {
+  c.pending = c.pending - 1
+  if failed {
+    c.failed = true
+  }
+  if c.pending > 0 {
+    return 0
+  }
+  if c.failed {
+    return respond(io, s, c, 500, 0, 0)
+  }
+  if c.calls == 1 {
+    return respond(io, s, c, 200, strptr("ok"), 2)
+  }
+  return respond(io, s, c, 200, strptr("ok 10"), 5)
+}
+
+func finishUp(io *ovid/io.Cap, s *Server, u *Up, failed bool) i64 {
+  var c *Conn = u.conn
+  ovid/io.Close(u.fd)
+  u.fd = -1
+  u.next = s.freeUp
+  s.freeUp = u
+  return upDone(io, s, c, failed)
+}
+
+func onUp(io *ovid/io.Cap, s *Server, u *Up, mask i64) i64 {
+  if u.state == CONNECTING {
+    if (mask & (ovid/io.EPOLLERR | ovid/io.EPOLLHUP)) != 0 {
+      return finishUp(io, s, u, true)
+    }
+    u.state = SENDING
+  }
+  if u.state == SENDING {
+    while u.sent < 3 {
+      var w i64, we i64 = ovid/io.WriteSome(u.fd, strptr("10\n") + u.sent, 3 - u.sent)
+      if we == ovid/io.E_AGAIN {
+        return 0
+      }
+      if we != 0 {
+        return finishUp(io, s, u, true)
+      }
+      u.sent = u.sent + w
+    }
+    u.state = RECEIVING
+    return ovid/io.EpollCtl(io, s.ep, ovid/io.EPOLL_CTL_MOD, u.fd, ovid/io.EPOLLIN, u as i64)
+  }
+  // RECEIVING
+  while u.got < 3 {
+    var n i64, re i64 = ovid/io.Read(u.fd, u.buf + u.got, 8 - u.got)
+    if re == ovid/io.E_AGAIN {
+      return 0
+    }
+    if re != 0 || n == 0 {
+      return finishUp(io, s, u, true)
+    }
+    u.got = u.got + n
+  }
+  return finishUp(io, s, u, false)
+}
+
+func onRead(io *ovid/io.Cap, s *Server, c *Conn) i64 {
+  var h i64 = -1
+  while h < 0 {
+    if c.n >= BUF {
+      return respond(io, s, c, 400, 0, 0)
+    }
+    var k i64, e i64 = ovid/io.Read(c.fd, c.buf + c.n, BUF - c.n)
+    if e == ovid/io.E_AGAIN {
+      return 0
+    }
+    if e != 0 || k == 0 {
+      return freeConn(s, c)
+    }
+    c.n = c.n + k
+    h = headEnd(c.buf, c.n)
+  }
+  if ovid/http.Parse(c.req, c.buf, h) != 0 {
+    return respond(io, s, c, 400, 0, 0)
+  }
+  var calls i64 = 0
+  if ovid/http.PathIs(c.req, strptr("/w1"), 3) {
+    calls = 1
+  } else if ovid/http.PathIs(c.req, strptr("/w2"), 3) {
+    calls = FANOUT
+  } else {
+    return respond(io, s, c, 404, 0, 0)
+  }
+  // Nothing more to read: stop waiting on the connection until the
+  // answer is ready, and start every upstream call at once.
+  c.state = UPSTREAM
+  c.calls = calls
+  c.pending = calls
+  ovid/io.EpollCtl(io, s.ep, ovid/io.EPOLL_CTL_MOD, c.fd, 0, c as i64)
+  var i i64 = 0
+  while i < calls {
+    startUpstream(io, s, c)
+    i = i + 1
+  }
+  return 0
+}
+
+func onConn(io *ovid/io.Cap, s *Server, c *Conn, mask i64) i64 {
+  if c.state == READING {
+    return onRead(io, s, c)
+  }
+  if c.state == WRITING {
+    return onWrite(io, s, c)
+  }
+  return 0
+}
+
+func main(io *ovid/io.Cap) i64 {
+  if ovid/io.Argc(io) < 3 {
+    ovid/io.Eprint(strptr("usage: server <port> <upstream port>\n"))
+    return 64
+  }
+  var s *Server = ovid/io.Alloc(io, sizeof(Server)) as *Server
+  s.kind = KIND_LISTEN
+  s.port = atoi(ovid/io.Arg(io, 2))
+  var ln i64, e i64 = ovid/io.Listen(io, atoi(ovid/io.Arg(io, 1)), NONBLOCK, false)
+  if e != 0 {
+    ovid/io.Eprint(ovid/io.ErrText(e))
+    return 1
+  }
+  s.fd = ln
+  var ep i64, ee i64 = ovid/io.EpollCreate()
+  if ee != 0 {
+    return 1
+  }
+  s.ep = ep
+  ovid/io.EpollCtl(io, ep, ovid/io.EPOLL_CTL_ADD, ln, ovid/io.EPOLLIN, s as i64)
+  var events i64 = ovid/io.Alloc(io, MAXEVENTS * ovid/io.EVENT)
+  while true {
+    var n i64, we i64 = ovid/io.EpollWait(ep, events, MAXEVENTS, -1)
+    var i i64 = 0
+    while i < n {
+      var data i64 = ovid/io.EventData(events, i)
+      var kind i64 = load64(data)
+      if kind == KIND_LISTEN {
+        acceptAll(io, s)
+      } else if kind == KIND_CONN {
+        onConn(io, s, data as *Conn, ovid/io.EventMask(events, i))
+      } else {
+        onUp(io, s, data as *Up, ovid/io.EventMask(events, i))
+      }
+      i = i + 1
+    }
+  }
+  return 0
+}

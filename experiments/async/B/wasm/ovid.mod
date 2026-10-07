@@ -1,0 +1,2 @@
+module bwasm
+entry handler

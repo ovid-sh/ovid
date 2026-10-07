@@ -1,0 +1,2 @@
+module bnative
+entry server
