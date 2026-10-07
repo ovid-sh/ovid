@@ -5,6 +5,7 @@ package compile
 import (
 	"encoding/binary"
 	"fmt"
+	"math"
 	"math/bits"
 	"ovid/internal/lower"
 	"sort"
@@ -954,6 +955,16 @@ func (c *cg) emitStmt(s *ir.Node) error {
 		return c.emitStore(s.Addr, s.Val, storeWidth[s.Op], 0)
 	case "chk":
 		// A lowered bounds check: Addr < Val unsigned, or the trap.
+		if s.Val.Op == "int" && s.Val.Int == math.MinInt64 {
+			// Against 2^63, the sign of Addr says it: cmp with 0 and jl,
+			// in place of the 64-bit immediate.
+			cc, err := c.emitCmp(&ir.Node{Op: "lt", Left: s.Addr, Right: &ir.Node{Op: "int"}}, 0)
+			if err != nil {
+				return err
+			}
+			c.b.Jcc(0x80|cc, c.trapLabel())
+			return nil
+		}
 		cc, err := c.emitCmp(&ir.Node{Op: "ult", Left: s.Addr, Right: s.Val}, 0)
 		if err != nil {
 			return err

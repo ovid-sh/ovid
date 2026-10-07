@@ -300,8 +300,10 @@ func (l *lowerer) pair(n *ir.Node, p *pre) (addr, ln *ir.Node, err error) {
 			return nil, nil, err
 		}
 		// n < 2^63 unsigned: a negative length would let every later
-		// check pass.
-		*p = append(*p, &ir.Node{Op: "chk", Addr: ln, Val: &ir.Node{Op: "int", Int: math.MinInt64}})
+		// check pass. A literal length settles it here.
+		if ln.Op != "int" || ln.Int < 0 {
+			*p = append(*p, &ir.Node{Op: "chk", Addr: ln, Val: &ir.Node{Op: "int", Int: math.MinInt64}})
+		}
 		return a, ln, nil
 	case "field":
 		// Two loads of the expanded fields, left where they are: a base

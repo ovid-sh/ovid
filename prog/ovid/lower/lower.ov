@@ -515,14 +515,16 @@ func Pair(l *L, n *ovid/parse.Node, p *Pre) i64 {
     var a *ovid/parse.Node = Hoist(l, n.left, p)
     var ln *ovid/parse.Node = Hoist(l, n.right, p)
     // n < 2^63 unsigned: a negative length would let every later
-    // check pass.
-    var lim *ovid/parse.Node = NewNode(l, ovid/parse.OP_INT)
-    lim.ival = (0 - 9223372036854775807) - 1
-    lim.valk = 1
-    var ck *ovid/parse.Node = NewNode(l, ovid/parse.OP_CHK)
-    ck.addr = ln
-    ck.val = lim
-    Append(p, ck)
+    // check pass. A literal length settles it here.
+    if ln.op != ovid/parse.OP_INT || ln.ival < 0 {
+      var lim *ovid/parse.Node = NewNode(l, ovid/parse.OP_INT)
+      lim.ival = (0 - 9223372036854775807) - 1
+      lim.valk = 1
+      var ck *ovid/parse.Node = NewNode(l, ovid/parse.OP_CHK)
+      ck.addr = ln
+      ck.val = lim
+      Append(p, ck)
+    }
     l.pa = a
     l.pl = ln
     return 0
