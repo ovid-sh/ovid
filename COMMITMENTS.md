@@ -28,7 +28,9 @@ What is ported to Ovid is what agents are seen to rely on (#12,
 under the module lock) come next. The rest waits for evidence that agents
 reach for it.
 
-Why: the self-hosted compiler is 133 KB, runs in 7 MB with nine system
-calls on one thread, and builds itself under the seccomp list of its own
-receipt; the Go runtime cannot be made to fit that. The cost is that every
-language feature is written twice until the Go compiler goes.
+Why: the self-hosted compiler is a small static binary (about 155 KB as of
+2026-10-07; the README keeps the current figure) that checked `prog/` in
+7 MB with nine system calls on one thread when measured in #12 (main at
+6d4fcd8), and it builds itself under the seccomp list of its own receipt;
+the Go runtime cannot be made to fit that. The cost is that every language
+feature is written twice until the Go compiler goes.
