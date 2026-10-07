@@ -1,0 +1,41 @@
+package demo
+import ovid/io
+// E: D with the exact check the compiler would emit: chk(i, n) is
+// cmp i, n; jae trap, the trap one ud2 at the end of the func.
+const N i64 = 67108864
+const Passes i64 = 8
+const Trap [1]i64 = {0}
+
+func Fill(p i64, n i64) i64 {
+  var i i64 = 0
+  while i < n {
+    chk(i, n)
+    store8(p + i, i & 255)
+    i = i + 1
+  }
+  return 0
+}
+
+func Sum(p i64, n i64) i64 {
+  var s i64 = 0
+  var i i64 = 0
+  while i < n {
+    chk(i, n)
+    s = s + load8(p + i)
+    i = i + 1
+  }
+  return s
+}
+
+func main(io *ovid/io.Cap) i64 {
+  var p i64 = ovid/io.Alloc(io, N)
+  Fill(p, N)
+  var t i64 = 0
+  var k i64 = 0
+  while k < Passes {
+    t = t + Sum(p, N)
+    k = k + 1
+  }
+  ovid/io.PrintInt(io, t)
+  return 0
+}

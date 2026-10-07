@@ -330,7 +330,7 @@ func (n *Node) Children() []*Node {
 // IsStmt reports whether op names a statement.
 func IsStmt(op string) bool {
 	switch op {
-	case "var", "var2", "assign", "assign2", "setfield", "store8", "store16", "store32", "store64", "return", "if", "while", "expr":
+	case "var", "var2", "assign", "assign2", "setfield", "store8", "store16", "store32", "store64", "chk", "bstore", "return", "if", "while", "expr":
 		return true
 	}
 	return false

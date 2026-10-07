@@ -1,0 +1,75 @@
+package demo
+import ovid/io
+// B (and C): a token is a heap header; every subrange allocates one.
+const N i64 = 67108864
+const Trap [1]i64 = {0}
+
+type Bytes struct {
+  p i64
+  n i64
+}
+
+func New(io *ovid/io.Cap, p i64, n i64) *Bytes {
+  var b *Bytes = ovid/io.Alloc(io, sizeof(Bytes)) as *Bytes
+  b.p = p
+  b.n = n
+  return b
+}
+
+func At(b *Bytes, i i64) i64 {
+  if !ult(i, b.n) {
+    return Trap[i]
+  }
+  return load8(b.p + i)
+}
+
+func Sub(io *ovid/io.Cap, b *Bytes, i i64, j i64) *Bytes {
+  if !ult(j, b.n + 1) || !ult(i, j + 1) {
+    return New(io, Trap[i], 0)
+  }
+  return New(io, b.p + i, j - i)
+}
+
+func Fill(b *Bytes) i64 {
+  var i i64 = 0
+  var n i64 = b.n
+  var p i64 = b.p
+  while i < n {
+    if i % 8 == 7 {
+      store8(p + i, 32)
+    } else {
+      store8(p + i, 97 + (i % 7))
+    }
+    i = i + 1
+  }
+  return 0
+}
+
+func Score(t *Bytes) i64 {
+  if t.n == 0 {
+    return 0
+  }
+  return At(t, 0) + t.n
+}
+
+func Tokens(io *ovid/io.Cap, b *Bytes) i64 {
+  var total i64 = 0
+  var start i64 = 0
+  var i i64 = 0
+  var n i64 = b.n
+  while i <= n {
+    if i == n || At(b, i) == 32 {
+      total = total + Score(Sub(io, b, start, i))
+      start = i + 1
+    }
+    i = i + 1
+  }
+  return total
+}
+
+func main(io *ovid/io.Cap) i64 {
+  var b *Bytes = New(io, ovid/io.Alloc(io, N), N)
+  Fill(b)
+  ovid/io.PrintInt(io, Tokens(io, b))
+  return 0
+}

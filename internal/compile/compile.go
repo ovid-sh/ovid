@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math/bits"
+	"ovid/internal/lower"
 	"sort"
 	"strings"
 
@@ -62,6 +63,9 @@ type Output struct {
 
 // CompileAll is CompileMap plus the system calls the program can make.
 func CompileAll(p *ir.Program) (*Output, error) {
+	if err := lower.Program(p); err != nil {
+		return nil, err
+	}
 	bin, c, err := compileProg(p)
 	if err != nil {
 		return nil, err
@@ -153,6 +157,7 @@ type cg struct {
 	consts     map[string]int64
 	localBytes int32
 	epi        int
+	trap       int         // POC: one out-of-line ud2 per func, -1 until wanted
 	last       *ir.Node    // the func's final statement when it is a return
 	regs       map[int]int // locals that live in a register
 	saved      []int       // callee-saved registers the func uses
@@ -374,6 +379,7 @@ func (c *cg) emitFunc(pkg *ir.Package, fn *ir.Func) error {
 	c.b.Mark(lab)
 	c.mark(fn.ID)
 	c.epi = c.b.NewLabel()
+	c.trap = -1
 	c.b.PushReg(asm.RBP)
 	c.b.MovRegReg(asm.RBP, asm.RSP)
 	// The frame is not cleared: the checker lets no local be read before
@@ -412,7 +418,19 @@ func (c *cg) emitFunc(pkg *ir.Package, fn *ir.Func) error {
 	}
 	c.b.Leave()
 	c.b.Ret()
+	if c.trap >= 0 {
+		c.b.Mark(c.trap)
+		c.b.Ud2()
+	}
 	return nil
+}
+
+// trapLabel is the func's out-of-line ud2, made on first use.
+func (c *cg) trapLabel() int {
+	if c.trap < 0 {
+		c.trap = c.b.NewLabel()
+	}
+	return c.trap
 }
 
 // local is a param or a var. Each declaration has its own, with its own
@@ -754,7 +772,7 @@ func stmtMax(s *ir.Node) int {
 		return exprMax(s.Val, 0)
 	case "setfield":
 		return max2(exprMax(s.Base, 0), exprMax(s.Val, 1), 1)
-	case "store8", "store16", "store32", "store64":
+	case "store8", "store16", "store32", "store64", "chk":
 		return max2(exprMax(s.Addr, 0), exprMax(s.Val, 1), 1)
 	case "if":
 		m := exprMax(s.Cond, 0)
@@ -777,6 +795,8 @@ func exprMax(n *ir.Node, lv int) int {
 		return -1
 	case "index":
 		return exprMax(n.Arg, lv)
+	case "bload":
+		return max2(max2(exprMax(n.Base, lv), exprMax(n.Left, lv+1), lv+1), exprMax(n.Right, lv+1), lv+1)
 	case "add", "sub", "mul", "div", "mod", "and", "or", "xor", "shl", "shr", "ushr", "umulhi", "udiv", "urem", "ult", "eq", "ne", "lt", "le", "gt", "ge":
 		return max2(exprMax(n.Left, lv), exprMax(n.Right, lv+1), lv)
 	case "land", "lor":
@@ -884,6 +904,14 @@ func (c *cg) emitStmt(s *ir.Node) error {
 		return c.emitStore(s.Base, s.Val, 64, off)
 	case "store8", "store16", "store32", "store64":
 		return c.emitStore(s.Addr, s.Val, storeWidth[s.Op], 0)
+	case "chk":
+		// POC: cmp Addr, Val; jae trap (Addr < Val unsigned, or a trap).
+		cc, err := c.emitCmp(&ir.Node{Op: "ult", Left: s.Addr, Right: s.Val}, 0)
+		if err != nil {
+			return err
+		}
+		c.b.Jcc(0x80|(cc^1), c.trapLabel())
+		return nil
 	case "expr":
 		return c.emitExpr(s.Val, 0)
 	case "return":
@@ -1344,12 +1372,16 @@ func (c *cg) emitArith(n *ir.Node, lv int) error {
 // Condition codes: the low nibble shared by setcc (0F 9x) and jcc (0F 8x).
 // Flipping bit 0 negates one.
 func ccOf(op string) byte {
-	return map[string]byte{"eq": 0x4, "ne": 0x5, "lt": 0xC, "ge": 0xD, "le": 0xE, "gt": 0xF}[op]
+	return map[string]byte{"eq": 0x4, "ne": 0x5, "lt": 0xC, "ge": 0xD, "le": 0xE, "gt": 0xF, "ult": 0x2}[op]
 }
 
 // ccSwap is the condition for the operands the other way round.
 func ccSwap(cc byte) byte {
 	switch cc {
+	case 0x2:
+		return 0x7
+	case 0x7:
+		return 0x2
 	case 0xC:
 		return 0xF
 	case 0xF:
@@ -1893,6 +1925,15 @@ func (c *cg) emitExpr(n *ir.Node, lv int) error {
 		return c.emitExpr(n.Arg, lv)
 	case "field", "load8", "load16", "load32", "load64":
 		return c.emitLoad(n, lv, asm.RAX)
+	case "bload":
+		// POC: b[i] with b = (Base, Right) and i = Left, all simple
+		// operands: cmp i, n; jae trap; movzx rax, [p + i].
+		cc, err := c.emitCmp(&ir.Node{Op: "ult", Left: n.Left, Right: n.Right}, lv)
+		if err != nil {
+			return err
+		}
+		c.b.Jcc(0x80|(cc^1), c.trapLabel())
+		return c.emitLoad(&ir.Node{Op: "load8", Arg: &ir.Node{Op: "add", Left: n.Base, Right: n.Left}}, lv, asm.RAX)
 	case "bswap16", "bswap32", "bswap64":
 		if err := c.emitExpr(n.Arg, lv); err != nil {
 			return err
@@ -1938,7 +1979,7 @@ func (c *cg) emitExpr(n *ir.Node, lv int) error {
 		}
 		return nil
 	default:
-		return fmt.Errorf("expr %s", n.Op)
+		return fmt.Errorf("expr %s in %s", n.Op, c.fn.Name)
 	}
 }
 
@@ -1990,7 +2031,7 @@ func (c *cg) sizeOf(t string) (int64, error) {
 func (c *cg) fieldOff(base *ir.Node, field string) (int32, error) {
 	bt := c.typeOf(base)
 	if !strings.HasPrefix(bt, "*") {
-		return 0, fmt.Errorf("field %s on %s", field, bt)
+		return 0, fmt.Errorf("field %s on %s (base %s %q in %s, ref %v)", field, bt, base.Op, base.Name, c.fn.Name, c.ref[base])
 	}
 	full := strings.TrimPrefix(bt, "*")
 	i := strings.LastIndex(full, ".")
@@ -2020,7 +2061,7 @@ func (c *cg) typeOf(n *ir.Node) string {
 		return "invalid"
 	}
 	switch n.Op {
-	case "int", "strptr", "strlen", "sizeof", "add", "sub", "mul", "div", "mod", "and", "or", "xor", "shl", "shr", "ushr", "umulhi", "udiv", "urem", "neg", "bnot", "index", "len", "load8", "load16", "load32", "load64", "bswap16", "bswap32", "bswap64", "syscall":
+	case "int", "strptr", "strlen", "sizeof", "add", "sub", "mul", "div", "mod", "and", "or", "xor", "shl", "shr", "ushr", "umulhi", "udiv", "urem", "neg", "bnot", "index", "len", "load8", "load16", "load32", "load64", "bswap16", "bswap32", "bswap64", "syscall", "bload":
 		return "i64"
 	case "bool", "eq", "ne", "lt", "le", "gt", "ge", "ult", "land", "lor", "not":
 		return "bool"

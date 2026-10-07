@@ -233,8 +233,19 @@ func run(p *ir.Program, lean bool) *Result {
 				continue
 			}
 			c.r.Funcs++
-			if len(fn.Params) > 6 {
-				c.err(fn.ID, "arity", fmt.Sprintf("%s has %d parameters; at most 6", fn.Name, len(fn.Params)))
+			// POC: a bytes param takes two of the six registers.
+			words := 0
+			for _, pa := range fn.Params {
+				words++
+				if pa.Type == "bytes" {
+					words++
+				}
+			}
+			if words > 6 {
+				c.err(fn.ID, "arity", fmt.Sprintf("%s has %d parameter words; at most 6", fn.Name, words))
+			}
+			if fn.Result == "bytes" && fn.Result2 != "" {
+				c.err(fn.ID, "bad_type", "POC: (bytes, i64) is not implemented (three result words)")
 			}
 			var ps, names []string
 			pseen := map[string]bool{}
@@ -577,7 +588,7 @@ func ShowType(pkg, t string) string {
 }
 
 func scalar(t string) bool {
-	return t == "i64" || t == "bool" || strings.HasPrefix(t, "*") || t == "invalid"
+	return t == "i64" || t == "bool" || t == "bytes" || strings.HasPrefix(t, "*") || t == "invalid"
 }
 
 // resolve turns a source type into its full form (i64, bool, pkg.T, *pkg.T).
@@ -586,7 +597,7 @@ func (c *checker) resolve(t string) (string, error) {
 }
 
 func Resolve(pkg *ir.Package, t string, pkgs map[string]*ir.Package) (string, error) {
-	if t == "i64" || t == "bool" {
+	if t == "i64" || t == "bool" || t == "bytes" {
 		return t, nil
 	}
 	star := strings.HasPrefix(t, "*")
@@ -820,6 +831,11 @@ func (c *checker) stmt(e *env, s *ir.Node) {
 		if vt != ft && vt != "invalid" && ft != "invalid" {
 			c.mismatch(s.Val.ID, "field "+s.Name, vt, ft)
 		}
+	case "bstore":
+		if t := c.expr(e, s.Base); s.Base.Op != "bindex" {
+			c.issue(Issue{Code: "bad_type", ID: s.Base.ID, Message: "only a byte of a bytes can be assigned", Got: t})
+		}
+		c.want(e, s.Val, "i64", "stored value")
 	case "store8", "store16", "store32", "store64":
 		if s.Addr == nil {
 			c.builtinArity(e, s, 2)
@@ -986,10 +1002,39 @@ func (c *checker) expr0(e *env, n *ir.Node) string {
 		}
 		c.unknownName(n.ID, n.Name, e)
 		return "invalid"
+	case "blit":
+		return "bytes"
+	case "bmake":
+		c.want(e, n.Left, "i64", "address")
+		c.want(e, n.Right, "i64", "length")
+		return "bytes"
+	case "bindex":
+		c.want(e, n.Base, "bytes", "indexed value")
+		c.want(e, n.Arg, "i64", "index")
+		return "i64"
+	case "bslice":
+		c.want(e, n.Base, "bytes", "sliced value")
+		c.want(e, n.Left, "i64", "low bound")
+		c.want(e, n.Right, "i64", "high bound")
+		return "bytes"
+	case "blen":
+		c.want(e, n.Base, "bytes", "operand of len")
+		return "i64"
 	case "index", "len":
 		// A param or local of the name shadows a table, as it does a const.
 		var cn *ir.Const
-		if _, id, ok := e.lookup(n.Name); ok && n.Pkg == "" {
+		if t, id, ok := e.lookup(n.Name); ok && n.Pkg == "" && t == "bytes" {
+			// POC: b[i] and len(b) on a bytes local; the node is rewritten.
+			c.use(id, n.ID, "name", c.fn.ID, n.NameSpan)
+			n.Base = &ir.Node{ID: n.ID + "b", Op: "name", Name: n.Name, NameSpan: n.NameSpan}
+			if n.Op == "index" {
+				n.Op = "bindex"
+				c.want(e, n.Arg, "i64", "index")
+				return "i64"
+			}
+			n.Op = "blen"
+			return "i64"
+		} else if _, id, ok := e.lookup(n.Name); ok && n.Pkg == "" {
 			c.use(id, n.ID, "name", c.fn.ID, n.NameSpan)
 			c.issue(Issue{Code: "bad_type", ID: n.ID, Message: n.Name + " is a variable, not a table",
 				Hint: "only a const declared [N]i64 can be indexed or measured"})

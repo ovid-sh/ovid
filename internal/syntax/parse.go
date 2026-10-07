@@ -501,7 +501,7 @@ func (p *parser) parseType() (string, ir.Span) {
 	}
 	ns := p.tok(name)
 	if pkg == "" {
-		if name == "i64" || name == "bool" {
+		if name == "i64" || name == "bool" || name == "bytes" {
 			if star {
 				p.errorf("cannot use a pointer to %s", name)
 			}
@@ -645,6 +645,10 @@ func (p *parser) stmt(s int, id string) *ir.Node {
 			}
 			if e.Op == "field" {
 				return &ir.Node{Op: "setfield", Base: e.Base, Name: e.Name, Val: v, NameSpan: e.NameSpan}
+			}
+			if e.Op == "index" || e.Op == "bindex" {
+				// POC: b[i] = v stores a byte.
+				return &ir.Node{Op: "bstore", Base: e, Val: v}
 			}
 			p.errorf("cannot assign to this expression")
 		}
@@ -883,13 +887,22 @@ func (p *parser) postfix() *ir.Node {
 			continue
 		}
 		if p.peekByte('[') {
-			// Name[i] reads a table; the name node is replaced, not kept.
-			if e.Op != "name" {
-				p.errorf("only a table can be indexed")
-			}
+			// POC: Name[i] reads a table or a bytes (the checker decides);
+			// e[i] on any other base and e[i:j] are bytes operations.
 			p.expect('[')
 			i := p.parseExpr()
+			if p.peekByte(':') {
+				p.expect(':')
+				j := p.parseExpr()
+				p.expect(']')
+				e = &ir.Node{ID: p.eid(), Op: "bslice", Base: e, Left: i, Right: j, Span: ir.Span{File: p.file, Off: e.Span.Off, End: p.last}}
+				continue
+			}
 			p.expect(']')
+			if e.Op != "name" {
+				e = &ir.Node{ID: p.eid(), Op: "bindex", Base: e, Arg: i, Span: ir.Span{File: p.file, Off: e.Span.Off, End: p.last}}
+				continue
+			}
 			e = &ir.Node{ID: p.eid(), Op: "index", Name: e.Name, Pkg: e.Pkg, Arg: i, Span: ir.Span{File: p.file, Off: e.Span.Off, End: p.last}, NameSpan: e.NameSpan}
 			continue
 		}
@@ -914,7 +927,9 @@ func (p *parser) primary0() *ir.Node {
 		return e
 	}
 	if p.peekByte('"') {
-		p.errorf("bare string literal; write strptr(\"...\") for the address and strlen(\"...\") for the length")
+		// POC: a string literal is a bytes value.
+		s := p.string()
+		return &ir.Node{ID: p.eid(), Op: "blit", ValK: 3, Str: s}
 	}
 	if p.isNum() {
 		return p.number()
@@ -969,6 +984,20 @@ func (p *parser) primary0() *ir.Node {
 		s := p.string()
 		p.expect(')')
 		return &ir.Node{ID: p.eid(), Op: op, ValK: 3, Str: s}
+	}
+	if p.peekKw("bytes") {
+		// POC: bytes(p, n) makes a bytes value from an address and a length.
+		p.ident()
+		args, ok := p.builtinArgs(2)
+		if !ok {
+			p.errorf("bytes takes an address and a length")
+		}
+		return &ir.Node{ID: p.eid(), Op: "bmake", Left: args[0], Right: args[1]}
+	}
+	if p.peekByte('"') {
+		// POC: a string literal is a bytes value.
+		s := p.string()
+		return &ir.Node{ID: p.eid(), Op: "blit", ValK: 3, Str: s}
 	}
 	if !p.peekIdent() {
 		p.errorf("expected an expression")

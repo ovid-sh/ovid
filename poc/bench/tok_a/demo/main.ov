@@ -1,0 +1,46 @@
+package demo
+import ovid/io
+// A: today. A token is an address and a length, two values per call.
+const N i64 = 67108864
+
+func Fill(p i64, n i64) i64 {
+  var i i64 = 0
+  while i < n {
+    if i % 8 == 7 {
+      store8(p + i, 32)
+    } else {
+      store8(p + i, 97 + (i % 7))
+    }
+    i = i + 1
+  }
+  return 0
+}
+
+// Score is what a consumer does with a token: its first byte and length.
+func Score(p i64, n i64) i64 {
+  if n == 0 {
+    return 0
+  }
+  return load8(p) + n
+}
+
+func Tokens(p i64, n i64) i64 {
+  var total i64 = 0
+  var start i64 = 0
+  var i i64 = 0
+  while i <= n {
+    if i == n || load8(p + i) == 32 {
+      total = total + Score(p + start, i - start)
+      start = i + 1
+    }
+    i = i + 1
+  }
+  return total
+}
+
+func main(io *ovid/io.Cap) i64 {
+  var p i64 = ovid/io.Alloc(io, N)
+  Fill(p, N)
+  ovid/io.PrintInt(io, Tokens(p, N))
+  return 0
+}

@@ -1,0 +1,94 @@
+package demo
+import ovid/io
+
+type Req struct {
+  id i64
+  path bytes
+  n i64
+}
+
+// Eq compares two bytes.
+func Eq(a bytes, b bytes) bool {
+  if len(a) != len(b) {
+    return false
+  }
+  var i i64 = 0
+  while i < len(a) {
+    if a[i] != b[i] {
+      return false
+    }
+    i = i + 1
+  }
+  return true
+}
+
+// Trim returns s without leading spaces: a slice of a param.
+func Trim(s bytes) bytes {
+  var i i64 = 0
+  while i < len(s) && s[i] == 32 {
+    i = i + 1
+  }
+  return s[i:len(s)]
+}
+
+// Upper copies s uppercased into fresh memory.
+func Upper(io *ovid/io.Cap, s bytes) bytes {
+  var d bytes = bytes(ovid/io.Alloc(io, len(s)), len(s))
+  var i i64 = 0
+  while i < len(s) {
+    var c i64 = s[i]
+    if c >= 97 && c <= 122 {
+      c = c - 32
+    }
+    d[i] = c
+    i = i + 1
+  }
+  return d
+}
+
+func NewReq(io *ovid/io.Cap, path bytes) *Req {
+  var r *Req = ovid/io.Alloc(io, sizeof(Req)) as *Req
+  r.id = 7
+  r.path = path
+  r.n = len(path)
+  return r
+}
+
+func main(io *ovid/io.Cap) i64 {
+  var s bytes = "  hello world"
+  var t bytes = Trim(s)
+  if !Eq(t, "hello world") {
+    return 1
+  }
+  if len(t) != 11 || t[0] != 104 || t[10] != 100 {
+    return 2
+  }
+  var w bytes = t[6:11]
+  if !Eq(w, "world") {
+    return 3
+  }
+  var u bytes = Upper(io, w)
+  if !Eq(u, "WORLD") {
+    return 4
+  }
+  var r *Req = NewReq(io, t[0:5])
+  if r.n != 5 || !Eq(r.path, "hello") || r.path[1] != 101 {
+    return 5
+  }
+  r.path = u[1:3]
+  if !Eq(r.path, "OR") || sizeof(Req) != 32 {
+    return 6
+  }
+  // Forwarded bytes result, a slice of a slice, an empty slice.
+  var e bytes = Trim(t[5:5])
+  if len(e) != 0 {
+    return 7
+  }
+  ovid/io.Stdout(ovid/io.Arg(io, 0), 0)
+  if ovid/io.Argc(io) > 1 {
+    // argv[1] "trap": an index past the end must trap, not read.
+    var k i64 = len(u)
+    return u[k]
+  }
+  return 42
+}
