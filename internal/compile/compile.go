@@ -508,6 +508,12 @@ func (c *cg) bindStmts(stmts []*ir.Node) {
 		c.bindExpr(s.Base)
 		c.bindExpr(s.Addr)
 		c.bindExpr(s.Cond)
+		if s.Op == "return" {
+			// A lowered return b, e keeps e, the third word, in Args.
+			for _, a := range s.Args {
+				c.bindExpr(a)
+			}
+		}
 		switch s.Op {
 		case "var":
 			c.declare(s, s.Name, s.Type)
@@ -717,6 +723,11 @@ func (c *cg) weighStmts(stmts []*ir.Node, depth int, w []int) {
 		c.weighExpr(s.Val2, depth, w)
 		c.weighExpr(s.Base, depth, w)
 		c.weighExpr(s.Addr, depth, w)
+		if s.Op == "return" {
+			for _, a := range s.Args {
+				c.weighExpr(a, depth, w)
+			}
+		}
 		c.weighStmts(s.Then, depth, w)
 		c.weighStmts(s.Else, depth, w)
 		if s.Op == "while" {
@@ -755,6 +766,9 @@ func stmtsCall(stmts []*ir.Node) bool {
 			continue
 		}
 		if exprCalls(s.Val) || exprCalls(s.Val2) || exprCalls(s.Base) || exprCalls(s.Addr) || exprCalls(s.Cond) {
+			return true
+		}
+		if s.Op == "return" && len(s.Args) == 1 && exprCalls(s.Args[0]) {
 			return true
 		}
 		if stmtsCall(s.Then) || stmtsCall(s.Else) || stmtsCall(s.Body) {
