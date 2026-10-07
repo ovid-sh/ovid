@@ -56,5 +56,10 @@ func main(io *ovid/io.Cap) i64 {
   if !ult(n, -1) || ult(-1, n) || ult(n, n) || !ult(n, 0x7FFFFFFF) || ult(0x7FFFFFFF, n) {
     return 11
   }
+  // A simple left operand against a computed right one: the compare is
+  // emitted the other way round, so below becomes above.
+  if !ult(2, n + 1) || ult(0x10000000000, n + 1) || ult(-1, n + 1) || !ult(n, m + 0) || ult(m, n + 1) {
+    return 12
+  }
   return 0
 }
