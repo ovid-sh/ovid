@@ -708,6 +708,8 @@ func Expr(l *L, n *ovid/parse.Node, p *Pre) i64 {
     var a *ovid/parse.Node = n.args
     while a != 0 as *ovid/parse.Node {
       var nxt *ovid/parse.Node = a.next
+      // Off the list, so HasCall sees this argument alone.
+      a.next = 0 as *ovid/parse.Node
       var at *ovid/parse.Node = p.tail
       if IsBytesExpr(l, a) {
         Pair(l, a, p)

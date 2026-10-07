@@ -90,6 +90,10 @@ func Three(a i64, b bytes, c i64) i64 {
   return a * 100 + b[0] + c
 }
 
+func Id(v i64) i64 {
+  return v
+}
+
 func main(io *ovid/io.Cap) i64 {
   var s bytes = "  hello world"
   var t bytes = Trim(s)
@@ -162,6 +166,12 @@ func main(io *ovid/io.Cap) i64 {
   var c i64 = ovid/io.Alloc(io, 8)
   if Three(Count(c), t[Count(c):Count(c) + 1], Count(c)) != 100 + 108 + 4 {
     return 16
+  }
+  // A call-free argument before a slice, with a call after it: only the
+  // call moves (the two compilers must agree on what moves).
+  var q i64 = 2
+  if Three(q + 1, t[1:3], Id(q)) != 300 + 101 + 2 {
+    return 19
   }
   // The byte of a string literal, a slice of a call's result.
   if "abc"[1] != 98 || len(Upper(io, "xy")[1:2]) != 1 {
