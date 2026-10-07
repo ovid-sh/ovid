@@ -990,6 +990,14 @@ func (p *parser) primary0() *ir.Node {
 			return &ir.Node{ID: p.eid(), Op: "bytes", Args: args}
 		}
 		return &ir.Node{ID: p.eid(), Op: "bytes", Left: args[0], Right: args[1]}
+	case p.peekKw("ptr"):
+		// ptr(b): the address a bytes starts at, for a syscall.
+		p.ident()
+		args, ok := p.builtinArgs(1)
+		if !ok {
+			return &ir.Node{ID: p.eid(), Op: "ptr", Args: args}
+		}
+		return &ir.Node{ID: p.eid(), Op: "ptr", Arg: args[0]}
 	}
 	if p.peekByte('"') {
 		// A string literal is a bytes value in rodata.

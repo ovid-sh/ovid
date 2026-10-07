@@ -1034,6 +1034,12 @@ func (c *checker) expr0(e *env, n *ir.Node) string {
 		c.want(e, n.Left, "i64", "address of bytes")
 		c.want(e, n.Right, "i64", "length of bytes")
 		return "bytes"
+	case "ptr":
+		if n.Arg == nil {
+			return c.builtinArity(e, n, 1)
+		}
+		c.want(e, n.Arg, "bytes", "operand of ptr")
+		return "i64"
 	case "byte":
 		c.want(e, n.Base, "bytes", "indexed value")
 		c.want(e, n.Arg, "i64", "index")
@@ -1198,7 +1204,7 @@ var builtinForm = map[string]string{
 	"store8": "store8(addr, v)", "store16": "store16(addr, v)", "store32": "store32(addr, v)", "store64": "store64(addr, v)",
 	"bswap16": "bswap16(x) i64", "bswap32": "bswap32(x) i64", "bswap64": "bswap64(x) i64",
 	"ushr": "ushr(x, n) i64", "umulhi": "umulhi(a, b) i64", "udiv": "udiv(a, b) i64", "urem": "urem(a, b) i64", "ult": "ult(a, b) bool",
-	"bytes": "bytes(p, n) bytes",
+	"bytes": "bytes(p, n) bytes", "ptr": "ptr(b) i64",
 }
 
 // builtinArity reports builtin n called with other than want arguments,
