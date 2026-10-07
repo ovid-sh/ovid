@@ -124,6 +124,18 @@ type HeapMark struct {
   maps i64
 }
 
+// SubCap is a Cap of its own whose heap is n bytes (8-aligned) taken from
+// io's: a task can allocate from it and later give it all back with
+// MarkHeap and ResetHeap, while other tasks go on using io. It has no
+// arguments. When n runs out, its Alloc maps regions of its own, as io's do.
+func SubCap(io *Cap, n i64) *Cap {
+  var c *Cap = Alloc(io, sizeof(Cap)) as *Cap
+  var size i64 = (n + 7) & ^7
+  c.heap = Alloc(io, size)
+  c.size = size
+  return c
+}
+
 // MarkHeap records where the heap is now. The mark itself is allocated
 // before that point, so it outlives every reset to it.
 func MarkHeap(io *Cap) *HeapMark {

@@ -1,6 +1,6 @@
 package demo
 import ovid/io
-import nope // error: unknown_package 1 hint="packages are directories under the module root; std packages are ovid/http, ovid/io, ovid/mem, ovid/test"
+import nope // error: unknown_package 1 hint="packages are directories under the module root; std packages are ovid/async, ovid/http, ovid/io, ovid/mem, ovid/test"
 func main(io *ovid/io.Cap) i64 {
   return 0
 }

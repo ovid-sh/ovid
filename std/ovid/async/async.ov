@@ -1,0 +1,408 @@
+package ovid/async
+
+import ovid/io
+
+// The runtime of async funcs (POC A of #75). An async func is compiled to a
+// frame on the heap and a resume function (internal/async): each await is a
+// point where the function returns to its caller, and each call is a frame
+// the scheduler below runs until it is done. Natively, frames wait on epoll;
+// under wasm, on host timers.
+//
+// Three names here are filled in by the compiler: dispatch's body, and the
+// calls Self() and await Park() in an async func.
+
+// Frame is the head of every async call's frame. The compiler lays the
+// call's parameters and locals out after it, 8 bytes each, and relies on
+// this order.
+type Frame struct {
+  fn i64
+  st i64
+  res i64
+  waiter i64
+  done bool
+  next i64
+  rt *Rt
+  cap *ovid/io.Cap
+  arg i64
+}
+
+// Rt is the scheduler: a queue of frames ready to run, and what the others
+// wait on.
+type Rt struct {
+  io *ovid/io.Cap
+  head i64
+  tail i64
+  ep i64
+  evbuf i64
+  nfd i64
+  ntimer i64
+  tbuf i64
+  pool i64
+  frees i64
+}
+
+// Arena is a heap of its own for one task (a connection, say), given back
+// whole when the task releases it, so a server that never stops does not
+// grow.
+type Arena struct {
+  cap *ovid/io.Cap
+  mark *ovid/io.HeapMark
+  next i64
+}
+
+// EVENTS is how many epoll events one wait takes.
+const EVENTS i64 = 256
+
+// ARENA is the size of an arena's first region.
+const ARENA i64 = 65536
+
+// EXIT_DEADLOCK is Run's result when no frame is ready and none waits on
+// anything that could make it so.
+const EXIT_DEADLOCK i64 = 70
+
+// dispatch resumes the frame fr by calling its async func's resume
+// function, and returns 1 when the call is done, else 0. The compiler
+// replaces this body with one branch per async func of the program.
+func dispatch(fr i64) i64 {
+  return 1
+}
+
+// Self is the address of the running async call's frame. In an async func
+// the compiler replaces each call with the frame itself; elsewhere it is 0.
+func Self() i64 {
+  return 0
+}
+
+// Park suspends the running call until something enqueues its frame again,
+// and returns the frame's arg. The compiler turns `await Park()` into a
+// return to the scheduler; this body never runs.
+async func Park() i64 {
+  return 0
+}
+
+// New makes a scheduler that allocates from io.
+func New(io *ovid/io.Cap) *Rt {
+  var rt *Rt = ovid/io.Alloc(io, sizeof(Rt)) as *Rt
+  rt.io = io
+  return rt
+}
+
+// NewRoot is the frame of size bytes for async func fn, the first call
+// Run runs.
+func NewRoot(rt *Rt, size i64, fn i64) i64 {
+  var f *Frame = ovid/io.Alloc(rt.io, size) as *Frame
+  f.fn = fn
+  f.rt = rt
+  f.cap = rt.io
+  return f as i64
+}
+
+// NewFrame is a frame for a call made from the frame parent, allocated
+// from parent's heap, which the new call allocates from too.
+func NewFrame(parent i64, size i64, fn i64) i64 {
+  var p *Frame = parent as *Frame
+  return NewFrameIn(parent, p.cap, size, fn)
+}
+
+// NewFrameIn is NewFrame for a call whose first parameter is the heap it
+// allocates from: the frame comes from io.
+func NewFrameIn(parent i64, io *ovid/io.Cap, size i64, fn i64) i64 {
+  var p *Frame = parent as *Frame
+  var f *Frame = ovid/io.Alloc(io, size) as *Frame
+  f.fn = fn
+  f.rt = p.rt
+  f.cap = io
+  return f as i64
+}
+
+// Start runs the call fr until it first waits or is done, and reports
+// whether it is done (its result is then in fr's res).
+func Start(fr i64) bool {
+  if dispatch(fr) != 0 {
+    var f *Frame = fr as *Frame
+    f.done = true
+    return true
+  }
+  return false
+}
+
+// Enqueue puts fr at the end of its scheduler's ready queue.
+func Enqueue(fr i64) i64 {
+  var f *Frame = fr as *Frame
+  var rt *Rt = f.rt
+  f.next = 0
+  if rt.tail == 0 {
+    rt.head = fr
+  } else {
+    var t *Frame = rt.tail as *Frame
+    t.next = fr
+  }
+  rt.tail = fr
+  return 0
+}
+
+func pop(rt *Rt) i64 {
+  var fr i64 = rt.head
+  if fr != 0 {
+    var f *Frame = fr as *Frame
+    rt.head = f.next
+    if rt.head == 0 {
+      rt.tail = 0
+    }
+  }
+  return fr
+}
+
+// Run runs frames until root is done, and returns root's result.
+func Run(rt *Rt, root i64) i64 {
+  var f *Frame = root as *Frame
+  Enqueue(root)
+  while !f.done {
+    var fr i64 = pop(rt)
+    if fr == 0 {
+      if idle(rt) != 0 {
+        ovid/io.Eprint(strptr("ovid/async: deadlock: nothing is ready and nothing is awaited\n"))
+        return EXIT_DEADLOCK
+      }
+    } else {
+      step(fr)
+      release(rt)
+    }
+  }
+  return f.res
+}
+
+// step resumes fr; when it is done, the frame that waits for it is ready.
+func step(fr i64) i64 {
+  if dispatch(fr) != 0 {
+    var f *Frame = fr as *Frame
+    f.done = true
+    if f.waiter != 0 {
+      Enqueue(f.waiter)
+    }
+  }
+  return 0
+}
+
+// idle waits until some frame is ready: 0, or 1 when none ever can be.
+func idle(rt *Rt) i64 {
+  if rt.nfd > 0 {
+    var n i64, e i64 = ovid/io.EpollWait(rt.ep, rt.evbuf, EVENTS, -1)
+    if e != 0 {
+      return 0
+    }
+    var i i64 = 0
+    while i < n {
+      var fr i64 = ovid/io.EventData(rt.evbuf, i)
+      var f *Frame = fr as *Frame
+      f.arg = ovid/io.EventMask(rt.evbuf, i)
+      rt.nfd = rt.nfd - 1
+      Enqueue(fr)
+      i = i + 1
+    }
+    return 0
+  }
+  if rt.ntimer > 0 {
+    if rt.tbuf == 0 {
+      rt.tbuf = ovid/io.Alloc(rt.io, EVENTS * 8)
+    }
+    var n i64, e i64 = ovid/io.HostPoll(rt.tbuf, EVENTS)
+    if e != 0 {
+      return 1
+    }
+    var i i64 = 0
+    while i < n {
+      rt.ntimer = rt.ntimer - 1
+      Enqueue(load64(rt.tbuf + (i * 8)))
+      i = i + 1
+    }
+    return 0
+  }
+  return 1
+}
+
+// arm makes the frame self ready when fd has one of the events ev.
+func arm(self i64, fd i64, ev i64) i64 {
+  var f *Frame = self as *Frame
+  var rt *Rt = f.rt
+  if rt.ep == 0 {
+    var ep i64, e i64 = ovid/io.EpollCreate()
+    if e != 0 {
+      return e
+    }
+    rt.ep = ep
+    rt.evbuf = ovid/io.Alloc(rt.io, EVENTS * ovid/io.EVENT)
+  }
+  var mask i64 = ev | ovid/io.EPOLLONESHOT
+  var r i64 = ovid/io.EpollCtl(f.cap, rt.ep, ovid/io.EPOLL_CTL_MOD, fd, mask, self)
+  if r == ovid/io.E_NOENT {
+    r = ovid/io.EpollCtl(f.cap, rt.ep, ovid/io.EPOLL_CTL_ADD, fd, mask, self)
+  }
+  if r == 0 {
+    rt.nfd = rt.nfd + 1
+  }
+  return r
+}
+
+// WaitFd waits until fd has one of the events ev (ovid/io.EPOLL*), and
+// returns the events it has, or the negated error code of the wait.
+async func WaitFd(fd i64, ev i64) i64 {
+  var self i64 = Self()
+  var e i64 = arm(self, fd, ev)
+  if e != 0 {
+    return 0 - e
+  }
+  var got i64 = await Park()
+  return got
+}
+
+// Sleep waits ms milliseconds on a host timer (wasm hosts only).
+async func Sleep(ms i64) i64 {
+  var self i64 = Self()
+  var f *Frame = self as *Frame
+  var e i64 = ovid/io.HostSubmit(ms, self)
+  if e != 0 {
+    return 0 - e
+  }
+  var rt *Rt = f.rt
+  rt.ntimer = rt.ntimer + 1
+  await Park()
+  return 0
+}
+
+// Join waits for the task t (what spawn returned) to be done, and returns
+// its result. A task has one joiner at most.
+async func Join(t i64) i64 {
+  var f *Frame = t as *Frame
+  if !f.done {
+    f.waiter = Self()
+    await Park()
+  }
+  return f.res
+}
+
+// Accept waits for the next connection on the listening, non-blocking fd:
+// its fd (non-blocking), or a negated error code.
+async func Accept(fd i64) i64 {
+  while true {
+    var c i64, e i64 = ovid/io.Accept(fd, ovid/io.SOCK_NONBLOCK | ovid/io.SOCK_CLOEXEC)
+    if e == 0 {
+      return c
+    }
+    if e != ovid/io.E_AGAIN {
+      return 0 - e
+    }
+    var w i64 = await WaitFd(fd, ovid/io.EPOLLIN)
+    if w < 0 {
+      return w
+    }
+  }
+  return 0
+}
+
+// Read reads up to n bytes from the non-blocking fd into p, waiting until
+// there are some: the count (0 at the end), or a negated error code.
+async func Read(fd i64, p i64, n i64) i64 {
+  while true {
+    var k i64, e i64 = ovid/io.Read(fd, p, n)
+    if e == 0 {
+      return k
+    }
+    if e != ovid/io.E_AGAIN {
+      return 0 - e
+    }
+    var w i64 = await WaitFd(fd, ovid/io.EPOLLIN)
+    if w < 0 {
+      return w
+    }
+  }
+  return 0
+}
+
+// Write writes all n bytes at p to the non-blocking fd: 0, or a negated
+// error code.
+async func Write(fd i64, p i64, n i64) i64 {
+  var off i64 = 0
+  while off < n {
+    var k i64, e i64 = ovid/io.WriteSome(fd, p + off, n - off)
+    if e == 0 {
+      off = off + k
+    } else {
+      if e != ovid/io.E_AGAIN {
+        return 0 - e
+      }
+      var w i64 = await WaitFd(fd, ovid/io.EPOLLOUT)
+      if w < 0 {
+        return w
+      }
+    }
+  }
+  return 0
+}
+
+// Connect opens a non-blocking TCP connection to 127.0.0.1:port, waiting
+// for the handshake: its fd, or a negated error code.
+async func Connect(io *ovid/io.Cap, port i64) i64 {
+  var fd i64, e i64 = ovid/io.Connect(io, port, ovid/io.SOCK_NONBLOCK | ovid/io.SOCK_CLOEXEC)
+  if e == ovid/io.E_INPROGRESS {
+    var w i64 = await WaitFd(fd, ovid/io.EPOLLOUT)
+    if w < 0 {
+      ovid/io.Close(fd)
+      return w
+    }
+    if (w & ovid/io.EPOLLERR) != 0 {
+      ovid/io.Close(fd)
+      return 0 - ovid/io.E_IO
+    }
+    return fd
+  }
+  if e != 0 {
+    return 0 - e
+  }
+  return fd
+}
+
+// NewArena is an arena for a new task, from the scheduler of the running
+// call self (ovid/async.Self()): one given back earlier, or a new one.
+func NewArena(self i64) *Arena {
+  var f *Frame = self as *Frame
+  var rt *Rt = f.rt
+  if rt.pool != 0 {
+    var a *Arena = rt.pool as *Arena
+    rt.pool = a.next
+    a.next = 0
+    return a
+  }
+  var a *Arena = ovid/io.Alloc(rt.io, sizeof(Arena)) as *Arena
+  a.cap = ovid/io.SubCap(rt.io, ARENA)
+  a.mark = ovid/io.MarkHeap(a.cap)
+  return a
+}
+
+// ArenaCap is the heap of the arena a, to pass as an async func's first
+// parameter: the call's frame and everything it allocates come from it.
+func ArenaCap(a *Arena) *ovid/io.Cap {
+  return a.cap
+}
+
+// Release gives the arena a back once the running step is over: the call
+// self may still return, but nothing may use a's memory after.
+func Release(self i64, a *Arena) i64 {
+  var f *Frame = self as *Frame
+  var rt *Rt = f.rt
+  a.next = rt.frees
+  rt.frees = a as i64
+  return 0
+}
+
+// release resets the arenas given back during the last step and pools them.
+func release(rt *Rt) i64 {
+  while rt.frees != 0 {
+    var a *Arena = rt.frees as *Arena
+    rt.frees = a.next
+    ovid/io.ResetHeap(a.cap, a.mark)
+    a.next = rt.pool
+    rt.pool = a as i64
+  }
+  return 0
+}
