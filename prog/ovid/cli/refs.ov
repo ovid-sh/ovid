@@ -461,8 +461,6 @@ func WDeclID(io *ovid/io.Cap, b *ovid/mem.Buf, d *ovid/parse.Decl) i64 {
   return 0
 }
 
-// LineOf is the 1-based line of offset off in f, and the trimmed text of
-// that line: its start and length go to lp/ln.
 // Cursor remembers where the last LineFrom scan ended (file, byte, line,
 // line start), so the sorted uses of one file are counted in one pass
 // rather than from byte 0 each time.
