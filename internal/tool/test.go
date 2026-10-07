@@ -105,7 +105,7 @@ func TestWith(dir string, o TestOpts, w io.Writer) int {
 		return ExitOK
 	}
 	prog := testProgram(m.Prog, tests)
-	out, err := compile.CompileAll(prog)
+	out, err := compileAll(prog)
 	if err != nil {
 		return fail(w, "compile", err.Error(), "")
 	}

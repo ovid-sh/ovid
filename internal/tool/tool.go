@@ -19,7 +19,6 @@ import (
 	"ovid/internal/compile"
 	"ovid/internal/ir"
 	"ovid/internal/module"
-	"ovid/internal/wasm"
 )
 
 // Exit codes.
@@ -172,7 +171,7 @@ func DefaultOut(m *module.Module) string {
 
 // compileTo compiles p and writes the program to out.
 func compileTo(m *module.Module, p *ir.Program, out string) (*compile.Output, error) {
-	o, err := compile.CompileAll(p)
+	o, err := compileAll(p)
 	if err != nil {
 		return nil, err
 	}
@@ -204,7 +203,7 @@ func BuildTarget(dir, out, target string, w io.Writer) int {
 		}
 	}
 	if target == "wasm" {
-		bin, err := wasm.Compile(serveProgram(m.Prog))
+		bin, err := wasmCompile(serveProgram(m.Prog))
 		if err == nil {
 			err = module.ReplaceFile(out, bin, 0o644)
 		}
@@ -282,7 +281,7 @@ func RunWith(dir string, args []string, o RunOpts, w io.Writer) int {
 		emit(w, map[string]any{"ok": false, "errors": len(c.diags)})
 		return ExitBuild
 	}
-	out, err := compile.CompileAll(serveProgram(m.Prog))
+	out, err := compileAll(serveProgram(m.Prog))
 	if err != nil {
 		fail(w, "compile", err.Error(), "")
 		return ExitBuild
