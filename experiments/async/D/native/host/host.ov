@@ -1,0 +1,120 @@
+package host
+
+import ovid/io
+import app
+import ovid/mem
+
+// D: the host owns concurrency. app.Serve is a blocking handler for one
+// connection; this host runs many of them in forked processes, so a slow
+// upstream call blocks one process, not the server.
+//
+//   host <port> <upstream port> [N] [mode]
+//
+// mode:
+//   reuseport  (default) N workers, each with its own SO_REUSEPORT
+//              listener; the kernel spreads connections among them
+//   shared     N workers accepting on one listener the parent opened
+//   perconn    the parent accepts, and forks a child per connection that
+//              serves it and exits; N is ignored
+//
+// N defaults to 16. The parent of a pre-forked pool only waits; a worker
+// that dies is reported on standard error and not replaced.
+
+// worker is a pre-forked child: listen if it must, then serve forever.
+func worker(io *ovid/io.Cap, ln i64, port i64, up i64) i64 {
+  if ln < 0 {
+    var own i64, e i64 = ovid/io.Listen(io, port, 0, true)
+    if e != 0 {
+      ovid/io.Eprint(strptr("worker listen: "))
+      ovid/io.Eprint(ovid/io.ErrText(e))
+      ovid/io.Eprint(strptr("\n"))
+      ovid/io.Exit(1)
+    }
+    ln = own
+  }
+  app.Loop(io, ln, up)
+  ovid/io.Exit(0)
+  return 0
+}
+
+// prefork starts n workers and waits for them. ln is the shared listener,
+// or -1 for each worker to open its own with SO_REUSEPORT.
+func prefork(io *ovid/io.Cap, n i64, ln i64, port i64, up i64) i64 {
+  var pids i64 = ovid/io.Alloc(io, n * 8)
+  var i i64 = 0
+  while i < n {
+    var pid i64 = ovid/io.Fork()
+    if pid == 0 {
+      worker(io, ln, port, up)
+    }
+    if pid < 0 {
+      ovid/io.Eprint(strptr("fork failed\n"))
+      return 1
+    }
+    store64(pids + (i * 8), pid)
+    i = i + 1
+  }
+  i = 0
+  while i < n {
+    ovid/io.Wait(io, load64(pids + (i * 8)))
+    ovid/io.Eprint(strptr("a worker ended\n"))
+    i = i + 1
+  }
+  return 1
+}
+
+// perconn forks a child for every connection. The child serves it and
+// exits; the parent closes its copy and reaps whatever children have ended.
+func perconn(io *ovid/io.Cap, ln i64, up i64) i64 {
+  var m *ovid/io.HeapMark = ovid/io.MarkHeap(io)
+  while true {
+    var fd i64, ae i64 = ovid/io.Accept(ln, 0)
+    if ae == 0 {
+      var pid i64 = ovid/io.Fork()
+      if pid == 0 {
+        ovid/io.Close(ln)
+        app.Serve(io, fd, up)
+        ovid/io.Exit(0)
+      }
+      ovid/io.Close(fd)
+    }
+    while ovid/io.Reap(io) > 0 {
+    }
+    ovid/io.ResetHeap(io, m)
+  }
+  return 0
+}
+
+func main(io *ovid/io.Cap) i64 {
+  if ovid/io.Argc(io) < 3 {
+    ovid/io.Eprint(strptr("usage: host <port> <upstream port> [N] [reuseport|shared|perconn]\n"))
+    return 64
+  }
+  var port i64 = app.Atoi(ovid/io.Arg(io, 1))
+  var up i64 = app.Atoi(ovid/io.Arg(io, 2))
+  var n i64 = 16
+  if ovid/io.Argc(io) > 3 {
+    n = app.Atoi(ovid/io.Arg(io, 3))
+  }
+  var mode i64 = strptr("reuseport")
+  if ovid/io.Argc(io) > 4 {
+    mode = ovid/io.Arg(io, 4)
+  }
+  var ml i64 = ovid/io.CLen(mode)
+  if ovid/mem.Eq(mode, ml, strptr("reuseport"), strlen("reuseport")) {
+    return prefork(io, n, -1, port, up)
+  }
+  var ln i64, e i64 = ovid/io.Listen(io, port, 0, false)
+  if e != 0 {
+    ovid/io.Eprint(ovid/io.ErrText(e))
+    return 1
+  }
+  if ovid/mem.Eq(mode, ml, strptr("shared"), strlen("shared")) {
+    return prefork(io, n, ln, port, up)
+  }
+  if ovid/mem.Eq(mode, ml, strptr("perconn"), strlen("perconn")) {
+    return perconn(io, ln, up)
+  }
+  ovid/io.Eprint(strptr("unknown mode\n"))
+  return 64
+}
