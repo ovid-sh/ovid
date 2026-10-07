@@ -9,14 +9,15 @@
 // a chk and a store8; b[i:j] the pair (p + i, j - i) after two chks;
 // len(b) is b#n; "lit" is strptr and strlen; bytes(p, n) the pair.
 //
-// The checks and the pairs' parts must be simple operands (a name or a
-// constant), so anything else is first moved into a temp local (t#k)
-// by a statement placed before the one being lowered. Moving an
-// expression keeps evaluation order: every earlier expression in the
-// same statement that is not a simple operand is moved too (a memory
-// read left of a call that writes it must come first), and an operand of &&
-// or || or a while condition that needs a move is restructured into an
-// if, so the move runs exactly when the operand would have.
+// The checks and the pairs' parts are simple operands (a name or a
+// constant) or, for a field, its two loads left in place; anything else
+// is first moved into a temp local (t#k) by a statement placed before
+// the one being lowered. Moving an expression keeps evaluation order:
+// every earlier expression in the same statement that is not a simple
+// operand is moved too (a memory read left of a call that writes it
+// must come first), the halves of a field among them, and an operand of
+// && or || or a while condition that needs a move is restructured into
+// an if, so the move runs exactly when the operand would have.
 //
 // The lowered tree is the code generator's alone: ids, hashes, and the
 // tools see the tree the checker saw.
@@ -218,6 +219,49 @@ func simple(n *ir.Node) bool {
 	return false
 }
 
+// pure says n is a load with nothing to run: a local, or a field of one.
+func pure(n *ir.Node) bool {
+	return n.Op == "name" || n.Op == "field" && pure(n.Base)
+}
+
+// lowType is the type a temp holding the lowered n takes: typeOf, except
+// that a field it still calls bytes is the address half of a pair, which
+// pair leaves as a load of the field named after it.
+func (l *lowerer) lowType(n *ir.Node) string {
+	if t := l.typeOf(n); t != "bytes" || n.Op != "field" {
+		return t
+	}
+	return "i64"
+}
+
+// fix makes the lowered n a simple operand, moving it into a temp if it
+// is not one.
+func (l *lowerer) fix(n *ir.Node, p *pre) *ir.Node {
+	if simple(n) {
+		return n
+	}
+	return l.temp(l.lowType(n), n, p)
+}
+
+// fixAt moves the lowered operands in ns that are not simple into temps
+// declared at position at of p, ahead of what was added since, so their
+// reads keep their place in source order.
+func (l *lowerer) fixAt(p *pre, at int, ns ...**ir.Node) {
+	if len(*p) > at {
+		l.fixAll(p, at, ns...)
+	}
+}
+
+// fixAll is fixAt whether or not p grew.
+func (l *lowerer) fixAll(p *pre, at int, ns ...**ir.Node) {
+	for _, n := range ns {
+		if !simple(*n) {
+			l.insertTemp(p, at, n)
+			at++
+		}
+	}
+}
+
 // temp declares a fresh local of type t holding v, in pre, and names it.
 func (l *lowerer) temp(t string, v *ir.Node, p *pre) *ir.Node {
 	l.tmp++
@@ -234,14 +278,12 @@ func (l *lowerer) hoist(n *ir.Node, p *pre) (*ir.Node, error) {
 	if err != nil {
 		return nil, err
 	}
-	if simple(n) {
-		return n, nil
-	}
-	return l.temp(l.typeOf(n), n, p), nil
+	return l.fix(n, p), nil
 }
 
-// pair lowers a bytes-typed expression to its address and length, both
-// simple operands, placing in p the statements that must run first.
+// pair lowers a bytes-typed expression to its address and length: simple
+// operands, or a field's two loads in place, placing in p the statements
+// that must run first.
 func (l *lowerer) pair(n *ir.Node, p *pre) (addr, ln *ir.Node, err error) {
 	switch n.Op {
 	case "name":
@@ -262,18 +304,22 @@ func (l *lowerer) pair(n *ir.Node, p *pre) (addr, ln *ir.Node, err error) {
 		*p = append(*p, &ir.Node{Op: "chk", Addr: ln, Val: &ir.Node{Op: "int", Int: math.MinInt64}})
 		return a, ln, nil
 	case "field":
-		base, err := l.hoist(n.Base, p)
+		// Two loads of the expanded fields, left where they are: a base
+		// with nothing to run is read in place, any other is moved first.
+		base, err := l.expr(n.Base, p)
 		if err != nil {
 			return nil, nil, err
 		}
-		a := l.temp("i64", &ir.Node{Op: "field", Base: base, Name: n.Name}, p)
-		ln = l.temp("i64", &ir.Node{Op: "field", Base: base, Name: n.Name + "#n"}, p)
-		return a, ln, nil
+		if !pure(base) {
+			base = l.temp(l.typeOf(base), base, p)
+		}
+		return &ir.Node{Op: "field", Base: base, Name: n.Name}, &ir.Node{Op: "field", Base: base, Name: n.Name + "#n"}, nil
 	case "slice":
 		bp, bn, err := l.pair(n.Base, p)
 		if err != nil {
 			return nil, nil, err
 		}
+		at := len(*p)
 		i, err := l.hoist(n.Left, p)
 		if err != nil {
 			return nil, nil, err
@@ -282,6 +328,7 @@ func (l *lowerer) pair(n *ir.Node, p *pre) (addr, ln *ir.Node, err error) {
 		if err != nil {
 			return nil, nil, err
 		}
+		l.fixAt(p, at, &bp, &bn)
 		// j <= n and i <= j, unsigned, so a negative bound trips too.
 		*p = append(*p, &ir.Node{Op: "chk", Addr: j, Val: add(bn, one())})
 		*p = append(*p, &ir.Node{Op: "chk", Addr: i, Val: add(j, one())})
@@ -326,10 +373,12 @@ func (l *lowerer) expr(n *ir.Node, p *pre) (*ir.Node, error) {
 		if err != nil {
 			return nil, err
 		}
+		at := len(*p)
 		i, err := l.hoist(n.Arg, p)
 		if err != nil {
 			return nil, err
 		}
+		l.fixAt(p, at, &bp, &bn)
 		return &ir.Node{ID: n.ID, Op: "bload", Base: bp, Left: i, Right: bn}, nil
 	case "blen":
 		_, bn, err := l.pair(n.Base, p)
@@ -376,6 +425,9 @@ func (l *lowerer) expr(n *ir.Node, p *pre) (*ir.Node, error) {
 					return nil, err
 				}
 				kept = l.keepOrder(p, at, m.Args, kept)
+				if !simple(ap) {
+					kept = append(kept, len(m.Args), len(m.Args)+1)
+				}
 				m.Args = append(m.Args, ap, an)
 				continue
 			}
@@ -449,7 +501,7 @@ func (l *lowerer) keepOrder(p *pre, at int, args []*ir.Node, kept []int) []int {
 func (l *lowerer) insertTemp(p *pre, at int, n **ir.Node) {
 	l.tmp++
 	nm := fmt.Sprintf("t#%d", l.tmp)
-	t := l.typeOf(*n)
+	t := l.lowType(*n)
 	l.bind(nm, t)
 	decl := &ir.Node{Op: "var", Name: nm, Type: t, Val: *n}
 	*p = append((*p)[:at], append(pre{decl}, (*p)[at:]...)...)
@@ -577,6 +629,10 @@ func (l *lowerer) stmt(s *ir.Node) ([]*ir.Node, error) {
 			if err != nil {
 				return nil, err
 			}
+			// Both words are read before the first store: through a cast
+			// the destination may overlap the source, and the whole value
+			// is what the assignment means.
+			a, ln = l.fix(a, &p), l.fix(ln, &p)
 			return append(p, &ir.Node{ID: s.ID, Op: "setfield", Base: base, Name: s.Name, Val: a},
 				&ir.Node{Op: "setfield", Base: base, Name: s.Name + "#n", Val: ln}), nil
 		}
@@ -591,6 +647,7 @@ func (l *lowerer) stmt(s *ir.Node) ([]*ir.Node, error) {
 		if err != nil {
 			return nil, err
 		}
+		at := len(p)
 		i, err := l.hoist(ix.Arg, &p)
 		if err != nil {
 			return nil, err
@@ -598,6 +655,14 @@ func (l *lowerer) stmt(s *ir.Node) ([]*ir.Node, error) {
 		v, err := l.expr(s.Val, &p)
 		if err != nil {
 			return nil, err
+		}
+		// The store computes v before its address, so when v could
+		// change b, b is read first and the check and the store see the
+		// same pair.
+		if !simple(v) {
+			l.fixAll(&p, at, &bp, &bn)
+		} else {
+			l.fixAt(&p, at, &bp, &bn)
 		}
 		return append(p, &ir.Node{Op: "chk", Addr: i, Val: bn},
 			&ir.Node{ID: s.ID, Op: "store8", Addr: add(bp, i), Val: v}), nil
@@ -617,7 +682,10 @@ func (l *lowerer) stmt(s *ir.Node) ([]*ir.Node, error) {
 			}
 			m := &ir.Node{ID: s.ID, Op: "return", Val: a, Val2: ln}
 			if s.Val2 != nil {
-				// return b, e: the error code is the third word.
+				// return b, e: the error code is the third word, and the
+				// code generator computes it first, so b is read into
+				// temps ahead of it.
+				m.Val, m.Val2 = l.fix(a, &p), l.fix(ln, &p)
 				e, err := l.expr(s.Val2, &p)
 				if err != nil {
 					return nil, err
