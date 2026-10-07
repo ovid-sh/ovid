@@ -95,9 +95,9 @@ func Program(io *ovid/io.Cap, m *ovid/parse.Mod) i64 {
   while k != 0 as *ovid/parse.Pkg {
     var fn *ovid/parse.Decl = k.fs
     while fn != 0 as *ovid/parse.Decl {
-      if IsBytes(fn.typp, fn.typn) {
+      if IsBytes(ptr(fn.typ), len(fn.typ)) {
         fn.bres = 2
-        if fn.typ2n != 0 {
+        if len(fn.typ2) != 0 {
           fn.bres = 3
         }
       }
@@ -147,14 +147,11 @@ func NName(l *L, np i64, nn i64) i64 {
 func Expand(l *L, d *ovid/parse.Decl) i64 {
   var f *ovid/parse.Decl = d.sub
   while f != 0 as *ovid/parse.Decl {
-    if IsBytes(f.typp, f.typn) {
-      f.typp = strptr("i64")
-      f.typn = 3
+    if IsBytes(ptr(f.typ), len(f.typ)) {
+      f.typ = "i64"
       var g *ovid/parse.Decl = ovid/io.Alloc(l.io, sizeof(ovid/parse.Decl)) as *ovid/parse.Decl
-      g.namep = NName(l, f.namep, f.namen)
-      g.namen = f.namen + 2
-      g.typp = strptr("i64")
-      g.typn = 3
+      g.name = bytes(NName(l, ptr(f.name), len(f.name)), len(f.name) + 2)
+      g.typ = "i64"
       g.file = f.file
       g.off = f.off
       g.pkg = f.pkg
@@ -174,16 +171,14 @@ func Func(l *L, fn *ovid/parse.Decl) i64 {
   l.nenv = 0
   var pa *ovid/parse.Decl = fn.sub
   while pa != 0 as *ovid/parse.Decl {
-    Bind(l, pa.namep, pa.namen, pa.typp, pa.typn)
+    Bind(l, ptr(pa.name), len(pa.name), ptr(pa.typ), len(pa.typ))
     pa = pa.next
   }
   Expand(l, fn)
   if fn.bres != 0 {
-    fn.typp = strptr("i64")
-    fn.typn = 3
-    if fn.typ2n == 0 {
-      fn.typ2p = strptr("i64")
-      fn.typ2n = 3
+    fn.typ = "i64"
+    if len(fn.typ2) == 0 {
+      fn.typ2 = "i64"
     }
   }
   fn.body = Stmts(l, fn.body)
@@ -266,20 +261,20 @@ func FieldIsBytes(l *L, bt *ovid/parse.Decl, fp i64, fnn i64) bool {
     return false
   }
   var g *ovid/parse.Decl = f.next
-  if g.namen != fnn + 2 {
+  if len(g.name) != fnn + 2 {
     return false
   }
-  return ovid/mem.Eq(bytes(g.namep, fnn), bytes(fp, fnn)) && load8(g.namep + fnn) == 35 && load8((g.namep + fnn) + 1) == 110
+  return ovid/mem.Eq(bytes(ptr(g.name), fnn), bytes(fp, fnn)) && load8(ptr(g.name) + fnn) == 35 && load8((ptr(g.name) + fnn) + 1) == 110
 }
 
 func Callee(l *L, n *ovid/parse.Node) *ovid/parse.Decl {
   var pp i64 = ptr(l.pkg.path)
   var pn i64 = len(l.pkg.path)
-  if n.pkgn != 0 {
-    pp = n.pkgp
-    pn = n.pkgn
+  if len(n.pkg) != 0 {
+    pp = ptr(n.pkg)
+    pn = len(n.pkg)
   }
-  return ovid/parse.FindFunc(l.mod, pp, pn, n.fnp, n.fnn)
+  return ovid/parse.FindFunc(l.mod, pp, pn, ptr(n.fn), len(n.fn))
 }
 
 // ResultWords is how many words a call to n returns: 1, or 2 or 3 for a
@@ -303,7 +298,7 @@ func SetTy(l *L, tp i64, tn i64) i64 {
 func TypeOf(l *L, n *ovid/parse.Node) i64 {
   var op i64 = n.op
   if op == ovid/parse.OP_NAME {
-    if n.pkgn == 0 && Lookup(l, n.namep, n.namen) {
+    if len(n.pkg) == 0 && Lookup(l, ptr(n.name), len(n.name)) {
       return 0
     }
     return SetTy(l, strptr("i64"), 3)
@@ -312,18 +307,18 @@ func TypeOf(l *L, n *ovid/parse.Node) i64 {
     return SetTy(l, strptr("bytes"), 5)
   }
   if op == ovid/parse.OP_CAST {
-    return SetTy(l, n.typp, n.typn)
+    return SetTy(l, ptr(n.typ), len(n.typ))
   }
   if op == ovid/parse.OP_FIELD {
     TypeOf(l, n.base)
     var bt *ovid/parse.Decl = FindType(l, l.typ, l.tyn)
-    if FieldIsBytes(l, bt, n.namep, n.namen) {
+    if FieldIsBytes(l, bt, ptr(n.name), len(n.name)) {
       return SetTy(l, strptr("bytes"), 5)
     }
     if bt != 0 as *ovid/parse.Decl {
-      var f *ovid/parse.Decl = ovid/parse.FindDecl(bt.sub, n.namep, n.namen)
+      var f *ovid/parse.Decl = ovid/parse.FindDecl(bt.sub, ptr(n.name), len(n.name))
       if f != 0 as *ovid/parse.Decl {
-        return SetTy(l, f.typp, f.typn)
+        return SetTy(l, ptr(f.typ), len(f.typ))
       }
     }
     return SetTy(l, strptr("i64"), 3)
@@ -334,7 +329,7 @@ func TypeOf(l *L, n *ovid/parse.Node) i64 {
     }
     var fn *ovid/parse.Decl = Callee(l, n)
     if fn != 0 as *ovid/parse.Decl {
-      return SetTy(l, fn.typp, fn.typn)
+      return SetTy(l, ptr(fn.typ), len(fn.typ))
     }
     return SetTy(l, strptr("i64"), 3)
   }
@@ -357,8 +352,7 @@ func NewNode(l *L, op i64) *ovid/parse.Node {
 
 func Name(l *L, np i64, nn i64) *ovid/parse.Node {
   var n *ovid/parse.Node = NewNode(l, ovid/parse.OP_NAME)
-  n.namep = np
-  n.namen = nn
+  n.name = bytes(np, nn)
   return n
 }
 
@@ -430,10 +424,8 @@ func Temp(l *L, tp i64, tn i64, v *ovid/parse.Node, p *Pre) *ovid/parse.Node {
   var nn i64 = load64(cell + 8)
   Bind(l, np, nn, tp, tn)
   var d *ovid/parse.Node = NewNode(l, ovid/parse.OP_VAR)
-  d.namep = np
-  d.namen = nn
-  d.typp = tp
-  d.typn = tn
+  d.name = bytes(np, nn)
+  d.typ = bytes(tp, tn)
   d.val = v
   Append(p, d)
   return Name(l, np, nn)
@@ -456,8 +448,7 @@ func Become(l *L, n *ovid/parse.Node, np i64, nn i64) i64 {
   var end i64 = n.end
   var z i64 = 0
   ovid/mem.CopyN(n as i64, NewNode(l, ovid/parse.OP_NAME) as i64, sizeof(ovid/parse.Node))
-  n.namep = np
-  n.namen = nn
+  n.name = bytes(np, nn)
   n.next = next
   n.num = num
   n.off = off
@@ -482,7 +473,7 @@ func Fix(l *L, n *ovid/parse.Node, p *Pre) *ovid/parse.Node {
   var tp i64 = l.typ
   var tn i64 = l.tyn
   var t *ovid/parse.Node = Temp(l, tp, tn, Copy(l, n), p)
-  Become(l, n, t.namep, t.namen)
+  Become(l, n, ptr(t.name), len(t.name))
   return n
 }
 
@@ -515,19 +506,17 @@ func FixAll(l *L, p *Pre, mark *ovid/parse.Node, a *ovid/parse.Node, b *ovid/par
 func Pair(l *L, n *ovid/parse.Node, p *Pre) i64 {
   var op i64 = n.op
   if op == ovid/parse.OP_NAME {
-    l.pa = Name(l, n.namep, n.namen)
-    l.pl = Name(l, NName(l, n.namep, n.namen), n.namen + 2)
+    l.pa = Name(l, ptr(n.name), len(n.name))
+    l.pl = Name(l, NName(l, ptr(n.name), len(n.name)), len(n.name) + 2)
     return 0
   }
   if op == ovid/parse.OP_STR {
     var sp *ovid/parse.Node = NewNode(l, ovid/parse.OP_STRPTR)
     sp.valk = 3
-    sp.strp = n.strp
-    sp.strn = n.strn
+    sp.str = n.str
     var sl *ovid/parse.Node = NewNode(l, ovid/parse.OP_STRLEN)
     sl.valk = 3
-    sl.strp = n.strp
-    sl.strn = n.strn
+    sl.str = n.str
     l.pa = sp
     l.pl = sl
     return 0
@@ -561,12 +550,10 @@ func Pair(l *L, n *ovid/parse.Node, p *Pre) i64 {
     }
     var fp *ovid/parse.Node = NewNode(l, ovid/parse.OP_FIELD)
     fp.base = base
-    fp.namep = n.namep
-    fp.namen = n.namen
+    fp.name = n.name
     var fnn *ovid/parse.Node = NewNode(l, ovid/parse.OP_FIELD)
     fnn.base = base
-    fnn.namep = NName(l, n.namep, n.namen)
-    fnn.namen = n.namen + 2
+    fnn.name = bytes(NName(l, ptr(n.name), len(n.name)), len(n.name) + 2)
     l.pa = fp
     l.pl = fnn
     return 0
@@ -604,14 +591,10 @@ func Pair(l *L, n *ovid/parse.Node, p *Pre) i64 {
     var t2p i64 = NName(l, tp, tn)
     Bind(l, t2p, tn + 2, strptr("i64"), 3)
     var v2 *ovid/parse.Node = NewNode(l, ovid/parse.OP_VAR2)
-    v2.namep = tp
-    v2.namen = tn
-    v2.typp = strptr("i64")
-    v2.typn = 3
-    v2.name2p = t2p
-    v2.name2n = tn + 2
-    v2.typ2p = strptr("i64")
-    v2.typ2n = 3
+    v2.name = bytes(tp, tn)
+    v2.typ = "i64"
+    v2.name2 = bytes(t2p, tn + 2)
+    v2.typ2 = "i64"
     v2.val = Copy(l, n)
     Append(p, v2)
     l.pa = Name(l, tp, tn)
@@ -643,10 +626,8 @@ func MoveCalls(l *L, p *Pre, mark *ovid/parse.Node, kept *ovid/parse.Node) *ovid
     var nn i64 = load64(cell + 8)
     Bind(l, np, nn, tp, tn)
     var d *ovid/parse.Node = NewNode(l, ovid/parse.OP_VAR)
-    d.namep = np
-    d.namen = nn
-    d.typp = tp
-    d.typn = tn
+    d.name = bytes(np, nn)
+    d.typ = bytes(tp, tn)
     d.val = Copy(l, n)
     mark = InsertAfter(p, mark, d)
     Become(l, n, np, nn)
@@ -684,8 +665,8 @@ func Expr(l *L, n *ovid/parse.Node, p *Pre) i64 {
   // The checker rewrites b[i] and len(b) on a bytes local to byte and
   // blen; a tree compiled without it still has index and len, which say
   // the same when the name is a bytes.
-  if (op == ovid/parse.OP_INDEX || op == ovid/parse.OP_LEN) && n.pkgn == 0 && n.base != 0 as *ovid/parse.Node {
-    if Lookup(l, n.namep, n.namen) && IsBytes(l.typ, l.tyn) {
+  if (op == ovid/parse.OP_INDEX || op == ovid/parse.OP_LEN) && len(n.pkg) == 0 && n.base != 0 as *ovid/parse.Node {
+    if Lookup(l, ptr(n.name), len(n.name)) && IsBytes(l.typ, l.tyn) {
       if op == ovid/parse.OP_INDEX {
         op = ovid/parse.OP_BYTE
       } else {
@@ -719,7 +700,7 @@ func Expr(l *L, n *ovid/parse.Node, p *Pre) i64 {
       ln = l.pa
     }
     if ln.op == ovid/parse.OP_NAME {
-      Become(l, n, ln.namep, ln.namen)
+      Become(l, n, ptr(ln.name), len(ln.name))
     } else {
       // Of a literal (strlen or strptr) or a field (its load).
       var next *ovid/parse.Node = n.next
@@ -742,21 +723,20 @@ func Expr(l *L, n *ovid/parse.Node, p *Pre) i64 {
     // for ||), and the expression is t.
     var t *ovid/parse.Node = Temp(l, strptr("bool"), 4, n.left, p)
     var set *ovid/parse.Node = NewNode(l, ovid/parse.OP_ASSIGN)
-    set.namep = t.namep
-    set.namen = t.namen
+    set.name = t.name
     set.val = n.right
     Append(rp, set)
     var ifn *ovid/parse.Node = NewNode(l, ovid/parse.OP_IF)
     ifn.then = rp.head
     if op == ovid/parse.OP_LAND {
-      ifn.cond = Name(l, t.namep, t.namen)
+      ifn.cond = Name(l, ptr(t.name), len(t.name))
     } else {
       var nt *ovid/parse.Node = NewNode(l, ovid/parse.OP_NOT)
-      nt.arg = Name(l, t.namep, t.namen)
+      nt.arg = Name(l, ptr(t.name), len(t.name))
       ifn.cond = nt
     }
     Append(p, ifn)
-    Become(l, n, t.namep, t.namen)
+    Become(l, n, ptr(t.name), len(t.name))
     return 0
   }
   if op == ovid/parse.OP_CALL || op == ovid/parse.OP_SYSCALL {
@@ -895,22 +875,17 @@ func Stmts(l *L, s *ovid/parse.Node) *ovid/parse.Node {
 
 func ThirdName(l *L, s *ovid/parse.Node) i64 {
   // var b bytes, e i64 = f(): b, b#n, and e, the third in rcx.
-  var third *ovid/parse.Node = Name(l, s.name2p, s.name2n)
-  if ovid/parse.IsBlank(s.namep, s.namen) {
-    s.name2p = s.namep
-    s.name2n = s.namen
+  var third *ovid/parse.Node = Name(l, ptr(s.name2), len(s.name2))
+  if ovid/parse.IsBlank(ptr(s.name), len(s.name)) {
+    s.name2 = s.name
   } else {
-    s.name2p = NName(l, s.namep, s.namen)
-    s.name2n = s.namen + 2
+    s.name2 = bytes(NName(l, ptr(s.name), len(s.name)), len(s.name) + 2)
   }
   if s.op == ovid/parse.OP_VAR2 {
-    s.typp = strptr("i64")
-    s.typn = 3
-    s.typ2p = strptr("i64")
-    s.typ2n = 3
+    s.typ = "i64"
+    s.typ2 = "i64"
   } else {
-    s.typ2p = 0
-    s.typ2n = 0
+    s.typ2 = bytes(0, 0)
   }
   s.args = third
   return 0
@@ -921,45 +896,39 @@ func ThirdName(l *L, s *ovid/parse.Node) i64 {
 func Stmt(l *L, s *ovid/parse.Node, p *Pre) i64 {
   var op i64 = s.op
   if op == ovid/parse.OP_VAR {
-    if IsBytes(s.typp, s.typn) {
+    if IsBytes(ptr(s.typ), len(s.typ)) {
       if s.val.op == ovid/parse.OP_CALL {
         Expr(l, s.val, p)
-        Bind(l, s.namep, s.namen, strptr("bytes"), 5)
+        Bind(l, ptr(s.name), len(s.name), strptr("bytes"), 5)
         s.op = ovid/parse.OP_VAR2
-        s.typp = strptr("i64")
-        s.typn = 3
-        s.name2p = NName(l, s.namep, s.namen)
-        s.name2n = s.namen + 2
-        s.typ2p = strptr("i64")
-        s.typ2n = 3
+        s.typ = "i64"
+        s.name2 = bytes(NName(l, ptr(s.name), len(s.name)), len(s.name) + 2)
+        s.typ2 = "i64"
         Append(p, s)
         return 0
       }
       Pair(l, s.val, p)
-      Bind(l, s.namep, s.namen, strptr("bytes"), 5)
-      s.typp = strptr("i64")
-      s.typn = 3
+      Bind(l, ptr(s.name), len(s.name), strptr("bytes"), 5)
+      s.typ = "i64"
       s.val = l.pa
       Append(p, s)
       var v2 *ovid/parse.Node = NewNode(l, ovid/parse.OP_VAR)
-      v2.namep = NName(l, s.namep, s.namen)
-      v2.namen = s.namen + 2
-      v2.typp = strptr("i64")
-      v2.typn = 3
+      v2.name = bytes(NName(l, ptr(s.name), len(s.name)), len(s.name) + 2)
+      v2.typ = "i64"
       v2.val = l.pl
       Append(p, v2)
       return 0
     }
     Expr(l, s.val, p)
-    Bind(l, s.namep, s.namen, s.typp, s.typn)
+    Bind(l, ptr(s.name), len(s.name), ptr(s.typ), len(s.typ))
     Append(p, s)
     return 0
   }
   if op == ovid/parse.OP_VAR2 || op == ovid/parse.OP_ASSIGN2 {
     Expr(l, s.val, p)
     if op == ovid/parse.OP_VAR2 {
-      Bind(l, s.namep, s.namen, s.typp, s.typn)
-      Bind(l, s.name2p, s.name2n, s.typ2p, s.typ2n)
+      Bind(l, ptr(s.name), len(s.name), ptr(s.typ), len(s.typ))
+      Bind(l, ptr(s.name2), len(s.name2), ptr(s.typ2), len(s.typ2))
     }
     if s.val.op == ovid/parse.OP_CALL && ResultWords(l, s.val) == 3 {
       ThirdName(l, s)
@@ -968,12 +937,11 @@ func Stmt(l *L, s *ovid/parse.Node, p *Pre) i64 {
     return 0
   }
   if op == ovid/parse.OP_ASSIGN {
-    if Lookup(l, s.namep, s.namen) && IsBytes(l.typ, l.tyn) {
+    if Lookup(l, ptr(s.name), len(s.name)) && IsBytes(l.typ, l.tyn) {
       if s.val.op == ovid/parse.OP_CALL {
         Expr(l, s.val, p)
         s.op = ovid/parse.OP_ASSIGN2
-        s.name2p = NName(l, s.namep, s.namen)
-        s.name2n = s.namen + 2
+        s.name2 = bytes(NName(l, ptr(s.name), len(s.name)), len(s.name) + 2)
         Append(p, s)
         return 0
       }
@@ -981,8 +949,7 @@ func Stmt(l *L, s *ovid/parse.Node, p *Pre) i64 {
       s.val = l.pa
       Append(p, s)
       var a2 *ovid/parse.Node = NewNode(l, ovid/parse.OP_ASSIGN)
-      a2.namep = NName(l, s.namep, s.namen)
-      a2.namen = s.namen + 2
+      a2.name = bytes(NName(l, ptr(s.name), len(s.name)), len(s.name) + 2)
       a2.val = l.pl
       Append(p, a2)
       return 0
@@ -993,7 +960,7 @@ func Stmt(l *L, s *ovid/parse.Node, p *Pre) i64 {
   }
   if op == ovid/parse.OP_SETFIELD {
     TypeOf(l, s.base)
-    if FieldIsBytes(l, FindType(l, l.typ, l.tyn), s.namep, s.namen) {
+    if FieldIsBytes(l, FindType(l, l.typ, l.tyn), ptr(s.name), len(s.name)) {
       var base *ovid/parse.Node = Hoist(l, s.base, p)
       Pair(l, s.val, p)
       s.base = base
@@ -1001,8 +968,7 @@ func Stmt(l *L, s *ovid/parse.Node, p *Pre) i64 {
       Append(p, s)
       var f2 *ovid/parse.Node = NewNode(l, ovid/parse.OP_SETFIELD)
       f2.base = base
-      f2.namep = NName(l, s.namep, s.namen)
-      f2.namen = s.namen + 2
+      f2.name = bytes(NName(l, ptr(s.name), len(s.name)), len(s.name) + 2)
       f2.val = l.pl
       Append(p, f2)
       return 0
@@ -1085,8 +1051,7 @@ func Stmt(l *L, s *ovid/parse.Node, p *Pre) i64 {
     // false } }.
     var g *ovid/parse.Node = Temp(l, strptr("bool"), 4, BoolNode(l, true), p)
     var stop *ovid/parse.Node = NewNode(l, ovid/parse.OP_ASSIGN)
-    stop.namep = g.namep
-    stop.namen = g.namen
+    stop.name = g.name
     stop.val = BoolNode(l, false)
     var ifn *ovid/parse.Node = NewNode(l, ovid/parse.OP_IF)
     ifn.cond = s.cond
@@ -1095,7 +1060,7 @@ func Stmt(l *L, s *ovid/parse.Node, p *Pre) i64 {
     Append(cp, ifn)
     // The checks in cp are the while's, for the crash report.
     ClaimList(cp.head, s.num)
-    s.cond = Name(l, g.namep, g.namen)
+    s.cond = Name(l, ptr(g.name), len(g.name))
     s.body = cp.head
     Append(p, s)
     return 0

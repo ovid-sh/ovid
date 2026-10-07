@@ -13,8 +13,7 @@ type Mod struct {
   io *ovid/io.Cap
   dir bytes
   notests bool
-  namep i64
-  namen i64
+  name bytes
   entry bytes
   std bytes
   sys i64
@@ -148,8 +147,7 @@ func ReadMod(m *Mod, src i64, n i64, stdp i64, stdn i64) i64 {
         ovid/mem.WBytes(m.io, b, "; want `module <name>` or `entry <pkg>`")
         LoadErr(m, strptr("mod"), 3, 0 as *File, 0, b)
       } else if ovid/mem.Eq(bytes(f0, f0n), "module") {
-        m.namep = f1
-        m.namen = f1n
+        m.name = bytes(f1, f1n)
       } else if ovid/mem.Eq(bytes(f0, f0n), "entry") {
         m.entry = bytes(f1, f1n)
       } else if ovid/mem.Eq(bytes(f0, f0n), "std") {
@@ -391,7 +389,7 @@ func Merge(k *Pkg, one *Pkg) i64 {
     var seen bool = false
     var c *Decl = k.ims
     while c != 0 as *Decl && !seen {
-      if ovid/mem.Eq(bytes(c.namep, c.namen), bytes(im.namep, im.namen)) {
+      if ovid/mem.Eq(c.name, im.name) {
         seen = true
       }
       c = c.next
@@ -460,18 +458,18 @@ func StdPass(m *Mod) i64 {
       im = 0 as *Decl
     }
     while im != 0 as *Decl {
-      if !HavePkg(m, im.namep, im.namen) {
+      if !HavePkg(m, ptr(im.name), len(im.name)) {
         var dup bool = false
         var q *Pkg = need
         while q != 0 as *Pkg {
-          if ovid/mem.Eq(q.path, bytes(im.namep, im.namen)) {
+          if ovid/mem.Eq(q.path, im.name) {
             dup = true
           }
           q = q.next
         }
         if !dup {
           var nk *Pkg = ovid/io.Alloc(m.io, sizeof(Pkg)) as *Pkg
-          nk.path = bytes(im.namep, im.namen)
+          nk.path = im.name
           nk.next = need
           need = nk
           cnt = cnt + 1

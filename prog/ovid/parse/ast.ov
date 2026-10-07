@@ -125,22 +125,15 @@ func OpWidth(op i64) i64 {
 type Node struct {
   op i64
   num i64
-  namep i64
-  namen i64
-  typp i64
-  typn i64
-  name2p i64
-  name2n i64
-  typ2p i64
-  typ2n i64
+  name bytes
+  typ bytes
+  name2 bytes
+  typ2 bytes
   tytok i64
   ty2tok i64
-  pkgp i64
-  pkgn i64
-  fnp i64
-  fnn i64
-  strp i64
-  strn i64
+  pkg bytes
+  fn bytes
+  str bytes
   ival i64
   valk i64
   left *Node
@@ -175,10 +168,8 @@ type Node struct {
 // lowering sets bres on a func declared to return bytes: 2 result words,
 // or 3 for (bytes, i64).
 type Decl struct {
-  namep i64
-  namen i64
-  typp i64
-  typn i64
+  name bytes
+  typ bytes
   val i64
   sub *Decl
   subt *Decl
@@ -194,8 +185,7 @@ type Decl struct {
   tabn i64
   istab i64
   ro i64
-  typ2p i64
-  typ2n i64
+  typ2 bytes
   tytok i64
   ty2tok i64
   bres i64
@@ -226,8 +216,7 @@ type Use struct {
   node *Node
   udecl *Decl
   in *Decl
-  tokp i64
-  tokn i64
+  tok bytes
   next *Use
 }
 
@@ -270,7 +259,7 @@ type File struct {
 // FindDecl returns the decl named np[0:nn] in the list d, or nil.
 func FindDecl(d *Decl, np i64, nn i64) *Decl {
   while d != 0 as *Decl {
-    if ovid/mem.Eq(bytes(d.namep, d.namen), bytes(np, nn)) {
+    if ovid/mem.Eq(d.name, bytes(np, nn)) {
       return d
     }
     d = d.next
@@ -320,8 +309,8 @@ func IndexFuncs(m *Mod) i64 {
     var f *Decl = k.fs
     while f != 0 as *Decl {
       f.pkg = k
-      if FindFunc(m, ptr(k.path), len(k.path), f.namep, f.namen) == 0 as *Decl {
-        var h i64 = FuncHash(ptr(k.path), len(k.path), f.namep, f.namen) & m.fmask
+      if FindFunc(m, ptr(k.path), len(k.path), ptr(f.name), len(f.name)) == 0 as *Decl {
+        var h i64 = FuncHash(ptr(k.path), len(k.path), ptr(f.name), len(f.name)) & m.fmask
         while load64(m.ftab + (h * 8)) != 0 {
           h = (h + 1) & m.fmask
         }
@@ -342,7 +331,7 @@ func FindFunc(m *Mod, pp i64, pn i64, np i64, nn i64) *Decl {
     if f == 0 as *Decl {
       return f
     }
-    if ovid/mem.Eq(bytes(f.namep, f.namen), bytes(np, nn)) {
+    if ovid/mem.Eq(f.name, bytes(np, nn)) {
       if ovid/mem.Eq(f.pkg.path, bytes(pp, pn)) {
         return f
       }
@@ -378,8 +367,7 @@ func NewNode(p *P, op i64) *Node {
 
 func NewDecl(p *P, np i64, nn i64, off i64) *Decl {
   var d *Decl = ovid/io.Alloc(p.io, sizeof(Decl)) as *Decl
-  d.namep = np
-  d.namen = nn
+  d.name = bytes(np, nn)
   d.file = p.file
   d.off = off
   return d
@@ -461,7 +449,7 @@ func ParseFile(p *P) *Pkg {
   ExpectKw(p, strptr("package"), strlen("package"))
   ParsePath(p)
   var k *Pkg = ovid/io.Alloc(p.io, sizeof(Pkg)) as *Pkg
-  k.path = bytes(p.tp, p.tn)
+  k.path = p.tok
   k.file = p.file
   k.off = s
   ExpectEnd(p)
@@ -471,7 +459,7 @@ func ParseFile(p *P) *Pkg {
     var is i64 = Start(p)
     if Kw(p, strptr("import"), strlen("import")) {
       ParsePath(p)
-      AddImport(k, NewDecl(p, p.tp, p.tn, is))
+      AddImport(k, NewDecl(p, ptr(p.tok), len(p.tok), is))
       ExpectEnd(p)
     } else {
       more = false
@@ -496,14 +484,14 @@ func ParseFile(p *P) *Pkg {
 
 func ParseConst(p *P, s i64) i64 {
   Ident(p)
-  var np i64 = p.tp
-  var nn i64 = p.tn
+  var np i64 = ptr(p.tok)
+  var nn i64 = len(p.tok)
   if PeekByte(p, 91) {
     return ParseTable(p, s, np, nn)
   }
   ParseType(p)
-  var tp i64 = p.tp
-  var tn i64 = p.tn
+  var tp i64 = ptr(p.tok)
+  var tn i64 = len(p.tok)
   Expect(p, 61)
   var ex *Node = ParseExpr(p)
   p.cok = true
@@ -525,8 +513,7 @@ func ParseConst(p *P, s i64) i64 {
     }
   }
   var d *Decl = NewDecl(p, np, nn, s)
-  d.typp = strptr("i64")
-  d.typn = 3
+  d.typ = "i64"
   d.val = v
   AddConst(p.pkg, d)
   ExpectEnd(p)
@@ -595,8 +582,7 @@ func ParseTable(p *P, s i64, np i64, nn i64) i64 {
     return 0
   }
   var d *Decl = NewDecl(p, np, nn, s)
-  d.typp = strptr("i64")
-  d.typn = 3
+  d.typ = "i64"
   d.istab = 1
   d.tab = vals
   d.tabn = n
@@ -617,12 +603,12 @@ func EvalConst(p *P, n *Node) i64 {
     return n.ival
   }
   if op == OP_NAME {
-    if n.pkgn > 0 && !ovid/mem.Eq(bytes(n.pkgp, n.pkgn), p.pkg.path) {
+    if len(n.pkg) > 0 && !ovid/mem.Eq(n.pkg, p.pkg.path) {
       if ErrBegin(p) {
         EW(p, strptr("a const's value cannot name another package's const ("), strlen("a const's value cannot name another package's const ("))
-        EW(p, n.pkgp, n.pkgn)
+        EW(p, ptr(n.pkg), len(n.pkg))
         EW(p, strptr("."), 1)
-        EW(p, n.namep, n.namen)
+        EW(p, ptr(n.name), len(n.name))
         EW(p, strptr("); write the number"), strlen("); write the number"))
         ErrEnd(p)
       }
@@ -630,7 +616,7 @@ func EvalConst(p *P, n *Node) i64 {
     }
     var c *Decl = p.pkg.cs
     while c != 0 as *Decl {
-      if ovid/mem.Eq(bytes(c.namep, c.namen), bytes(n.namep, n.namen)) {
+      if ovid/mem.Eq(c.name, n.name) {
         if c.istab != 0 {
           p.cok = false
         }
@@ -643,12 +629,12 @@ func EvalConst(p *P, n *Node) i64 {
   }
   if op == OP_LEN {
     // len(Table) of a table in this package, declared above.
-    if n.pkgn > 0 && !ovid/mem.Eq(bytes(n.pkgp, n.pkgn), p.pkg.path) {
+    if len(n.pkg) > 0 && !ovid/mem.Eq(n.pkg, p.pkg.path) {
       if ErrBegin(p) {
         EW(p, strptr("a const's value cannot name another package's table ("), strlen("a const's value cannot name another package's table ("))
-        EW(p, n.pkgp, n.pkgn)
+        EW(p, ptr(n.pkg), len(n.pkg))
         EW(p, strptr("."), 1)
-        EW(p, n.namep, n.namen)
+        EW(p, ptr(n.name), len(n.name))
         EW(p, strptr("); write the number"), strlen("); write the number"))
         ErrEnd(p)
       }
@@ -656,7 +642,7 @@ func EvalConst(p *P, n *Node) i64 {
     }
     var lc *Decl = p.pkg.cs
     while lc != 0 as *Decl {
-      if lc.istab != 0 && ovid/mem.Eq(bytes(lc.namep, lc.namen), bytes(n.namep, n.namen)) {
+      if lc.istab != 0 && ovid/mem.Eq(lc.name, n.name) {
         return lc.tabn
       }
       lc = lc.next
@@ -738,7 +724,7 @@ func EvalConst(p *P, n *Node) i64 {
 
 func ParseTypeDecl(p *P, s i64) i64 {
   Ident(p)
-  var d *Decl = NewDecl(p, p.tp, p.tn, s)
+  var d *Decl = NewDecl(p, ptr(p.tok), len(p.tok), s)
   ExpectKw(p, strptr("struct"), strlen("struct"))
   Expect(p, 123)
   while p.err == 0 && !PeekByte(p, 125) {
@@ -748,10 +734,9 @@ func ParseTypeDecl(p *P, s i64) i64 {
     }
     var fs i64 = Start(p)
     Ident(p)
-    var f *Decl = NewDecl(p, p.tp, p.tn, fs)
+    var f *Decl = NewDecl(p, ptr(p.tok), len(p.tok), fs)
     ParseType(p)
-    f.typp = p.tp
-    f.typn = p.tn
+    f.typ = p.tok
     f.tytok = p.ttok
     AddSub(d, f)
     ExpectEnd(p)
@@ -764,9 +749,8 @@ func ParseTypeDecl(p *P, s i64) i64 {
 
 func ParseFunc(p *P, s i64) i64 {
   Ident(p)
-  var d *Decl = NewDecl(p, p.tp, p.tn, s)
-  p.fnp = p.tp
-  p.fnn = p.tn
+  var d *Decl = NewDecl(p, ptr(p.tok), len(p.tok), s)
+  p.fn = p.tok
   p.ec = 0
   p.sc = 0
   Expect(p, 40)
@@ -775,10 +759,9 @@ func ParseFunc(p *P, s i64) i64 {
     while more && p.err == 0 {
       var ps i64 = Start(p)
       Ident(p)
-      var pa *Decl = NewDecl(p, p.tp, p.tn, ps)
+      var pa *Decl = NewDecl(p, ptr(p.tok), len(p.tok), ps)
       ParseType(p)
-      pa.typp = p.tp
-      pa.typn = p.tn
+      pa.typ = p.tok
       pa.tytok = p.ttok
       AddSub(d, pa)
       if PeekByte(p, 41) {
@@ -793,18 +776,16 @@ func ParseFunc(p *P, s i64) i64 {
     // Two results: (T, i64), the second an error code.
     Expect(p, 40)
     ParseType(p)
-    d.typp = p.tp
-    d.typn = p.tn
+    d.typ = p.tok
     d.tytok = p.ttok
     Expect(p, 44)
     ParseType(p)
-    d.typ2p = p.tp
-    d.typ2n = p.tn
+    d.typ2 = p.tok
     d.ty2tok = p.ttok
-    if !ovid/mem.Eq(bytes(p.tp, p.tn), "i64") {
+    if !ovid/mem.Eq(p.tok, "i64") {
       if ErrBegin(p) {
         EW(p, strptr("the second result is an error code; write ("), strlen("the second result is an error code; write ("))
-        EW(p, d.typp, d.typn)
+        EW(p, ptr(d.typ), len(d.typ))
         EW(p, strptr(", i64)"), strlen(", i64)"))
         ErrEnd(p)
       }
@@ -812,14 +793,12 @@ func ParseFunc(p *P, s i64) i64 {
     Expect(p, 41)
   } else {
     ParseType(p)
-    d.typp = p.tp
-    d.typn = p.tn
+    d.typ = p.tok
     d.tytok = p.ttok
   }
   d.body = ParseBlock(p)
   AddFunc(p.pkg, d)
-  p.fnp = 0
-  p.fnn = 0
+  p.fn = bytes(0, 0)
   ExpectEnd(p)
   return 0
 }
@@ -872,9 +851,9 @@ func Stmt(p *P, s i64, id i64) *Node {
   if PeekKw(p, strptr("store8"), 6) || PeekKw(p, strptr("store16"), 7) || PeekKw(p, strptr("store32"), 7) || PeekKw(p, strptr("store64"), 7) {
     Ident(p)
     var op i64 = OP_STORE8
-    if p.tn == 7 {
+    if len(p.tok) == 7 {
       // The digit after "store": 1, 3, or 6.
-      var sd i64 = load8(p.tp + 5)
+      var sd i64 = load8(ptr(p.tok) + 5)
       if sd == 49 {
         op = OP_STORE16
       } else if sd == 51 {
@@ -897,18 +876,16 @@ func Stmt(p *P, s i64, id i64) *Node {
   var e *Node = ParseExpr(p)
   if PeekByte(p, 44) {
     // a, b = call: the call's two results into existing locals.
-    if e.op != OP_NAME || e.pkgn != 0 {
+    if e.op != OP_NAME || len(e.pkg) != 0 {
       Errorf(p, strptr("cannot assign to this expression"), strlen("cannot assign to this expression"))
       return e
     }
     Expect(p, 44)
     Ident(p)
     var a2 *Node = NewNode(p, OP_ASSIGN2)
-    a2.namep = e.namep
-    a2.namen = e.namen
-    a2.name2p = p.tp
-    a2.name2n = p.tn
-    if IsBlank(a2.namep, a2.namen) && IsBlank(a2.name2p, a2.name2n) {
+    a2.name = e.name
+    a2.name2 = p.tok
+    if IsBlank(ptr(a2.name), len(a2.name)) && IsBlank(ptr(a2.name2), len(a2.name2)) {
       Errorf(p, strptr("_, _ discards both results; receive the error"), strlen("_, _ discards both results; receive the error"))
     }
     Expect(p, 61)
@@ -920,16 +897,14 @@ func Stmt(p *P, s i64, id i64) *Node {
     var v *Node = ParseExpr(p)
     if e.op == OP_NAME {
       var a *Node = NewNode(p, OP_ASSIGN)
-      a.namep = e.namep
-      a.namen = e.namen
+      a.name = e.name
       a.val = v
       return a
     }
     if e.op == OP_FIELD {
       var sf *Node = NewNode(p, OP_SETFIELD)
       sf.base = e.base
-      sf.namep = e.namep
-      sf.namen = e.namen
+      sf.name = e.name
       sf.val = v
       return sf
     }
@@ -957,12 +932,12 @@ func ParseVar(p *P) *Node {
     VarName(p, n, true)
     Expect(p, 61)
     n.val = ParseExpr(p)
-    if IsBlank(n.namep, n.namen) && IsBlank(n.name2p, n.name2n) {
+    if IsBlank(ptr(n.name), len(n.name)) && IsBlank(ptr(n.name2), len(n.name2)) {
       Errorf(p, strptr("var _, _ discards both results; receive the error"), strlen("var _, _ discards both results; receive the error"))
     }
     return n
   }
-  if IsBlank(n.namep, n.namen) {
+  if IsBlank(ptr(n.name), len(n.name)) {
     Errorf(p, strptr("_ only discards one of a call's two results: var x T, _ = f(...)"), strlen("_ only discards one of a call's two results: var x T, _ = f(...)"))
   }
   if PeekAssign(p) {
@@ -981,28 +956,24 @@ func IsBlank(np i64, nn i64) bool {
 // no type.
 func VarName(p *P, n *Node, second bool) i64 {
   Ident(p)
-  var np i64 = p.tp
-  var nn i64 = p.tn
+  var np i64 = ptr(p.tok)
+  var nn i64 = len(p.tok)
   var tp i64 = 0
   var tn i64 = 0
   var tok i64 = 0
   if !IsBlank(np, nn) {
     ParseType(p)
-    tp = p.tp
-    tn = p.tn
+    tp = ptr(p.tok)
+    tn = len(p.tok)
     tok = p.ttok
   }
   if second {
-    n.name2p = np
-    n.name2n = nn
-    n.typ2p = tp
-    n.typ2n = tn
+    n.name2 = bytes(np, nn)
+    n.typ2 = bytes(tp, tn)
     n.ty2tok = tok
   } else {
-    n.namep = np
-    n.namen = nn
-    n.typp = tp
-    n.typn = tn
+    n.name = bytes(np, nn)
+    n.typ = bytes(tp, tn)
     n.tytok = tok
   }
   return 0
@@ -1215,16 +1186,15 @@ func Postfix(p *P) *Node {
     if PeekByte(p, 46) {
       Expect(p, 46)
       Ident(p)
-      var np i64 = p.tp
-      var nn i64 = p.tn
+      var np i64 = ptr(p.tok)
+      var nn i64 = len(p.tok)
       if PeekByte(p, 40) {
         Errorf(p, strptr("methods are not in v0"), strlen("methods are not in v0"))
       }
       var f *Node = NewNode(p, OP_FIELD)
       f.num = Eid(p)
       f.base = e
-      f.namep = np
-      f.namen = nn
+      f.name = bytes(np, nn)
       f.off = e.off
       f.end = p.last
       e = f
@@ -1233,8 +1203,7 @@ func Postfix(p *P) *Node {
       ParseType(p)
       var c *Node = NewNode(p, OP_CAST)
       c.num = Eid(p)
-      c.typp = p.tp
-      c.typn = p.tn
+      c.typ = p.tok
       c.tytok = p.ttok
       c.arg = e
       c.off = e.off
@@ -1272,10 +1241,8 @@ func Postfix(p *P) *Node {
           // The name node stays as the base, for a bytes.
           var t *Node = NewNode(p, OP_INDEX)
           t.num = Eid(p)
-          t.namep = e.namep
-          t.namen = e.namen
-          t.pkgp = e.pkgp
-          t.pkgn = e.pkgn
+          t.name = e.name
+          t.pkg = e.pkg
           t.base = e
           t.arg = ix
           t.off = e.off
@@ -1327,8 +1294,7 @@ func Primary0(p *P) *Node {
     var st *Node = NewNode(p, OP_STR)
     st.num = Eid(p)
     st.valk = 3
-    st.strp = p.tp
-    st.strn = p.tn
+    st.str = p.tok
     return st
   }
   if IsNum(p) {
@@ -1339,7 +1305,7 @@ func Primary0(p *P) *Node {
     var b *Node = NewNode(p, OP_BOOL)
     b.num = Eid(p)
     b.valk = 2
-    if p.tn == 4 {
+    if len(p.tok) == 4 {
       b.ival = 1
     }
     return b
@@ -1364,10 +1330,8 @@ func Primary0(p *P) *Node {
     var ln *Node = NewNode(p, OP_LEN)
     ln.num = Eid(p)
     ln.base = tn
-    ln.namep = tn.namep
-    ln.namen = tn.namen
-    ln.pkgp = tn.pkgp
-    ln.pkgn = tn.pkgn
+    ln.name = tn.name
+    ln.pkg = tn.pkg
     return ln
   }
   var uop i64 = 0
@@ -1393,9 +1357,9 @@ func Primary0(p *P) *Node {
   if isLoad || isBswap {
     Ident(p)
     // The digit after "load" or "bswap": 1, 3, or 6, or none for load8.
-    var wd i64 = At(p, p.tp - ptr(p.src) + 4)
+    var wd i64 = At(p, ptr(p.tok) - ptr(p.src) + 4)
     if isBswap {
-      wd = At(p, p.tp - ptr(p.src) + 5)
+      wd = At(p, ptr(p.tok) - ptr(p.src) + 5)
     }
     var lop i64 = OP_LOAD8
     if isBswap {
@@ -1405,7 +1369,7 @@ func Primary0(p *P) *Node {
       } else if wd == 51 {
         lop = OP_BSWAP32
       }
-    } else if p.tn == 6 {
+    } else if len(p.tok) == 6 {
       lop = OP_LOAD64
       if wd == 49 {
         lop = OP_LOAD16
@@ -1424,33 +1388,31 @@ func Primary0(p *P) *Node {
       Errorf(p, strptr("sizeof takes a struct type, not a pointer: sizeof(T) is the size of a T"), strlen("sizeof takes a struct type, not a pointer: sizeof(T) is the size of a T"))
     }
     ParseType(p)
-    var zp i64 = p.tp
-    var zn i64 = p.tn
+    var zp i64 = ptr(p.tok)
+    var zn i64 = len(p.tok)
     var ztok i64 = p.ttok
     Expect(p, 41)
     var z *Node = NewNode(p, OP_SIZEOF)
     z.num = Eid(p)
-    z.typp = zp
-    z.typn = zn
+    z.typ = bytes(zp, zn)
     z.tytok = ztok
     return z
   }
   if PeekKw(p, strptr("strptr"), 6) || PeekKw(p, strptr("strlen"), 6) {
     Ident(p)
     var sop i64 = OP_STRPTR
-    if At(p, p.tp - ptr(p.src) + 3) == 108 {
+    if At(p, ptr(p.tok) - ptr(p.src) + 3) == 108 {
       sop = OP_STRLEN
     }
     Expect(p, 40)
     ParseString(p)
-    var sp i64 = p.tp
-    var sn i64 = p.tn
+    var sp i64 = ptr(p.tok)
+    var sn i64 = len(p.tok)
     Expect(p, 41)
     var sl *Node = NewNode(p, sop)
     sl.num = Eid(p)
     sl.valk = 3
-    sl.strp = sp
-    sl.strn = sn
+    sl.str = bytes(sp, sn)
     return sl
   }
   if !PeekIdent(p) {
@@ -1462,15 +1424,15 @@ func Primary0(p *P) *Node {
   var msk bool = p.skipped
   var mlast i64 = p.last
   Ident(p)
-  var idp i64 = p.tp
-  var idn i64 = p.tn
+  var idp i64 = ptr(p.tok)
+  var idn i64 = len(p.tok)
   if PeekByte(p, 47) {
     if TryPkgCall(p, idp, idn) {
       if PeekByte(p, 40) {
-        return CallArgs(p, OP_CALL, p.xp, p.xn, p.tp, p.tn)
+        return CallArgs(p, OP_CALL, ptr(p.path), len(p.path), ptr(p.tok), len(p.tok))
       }
-      if Imported(p, p.xp, p.xn) {
-        return PkgName(p, p.xp, p.xn, p.tp, p.tn)
+      if Imported(p, ptr(p.path), len(p.path)) {
+        return PkgName(p, ptr(p.path), len(p.path), ptr(p.tok), len(p.tok))
       }
     }
     p.i = mi
@@ -1478,8 +1440,8 @@ func Primary0(p *P) *Node {
     p.skipped = msk
     p.last = mlast
     Ident(p)
-    idp = p.tp
-    idn = p.tn
+    idp = ptr(p.tok)
+    idn = len(p.tok)
   }
   if PeekByte(p, 46) && Imported(p, idp, idn) {
     mi = p.i
@@ -1490,9 +1452,9 @@ func Primary0(p *P) *Node {
     if PeekIdent(p) {
       Ident(p)
       if PeekByte(p, 40) {
-        return CallArgs(p, OP_CALL, idp, idn, p.tp, p.tn)
+        return CallArgs(p, OP_CALL, idp, idn, ptr(p.tok), len(p.tok))
       }
-      return PkgName(p, idp, idn, p.tp, p.tn)
+      return PkgName(p, idp, idn, ptr(p.tok), len(p.tok))
     }
     p.i = mi
     p.nl = mnl
@@ -1504,8 +1466,7 @@ func Primary0(p *P) *Node {
   }
   var nm *Node = NewNode(p, OP_NAME)
   nm.num = Eid(p)
-  nm.namep = idp
-  nm.namen = idn
+  nm.name = bytes(idp, idn)
   return nm
 }
 
@@ -1513,17 +1474,15 @@ func Primary0(p *P) *Node {
 func PkgName(p *P, pkgp i64, pkgn i64, np i64, nn i64) *Node {
   var n *Node = NewNode(p, OP_NAME)
   n.num = Eid(p)
-  n.pkgp = pkgp
-  n.pkgn = pkgn
-  n.namep = np
-  n.namen = nn
+  n.pkg = bytes(pkgp, pkgn)
+  n.name = bytes(np, nn)
   return n
 }
 
 func Imported(p *P, sp i64, sn i64) bool {
   var d *Decl = p.pkg.ims
   while d != 0 as *Decl {
-    if ovid/mem.Eq(bytes(d.namep, d.namen), bytes(sp, sn)) {
+    if ovid/mem.Eq(d.name, bytes(sp, sn)) {
       return true
     }
     d = d.next
@@ -1532,7 +1491,7 @@ func Imported(p *P, sp i64, sn i64) bool {
 }
 
 // TryPkgCall reads the rest of path/to/pkg.Name after its first segment.
-// On success the path is in p.xp/p.xn and the name in p.tp/p.tn; on
+// On success the path is in ptr(p.path)/len(p.path) and the name in ptr(p.tok)/len(p.tok); on
 // failure the caller restores the cursor.
 func TryPkgCall(p *P, fp i64, fn i64) bool {
   if !PeekByte(p, 47) {
@@ -1546,12 +1505,12 @@ func TryPkgCall(p *P, fp i64, fn i64) bool {
       return false
     }
     Ident(p)
-    if p.tp == sp + sn + 1 {
-      sn = sn + 1 + p.tn
+    if ptr(p.tok) == sp + sn + 1 {
+      sn = sn + 1 + len(p.tok)
     } else {
       var t i64 = Cat(p.io, sp, sn, strptr("/"), 1)
-      sp = Cat(p.io, t, sn + 1, p.tp, p.tn)
-      sn = sn + 1 + p.tn
+      sp = Cat(p.io, t, sn + 1, ptr(p.tok), len(p.tok))
+      sn = sn + 1 + len(p.tok)
     }
   }
   if !PeekByte(p, 46) {
@@ -1562,8 +1521,7 @@ func TryPkgCall(p *P, fp i64, fn i64) bool {
     return false
   }
   Ident(p)
-  p.xp = sp
-  p.xn = sn
+  p.path = bytes(sp, sn)
   return true
 }
 
@@ -1619,10 +1577,8 @@ func CallArgs(p *P, op i64, pkgp i64, pkgn i64, fnp i64, fnn i64) *Node {
   var head *Node = ArgList(p)
   var n *Node = NewNode(p, op)
   n.num = Eid(p)
-  n.pkgp = pkgp
-  n.pkgn = pkgn
-  n.fnp = fnp
-  n.fnn = fnn
+  n.pkg = bytes(pkgp, pkgn)
+  n.fn = bytes(fnp, fnn)
   n.args = head
   return n
 }
@@ -1776,10 +1732,9 @@ func Utf8Len(q i64, m i64) i64 {
   return need + 1
 }
 
-// ParseString reads a "..." literal; the decoded bytes are p.tp/p.tn.
+// ParseString reads a "..." literal; the decoded bytes are ptr(p.tok)/len(p.tok).
 func ParseString(p *P) i64 {
-  p.tp = ptr(p.src)
-  p.tn = 0
+  p.tok = bytes(ptr(p.src), 0)
   if !PeekByte(p, 34) {
     Errorf(p, strptr("expected string"), strlen("expected string"))
     return 0
@@ -1792,8 +1747,7 @@ func ParseString(p *P) i64 {
     if c == 34 {
       p.i = p.i + 1
       Bump(p)
-      p.tp = b.data
-      p.tn = b.len
+      p.tok = bytes(b.data, b.len)
       return 0
     }
     if c == 92 {

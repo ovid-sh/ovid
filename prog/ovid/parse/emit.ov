@@ -9,10 +9,8 @@ type E struct {
   io *ovid/io.Cap
   b *ovid/mem.Buf
   m *Mod
-  pkgp i64
-  pkgn i64
-  fnp i64
-  fnn i64
+  pkg bytes
+  fn bytes
 }
 
 func WL(e *E, s i64, n i64) i64 {
@@ -326,38 +324,38 @@ func ENode(e *E, n *Node) i64 {
   } else {
     IdOpen(e, strptr("ex:"), 3)
   }
-  WL(e, e.pkgp, e.pkgn)
+  WL(e, ptr(e.pkg), len(e.pkg))
   WC(e, 46)
-  WL(e, e.fnp, e.fnn)
+  WL(e, ptr(e.fn), len(e.fn))
   WC(e, 58)
   WInt(e.io, e.b, n.num)
   WC(e, 34)
   WL(e, strptr(",\"op\":\""), 7)
   WOp(e, n.op)
   WC(e, 34)
-  if n.namen != 0 {
+  if len(n.name) != 0 {
     WL(e, strptr(",\"name\":"), 8)
-    WS(e, n.namep, n.namen)
+    WS(e, ptr(n.name), len(n.name))
   }
-  if n.typn != 0 {
+  if len(n.typ) != 0 {
     WL(e, strptr(",\"type\":"), 8)
-    WS(e, n.typp, n.typn)
+    WS(e, ptr(n.typ), len(n.typ))
   }
-  if n.name2n != 0 {
+  if len(n.name2) != 0 {
     WL(e, strptr(",\"name2\":"), strlen(",\"name2\":"))
-    WS(e, n.name2p, n.name2n)
+    WS(e, ptr(n.name2), len(n.name2))
   }
-  if n.typ2n != 0 {
+  if len(n.typ2) != 0 {
     WL(e, strptr(",\"type2\":"), strlen(",\"type2\":"))
-    WS(e, n.typ2p, n.typ2n)
+    WS(e, ptr(n.typ2), len(n.typ2))
   }
-  if n.pkgn != 0 {
+  if len(n.pkg) != 0 {
     WL(e, strptr(",\"pkg\":"), 7)
-    WS(e, n.pkgp, n.pkgn)
+    WS(e, ptr(n.pkg), len(n.pkg))
   }
-  if n.fnn != 0 {
+  if len(n.fn) != 0 {
     WL(e, strptr(",\"func\":"), 8)
-    WS(e, n.fnp, n.fnn)
+    WS(e, ptr(n.fn), len(n.fn))
   }
   if n.valk == 1 {
     WL(e, strptr(",\"value\":"), 9)
@@ -368,16 +366,16 @@ func ENode(e *E, n *Node) i64 {
     } else {
       WL(e, strptr(",\"value\":false"), 14)
     }
-  } else if n.valk == 3 && ValidUtf8(n.strp, n.strn) {
+  } else if n.valk == 3 && ValidUtf8(ptr(n.str), len(n.str)) {
     WL(e, strptr(",\"value\":"), 9)
-    WS(e, n.strp, n.strn)
+    WS(e, ptr(n.str), len(n.str))
   } else if n.valk == 3 {
     // Bytes JSON cannot carry: hex, so nothing is lost.
     WL(e, strptr(",\"value_hex\":\""), 14)
     var hx i64 = ovid/io.Alloc(e.io, 8)
     var i i64 = 0
-    while i < n.strn {
-      ovid/mem.HexOut(hx, load8(n.strp + i), 2)
+    while i < len(n.str) {
+      ovid/mem.HexOut(hx, load8(ptr(n.str) + i), 2)
       ovid/mem.WBytes(e.io, e.b, bytes(hx, 2))
       i = i + 1
     }
@@ -402,18 +400,17 @@ func ENode(e *E, n *Node) i64 {
 // EDeclId writes "id":"<pre><pkg>.<name>" for decl d.
 func EDeclId(e *E, pre i64, pren i64, d *Decl) i64 {
   IdOpen(e, pre, pren)
-  WL(e, e.pkgp, e.pkgn)
+  WL(e, ptr(e.pkg), len(e.pkg))
   WC(e, 46)
-  WL(e, d.namep, d.namen)
+  WL(e, ptr(d.name), len(d.name))
   WC(e, 34)
   WL(e, strptr(",\"name\":"), 8)
-  WS(e, d.namep, d.namen)
+  WS(e, ptr(d.name), len(d.name))
   return 0
 }
 
 func EPkg(e *E, k *Pkg) i64 {
-  e.pkgp = ptr(k.path)
-  e.pkgn = len(k.path)
+  e.pkg = k.path
   WC(e, 123)
   IdOpen(e, strptr("pkg:"), 4)
   WL(e, ptr(k.path), len(k.path))
@@ -428,10 +425,10 @@ func EPkg(e *E, k *Pkg) i64 {
       IdOpen(e, strptr("im:"), 3)
       WL(e, ptr(k.path), len(k.path))
       WC(e, 58)
-      WL(e, d.namep, d.namen)
+      WL(e, ptr(d.name), len(d.name))
       WC(e, 34)
       WL(e, strptr(",\"path\":"), 8)
-      WS(e, d.namep, d.namen)
+      WS(e, ptr(d.name), len(d.name))
       WC(e, 125)
       d = d.next
       if d != 0 as *Decl {
@@ -492,14 +489,14 @@ func EPkg(e *E, k *Pkg) i64 {
           IdOpen(e, strptr("fld:"), 4)
           WL(e, ptr(k.path), len(k.path))
           WC(e, 46)
-          WL(e, d.namep, d.namen)
+          WL(e, ptr(d.name), len(d.name))
           WC(e, 46)
-          WL(e, f.namep, f.namen)
+          WL(e, ptr(f.name), len(f.name))
           WC(e, 34)
           WL(e, strptr(",\"name\":"), 8)
-          WS(e, f.namep, f.namen)
+          WS(e, ptr(f.name), len(f.name))
           WL(e, strptr(",\"type\":"), 8)
-          WS(e, f.typp, f.typn)
+          WS(e, ptr(f.typ), len(f.typ))
           WC(e, 125)
           f = f.next
           if f != 0 as *Decl {
@@ -530,14 +527,14 @@ func EPkg(e *E, k *Pkg) i64 {
           IdOpen(e, strptr("pa:"), 3)
           WL(e, ptr(k.path), len(k.path))
           WC(e, 46)
-          WL(e, d.namep, d.namen)
+          WL(e, ptr(d.name), len(d.name))
           WC(e, 46)
-          WL(e, pa.namep, pa.namen)
+          WL(e, ptr(pa.name), len(pa.name))
           WC(e, 34)
           WL(e, strptr(",\"name\":"), 8)
-          WS(e, pa.namep, pa.namen)
+          WS(e, ptr(pa.name), len(pa.name))
           WL(e, strptr(",\"type\":"), 8)
-          WS(e, pa.typp, pa.typn)
+          WS(e, ptr(pa.typ), len(pa.typ))
           WC(e, 125)
           pa = pa.next
           if pa != 0 as *Decl {
@@ -547,13 +544,12 @@ func EPkg(e *E, k *Pkg) i64 {
         WC(e, 93)
       }
       WL(e, strptr(",\"result\":"), 10)
-      WS(e, d.typp, d.typn)
-      if d.typ2n != 0 {
+      WS(e, ptr(d.typ), len(d.typ))
+      if len(d.typ2) != 0 {
         WL(e, strptr(",\"result2\":"), strlen(",\"result2\":"))
-        WS(e, d.typ2p, d.typ2n)
+        WS(e, ptr(d.typ2), len(d.typ2))
       }
-      e.fnp = d.namep
-      e.fnn = d.namen
+      e.fn = d.name
       EList(e, strptr(",\"body\":["), 9, d.body)
       WC(e, 125)
       d = d.next
@@ -577,7 +573,7 @@ func Emit(m *Mod) i64 {
   WL(e, strptr("{\"revision\":\""), 13)
   WL(e, Revision(m), 16)
   WL(e, strptr("\",\"module\":"), 11)
-  WS(e, m.namep, m.namen)
+  WS(e, ptr(m.name), len(m.name))
   WL(e, strptr(",\"entry\":"), 9)
   WS(e, ptr(m.entry), len(m.entry))
   WL(e, strptr(",\"packages\":"), 12)
