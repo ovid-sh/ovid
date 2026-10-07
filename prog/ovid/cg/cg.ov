@@ -1952,8 +1952,8 @@ func EmitExpr(c *C, n *ovid/parse.Node, lv i64) i64 {
     return 0
   }
   if op == ovid/parse.OP_BLOAD {
-    // A lowered b[i]: b is (base, right) and i is left, all simple
-    // operands, so cmp i, n; jae trap; movzx rax, [p + i].
+    // A lowered b[i]: b is (base, right) and i is left, simple operands
+    // or field loads, so cmp i, n; jae trap; movzx rax, [p + i].
     var cmp *ovid/parse.Node = ovid/io.Alloc(c.io, sizeof(ovid/parse.Node)) as *ovid/parse.Node
     cmp.op = ovid/parse.OP_ULT
     cmp.left = n.left

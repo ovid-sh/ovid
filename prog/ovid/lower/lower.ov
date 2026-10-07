@@ -17,14 +17,15 @@ import ovid/parse
 // a chk and a store8; b[i:j] the pair (p + i, j - i) after two chks;
 // len(b) is b#n; "lit" is strptr and strlen; bytes(p, n) the pair.
 //
-// The checks and the pairs' parts must be simple operands (a name or a
-// constant), so anything else is first moved into a temp local (t#k)
-// by a statement placed before the one being lowered. Moving an
-// expression keeps evaluation order: every earlier expression in the
-// same statement that is not a simple operand is moved too (a memory
-// read left of a call that writes it must come first), and an operand of &&
-// or || or a while condition that needs a move is restructured into an
-// if, so the move runs exactly when the operand would have.
+// The checks and the pairs' parts are simple operands (a name or a
+// constant) or, for a field, its two loads left in place; anything else
+// is first moved into a temp local (t#k) by a statement placed before
+// the one being lowered. Moving an expression keeps evaluation order:
+// every earlier expression in the same statement that is not a simple
+// operand is moved too (a memory read left of a call that writes it
+// must come first), the halves of a field among them, and an operand of
+// && or || or a while condition that needs a move is restructured into
+// an if, so the move runs exactly when the operand would have.
 //
 // Unlike the Go pass, this one works in place: a build is one process.
 
@@ -500,9 +501,9 @@ func FixAll(l *L, p *Pre, mark *ovid/parse.Node, a *ovid/parse.Node, b *ovid/par
   return 0
 }
 
-// Pair lowers a bytes-typed expression to its address and length, both
-// simple operands, in l.pa and l.pl, placing in p the statements that
-// must run first.
+// Pair lowers a bytes-typed expression to its address and length: simple
+// operands, or a field's two loads in place, in l.pa and l.pl, placing in
+// p the statements that must run first.
 func Pair(l *L, n *ovid/parse.Node, p *Pre) i64 {
   var op i64 = n.op
   if op == ovid/parse.OP_NAME {
@@ -963,13 +964,18 @@ func Stmt(l *L, s *ovid/parse.Node, p *Pre) i64 {
     if FieldIsBytes(l, FindType(l, l.typ, l.tyn), ptr(s.name), len(s.name)) {
       var base *ovid/parse.Node = Hoist(l, s.base, p)
       Pair(l, s.val, p)
+      // Both words are read before the first store: through a cast the
+      // destination may overlap the source, and the whole value is what
+      // the assignment means.
+      var a *ovid/parse.Node = Fix(l, l.pa, p)
+      var ln *ovid/parse.Node = Fix(l, l.pl, p)
       s.base = base
-      s.val = l.pa
+      s.val = a
       Append(p, s)
       var f2 *ovid/parse.Node = NewNode(l, ovid/parse.OP_SETFIELD)
       f2.base = base
       f2.name = bytes(NName(l, ptr(s.name), len(s.name)), len(s.name) + 2)
-      f2.val = l.pl
+      f2.val = ln
       Append(p, f2)
       return 0
     }
