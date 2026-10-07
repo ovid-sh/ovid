@@ -199,6 +199,15 @@ func Wait(io *Cap, pid i64) i64 {
   return load32(st)
 }
 
+// Reap collects one child that has ended, without waiting (WNOHANG): its
+// pid, 0 when every child is still running, or a negative error (-10,
+// ECHILD, when there are none). A parent that forks per connection calls
+// it after each accept, so ended children do not linger as zombies.
+func Reap(io *Cap) i64 {
+  var st i64 = Alloc(io, 8)
+  return syscall(SYS_WAIT4, -1, st, 1, 0, 0, 0)
+}
+
 // Exit ends the process (every thread of it) with code.
 func Exit(code i64) i64 {
   syscall(SYS_EXIT_GROUP, code, 0, 0, 0, 0, 0)
