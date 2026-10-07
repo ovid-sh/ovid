@@ -401,4 +401,16 @@ func main(io *ovid/io.Cap) i64 {
 	if src := sources(t, dir); !strings.Contains(src, "// A helper: calls Twice twice.\nfunc Quad") {
 		t.Fatalf("doc comment changed:\n%s", src)
 	}
+	// A tab after the slashes is leading space too.
+	dir = mkmod(t, demo("package demo\n\nimport ovid/io\n\n//\tOne is one.\nfunc One() i64 {\n  return 1\n}\n\nfunc main(io *ovid/io.Cap) i64 {\n  return One()\n}\n"))
+	b.Reset()
+	if code := Rename(dir, "One", "Uno", false, &b); code != 0 {
+		t.Fatal(b.String())
+	}
+	if r := last(t, b.String()); r["doc"] != true {
+		t.Fatalf("receipt %v", r)
+	}
+	if src := sources(t, dir); !strings.Contains(src, "//\tUno is one.\nfunc Uno") {
+		t.Fatalf("tab doc comment not renamed:\n%s", src)
+	}
 }

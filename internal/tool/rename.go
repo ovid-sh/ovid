@@ -146,7 +146,7 @@ func docName(m *module.Module, l *module.Loc, name string) (ir.Span, bool) {
 		return ir.Span{}, false
 	}
 	i += 2
-	for i < len(src) && src[i] == ' ' {
+	for i < len(src) && (src[i] == ' ' || src[i] == '\t') {
 		i++
 	}
 	end := i + len(name)
