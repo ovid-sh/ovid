@@ -1416,7 +1416,7 @@ func Primary0(p *P) *Node {
     Ident(p)
     Expect(p, 40)
     if PeekByte(p, 42) {
-      Errorf(p, strptr("sizeof takes a struct type, not a pointer: sizeof(T) is 8 * T's fields"), strlen("sizeof takes a struct type, not a pointer: sizeof(T) is 8 * T's fields"))
+      Errorf(p, strptr("sizeof takes a struct type, not a pointer: sizeof(T) is the size of a T"), strlen("sizeof takes a struct type, not a pointer: sizeof(T) is the size of a T"))
     }
     ParseType(p)
     var zp i64 = p.tp

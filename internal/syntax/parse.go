@@ -970,7 +970,7 @@ func (p *parser) primary0() *ir.Node {
 		p.ident()
 		p.expect('(')
 		if p.peekByte('*') {
-			p.errorf("sizeof takes a struct type, not a pointer: sizeof(T) is 8 * T's fields")
+			p.errorf("sizeof takes a struct type, not a pointer: sizeof(T) is the size of a T")
 		}
 		t, ts := p.parseType()
 		p.expect(')')

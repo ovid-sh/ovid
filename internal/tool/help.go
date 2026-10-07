@@ -182,7 +182,7 @@ allocated since, for a host between requests; an address allocated after
 the mark must not be used after the reset. It returns 0, or the kernel's
 error if it refused to unmap; the next reset tries those mappings again.
 Cast the address: var p *Pair = raw as *Pair.
-Each struct field takes 8 bytes, so a struct is 8 * fields bytes; never
+Each struct field takes 8 bytes (a bytes field 16); never
 count them by hand, write sizeof(T) (T a struct; path.T for another
 package's), a compile-time i64:
   var p *Pair = ovid/io.Alloc(io, sizeof(Pair)) as *Pair

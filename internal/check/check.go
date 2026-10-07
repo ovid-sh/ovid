@@ -548,7 +548,6 @@ func (c *checker) checkEntry(p *ir.Program) {
 	}
 }
 
-// Signature renders fn the way it is written in source.
 // SizeOf is the byte size of a struct with the fields fs: 8 per field,
 // 16 for a bytes, which the lowering splits in two.
 func SizeOf(fs []ir.Field) int {
@@ -578,6 +577,7 @@ func paramWords(ps []ir.Param) int {
 	return w
 }
 
+// Signature renders fn the way it is written in source.
 func Signature(pkg string, fn *ir.Func) string {
 	var b strings.Builder
 	b.WriteString("func ")
