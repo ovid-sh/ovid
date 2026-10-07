@@ -6,12 +6,9 @@ import ovid/mem
 // Src wraps source text as a File named t.ov.
 func Src(io *ovid/io.Cap, p i64, n i64) *File {
   var f *File = ovid/io.Alloc(io, sizeof(File)) as *File
-  f.relp = strptr("t.ov")
-  f.reln = 4
-  f.dispp = f.relp
-  f.dispn = 4
-  f.src = p
-  f.n = n
+  f.rel = "t.ov"
+  f.disp = f.rel
+  f.src = bytes(p, n)
   return f
 }
 
@@ -135,7 +132,7 @@ func TestPkgConst(io *ovid/io.Cap) i64 {
     return 2
   }
   var l *Node = add.left
-  if l.op != OP_NAME || !ovid/mem.Eq(bytes(l.pkgp, l.pkgn), bytes(strptr("ovid/io"), 7)) || !ovid/mem.Eq(bytes(l.namep, l.namen), bytes(strptr("O_CREAT"), 7)) {
+  if l.op != OP_NAME || !ovid/mem.Eq(bytes(l.pkgp, l.pkgn), "ovid/io") || !ovid/mem.Eq(bytes(l.namep, l.namen), "O_CREAT") {
     return 3
   }
   // io is not an imported path, so io.X stays a field access.

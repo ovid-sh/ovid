@@ -234,8 +234,7 @@ type Use struct {
 // Pkg is one package: the merged result of its files. mark, ord, low, and
 // scc are the checker's, for its import cycle check.
 type Pkg struct {
-  pathp i64
-  pathn i64
+  path bytes
   file *File
   off i64
   files *File
@@ -259,12 +258,9 @@ type Pkg struct {
 // File is one source file. rel is the module-relative path (std:<pkg>/<f>
 // for shipped files), disp the path printed in diagnostics.
 type File struct {
-  relp i64
-  reln i64
-  dispp i64
-  dispn i64
-  src i64
-  n i64
+  rel bytes
+  disp bytes
+  src bytes
   std i64
   next *File
   mnext *File
@@ -324,8 +320,8 @@ func IndexFuncs(m *Mod) i64 {
     var f *Decl = k.fs
     while f != 0 as *Decl {
       f.pkg = k
-      if FindFunc(m, k.pathp, k.pathn, f.namep, f.namen) == 0 as *Decl {
-        var h i64 = FuncHash(k.pathp, k.pathn, f.namep, f.namen) & m.fmask
+      if FindFunc(m, ptr(k.path), len(k.path), f.namep, f.namen) == 0 as *Decl {
+        var h i64 = FuncHash(ptr(k.path), len(k.path), f.namep, f.namen) & m.fmask
         while load64(m.ftab + (h * 8)) != 0 {
           h = (h + 1) & m.fmask
         }
@@ -347,7 +343,7 @@ func FindFunc(m *Mod, pp i64, pn i64, np i64, nn i64) *Decl {
       return f
     }
     if ovid/mem.Eq(bytes(f.namep, f.namen), bytes(np, nn)) {
-      if ovid/mem.Eq(bytes(f.pkg.pathp, f.pkg.pathn), bytes(pp, pn)) {
+      if ovid/mem.Eq(f.pkg.path, bytes(pp, pn)) {
         return f
       }
     }
@@ -453,7 +449,6 @@ func NewP(io *ovid/io.Cap, f *File) *P {
   var p *P = ovid/io.Alloc(io, sizeof(P)) as *P
   p.io = io
   p.src = f.src
-  p.n = f.n
   p.file = f
   p.emsg = ovid/mem.New(io, 128)
   return p
@@ -466,8 +461,7 @@ func ParseFile(p *P) *Pkg {
   ExpectKw(p, strptr("package"), strlen("package"))
   ParsePath(p)
   var k *Pkg = ovid/io.Alloc(p.io, sizeof(Pkg)) as *Pkg
-  k.pathp = p.tp
-  k.pathn = p.tn
+  k.path = bytes(p.tp, p.tn)
   k.file = p.file
   k.off = s
   ExpectEnd(p)
@@ -522,7 +516,7 @@ func ParseConst(p *P, s i64) i64 {
       ErrEnd(p)
     }
   }
-  if !ovid/mem.Eq(bytes(tp, tn), bytes(strptr("i64"), 3)) {
+  if !ovid/mem.Eq(bytes(tp, tn), "i64") {
     if ErrBegin(p) {
       EW(p, strptr("const "), strlen("const "))
       EW(p, np, nn)
@@ -623,7 +617,7 @@ func EvalConst(p *P, n *Node) i64 {
     return n.ival
   }
   if op == OP_NAME {
-    if n.pkgn > 0 && !ovid/mem.Eq(bytes(n.pkgp, n.pkgn), bytes(p.pkg.pathp, p.pkg.pathn)) {
+    if n.pkgn > 0 && !ovid/mem.Eq(bytes(n.pkgp, n.pkgn), p.pkg.path) {
       if ErrBegin(p) {
         EW(p, strptr("a const's value cannot name another package's const ("), strlen("a const's value cannot name another package's const ("))
         EW(p, n.pkgp, n.pkgn)
@@ -649,7 +643,7 @@ func EvalConst(p *P, n *Node) i64 {
   }
   if op == OP_LEN {
     // len(Table) of a table in this package, declared above.
-    if n.pkgn > 0 && !ovid/mem.Eq(bytes(n.pkgp, n.pkgn), bytes(p.pkg.pathp, p.pkg.pathn)) {
+    if n.pkgn > 0 && !ovid/mem.Eq(bytes(n.pkgp, n.pkgn), p.pkg.path) {
       if ErrBegin(p) {
         EW(p, strptr("a const's value cannot name another package's table ("), strlen("a const's value cannot name another package's table ("))
         EW(p, n.pkgp, n.pkgn)
@@ -807,7 +801,7 @@ func ParseFunc(p *P, s i64) i64 {
     d.typ2p = p.tp
     d.typ2n = p.tn
     d.ty2tok = p.ttok
-    if !ovid/mem.Eq(bytes(p.tp, p.tn), bytes(strptr("i64"), 3)) {
+    if !ovid/mem.Eq(bytes(p.tp, p.tn), "i64") {
       if ErrBegin(p) {
         EW(p, strptr("the second result is an error code; write ("), strlen("the second result is an error code; write ("))
         EW(p, d.typp, d.typn)
@@ -1017,7 +1011,7 @@ func VarName(p *P, n *Node, second bool) i64 {
 func ParseReturn(p *P) *Node {
   var n *Node = NewNode(p, OP_RETURN)
   Skip(p)
-  if p.i >= p.n || p.nl || At(p, p.i) == 125 {
+  if p.i >= len(p.src) || p.nl || At(p, p.i) == 125 {
     return n
   }
   if PeekKw(p, strptr("var"), 3) || PeekKw(p, strptr("if"), 2) || PeekKw(p, strptr("while"), 5) || PeekKw(p, strptr("return"), 6) || PeekKw(p, strptr("store8"), 6) || PeekKw(p, strptr("store16"), 7) || PeekKw(p, strptr("store32"), 7) || PeekKw(p, strptr("store64"), 7) {
@@ -1107,11 +1101,11 @@ func Prec(p *P, min i64) *Node {
 
 func PeekBinop(p *P) i64 {
   Skip(p)
-  if p.i >= p.n {
+  if p.i >= len(p.src) {
     return 0
   }
   var c i64 = At(p, p.i)
-  if p.i + 1 < p.n {
+  if p.i + 1 < len(p.src) {
     var d i64 = At(p, p.i + 1)
     if c == 38 && d == 38 {
       return OP_LAND
@@ -1197,7 +1191,7 @@ func Unary0(p *P) *Node {
   if PeekByte(p, 33) {
     op = OP_NOT
   } else if PeekByte(p, 45) {
-    if p.i + 1 < p.n && IsDigit(At(p, p.i + 1)) {
+    if p.i + 1 < len(p.src) && IsDigit(At(p, p.i + 1)) {
       return Number(p)
     }
     op = OP_NEG
@@ -1399,9 +1393,9 @@ func Primary0(p *P) *Node {
   if isLoad || isBswap {
     Ident(p)
     // The digit after "load" or "bswap": 1, 3, or 6, or none for load8.
-    var wd i64 = At(p, p.tp - p.src + 4)
+    var wd i64 = At(p, p.tp - ptr(p.src) + 4)
     if isBswap {
-      wd = At(p, p.tp - p.src + 5)
+      wd = At(p, p.tp - ptr(p.src) + 5)
     }
     var lop i64 = OP_LOAD8
     if isBswap {
@@ -1444,7 +1438,7 @@ func Primary0(p *P) *Node {
   if PeekKw(p, strptr("strptr"), 6) || PeekKw(p, strptr("strlen"), 6) {
     Ident(p)
     var sop i64 = OP_STRPTR
-    if At(p, p.tp - p.src + 3) == 108 {
+    if At(p, p.tp - ptr(p.src) + 3) == 108 {
       sop = OP_STRLEN
     }
     Expect(p, 40)
@@ -1635,11 +1629,11 @@ func CallArgs(p *P, op i64, pkgp i64, pkgn i64, fnp i64, fnn i64) *Node {
 
 func IsNum(p *P) bool {
   Skip(p)
-  if p.i >= p.n {
+  if p.i >= len(p.src) {
     return false
   }
   var c i64 = At(p, p.i)
-  if c == 45 && p.i + 1 < p.n && IsDigit(At(p, p.i + 1)) {
+  if c == 45 && p.i + 1 < len(p.src) && IsDigit(At(p, p.i + 1)) {
     return true
   }
   return IsDigit(c)
@@ -1665,11 +1659,11 @@ func Number(p *P) *Node {
     p.i = p.i + 1
   }
   var base i64 = 10
-  if p.i + 1 < p.n && At(p, p.i) == 48 && (At(p, p.i + 1) == 120 || At(p, p.i + 1) == 88) {
+  if p.i + 1 < len(p.src) && At(p, p.i) == 48 && (At(p, p.i + 1) == 120 || At(p, p.i + 1) == 88) {
     base = 16
     p.i = p.i + 2
   }
-  while p.i < p.n && (IsDigit(At(p, p.i)) || (base == 16 && HexDigit(At(p, p.i)) >= 0)) {
+  while p.i < len(p.src) && (IsDigit(At(p, p.i)) || (base == 16 && HexDigit(At(p, p.i)) >= 0)) {
     p.i = p.i + 1
   }
   var e i64 = p.i
@@ -1677,7 +1671,7 @@ func Number(p *P) *Node {
   p.cok = true
   var v i64 = ParseInt(p, s, e)
   if !p.cok {
-    Errorf2(p, strptr("bad integer "), strlen("bad integer "), p.src + s, e - s)
+    Errorf2(p, strptr("bad integer "), strlen("bad integer "), ptr(p.src) + s, e - s)
   }
   var n *Node = NewNode(p, OP_INT)
   n.num = Eid(p)
@@ -1784,7 +1778,7 @@ func Utf8Len(q i64, m i64) i64 {
 
 // ParseString reads a "..." literal; the decoded bytes are p.tp/p.tn.
 func ParseString(p *P) i64 {
-  p.tp = p.src
+  p.tp = ptr(p.src)
   p.tn = 0
   if !PeekByte(p, 34) {
     Errorf(p, strptr("expected string"), strlen("expected string"))
@@ -1793,7 +1787,7 @@ func ParseString(p *P) i64 {
   p.i = p.i + 1
   Bump(p)
   var b *ovid/mem.Buf = ovid/mem.New(p.io, 32)
-  while p.i < p.n {
+  while p.i < len(p.src) {
     var c i64 = At(p, p.i)
     if c == 34 {
       p.i = p.i + 1
@@ -1803,7 +1797,7 @@ func ParseString(p *P) i64 {
       return 0
     }
     if c == 92 {
-      if p.i + 1 >= p.n {
+      if p.i + 1 >= len(p.src) {
         Errorf(p, strptr("bad escape"), strlen("bad escape"))
         return 0
       }
@@ -1820,7 +1814,7 @@ func ParseString(p *P) i64 {
       } else if e == 48 {
         ovid/mem.WByte(p.io, b, 0)
       } else if e == 120 {
-        if p.i + 1 >= p.n {
+        if p.i + 1 >= len(p.src) {
           Errorf(p, strptr("bad hex escape"), strlen("bad hex escape"))
           return 0
         }
@@ -1841,12 +1835,12 @@ func ParseString(p *P) i64 {
         Errorf(p, strptr("newline in string"), strlen("newline in string"))
         return 0
       }
-      var sz i64 = Utf8Len(p.src + p.i, p.n - p.i)
+      var sz i64 = Utf8Len(ptr(p.src) + p.i, len(p.src) - p.i)
       if sz == 0 {
         Errorf(p, strptr("bad utf-8"), strlen("bad utf-8"))
         return 0
       }
-      ovid/mem.WBytes(p.io, b, bytes(p.src + p.i, sz))
+      ovid/mem.WBytes(p.io, b, bytes(ptr(p.src) + p.i, sz))
       p.i = p.i + sz
     }
   }

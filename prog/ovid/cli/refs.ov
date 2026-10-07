@@ -115,7 +115,7 @@ func IdExists(m *ovid/parse.Mod, q i64, n i64, c i64) bool {
   if load8(q) == 112 {
     var k *ovid/parse.Pkg = m.pkgs
     while k != 0 as *ovid/parse.Pkg {
-      if Eq2(k.pathp, k.pathn, rp, rn) {
+      if Eq2(ptr(k.path), len(k.path), rp, rn) {
         return true
       }
       k = k.next
@@ -130,7 +130,7 @@ func IdExists(m *ovid/parse.Mod, q i64, n i64, c i64) bool {
     }
     var k *ovid/parse.Pkg = m.pkgs
     while k != 0 as *ovid/parse.Pkg {
-      if Eq2(k.pathp, k.pathn, rp, c2) {
+      if Eq2(ptr(k.path), len(k.path), rp, c2) {
         return ovid/parse.FindDecl(k.ims, (rp + c2) + 1, (rn - c2) - 1) != 0 as *ovid/parse.Decl
       }
       k = k.next
@@ -186,11 +186,11 @@ func ByID(m *ovid/parse.Mod, t *Target, qp i64, qn i64) i64 {
     t.bad = ovid/mem.New(m.io, 256)
     ovid/mem.WBytes(m.io, t.bad, "refs works on funcs, types, fields, consts, params, and var statements, not ")
     if load8(qp) == 101 {
-      ovid/mem.WBytes(m.io, t.bad, bytes(strptr("expr"), 4))
+      ovid/mem.WBytes(m.io, t.bad, "expr")
     } else if load8(qp) == 112 {
-      ovid/mem.WBytes(m.io, t.bad, bytes(strptr("package"), 7))
+      ovid/mem.WBytes(m.io, t.bad, "package")
     } else {
-      ovid/mem.WBytes(m.io, t.bad, bytes(strptr("import"), 6))
+      ovid/mem.WBytes(m.io, t.bad, "import")
     }
     t.nmatch = 1
     return 0
@@ -228,7 +228,7 @@ func ByID(m *ovid/parse.Mod, t *Target, qp i64, qn i64) i64 {
     pn = dot2
   }
   var k *ovid/parse.Pkg = m.pkgs
-  while k != 0 as *ovid/parse.Pkg && !Eq2(k.pathp, k.pathn, rp, pn) {
+  while k != 0 as *ovid/parse.Pkg && !Eq2(ptr(k.path), len(k.path), rp, pn) {
     k = k.next
   }
   if k == 0 as *ovid/parse.Pkg {
@@ -266,7 +266,7 @@ func ByID(m *ovid/parse.Mod, t *Target, qp i64, qn i64) i64 {
       ovid/mem.WBytes(m.io, t.bad, bytes(qp, qn))
       ovid/mem.WBytes(m.io, t.bad, " declares two locals, ")
       ovid/mem.WBytes(m.io, t.bad, bytes(t.vn.namep, t.vn.namen))
-      ovid/mem.WBytes(m.io, t.bad, bytes(strptr(" and "), 5))
+      ovid/mem.WBytes(m.io, t.bad, " and ")
       ovid/mem.WBytes(m.io, t.bad, bytes(t.vn.name2p, t.vn.name2n))
       ovid/mem.WBytes(m.io, t.bad, ", and an id names only one; refs cannot reach either yet (ovid grep finds their uses)")
     } else if t.vn.op != ovid/parse.OP_VAR {
@@ -287,11 +287,11 @@ func ByID(m *ovid/parse.Mod, t *Target, qp i64, qn i64) i64 {
 // the tail of it after a "/" (mem for ovid/mem), as the Go toolchain's
 // name lookup allows.
 func PkgIs(k *ovid/parse.Pkg, q i64, n i64) bool {
-  if Eq2(k.pathp, k.pathn, q, n) {
+  if Eq2(ptr(k.path), len(k.path), q, n) {
     return true
   }
-  if k.pathn > n && load8((k.pathp + k.pathn) - (n + 1)) == 47 {
-    return Eq2((k.pathp + k.pathn) - n, n, q, n)
+  if len(k.path) > n && load8((ptr(k.path) + len(k.path)) - (n + 1)) == 47 {
+    return Eq2((ptr(k.path) + len(k.path)) - n, n, q, n)
   }
   return false
 }
@@ -420,19 +420,19 @@ func Hits(t *Target, u *ovid/parse.Use) bool {
 // WTarget writes t's id.
 func WTarget(io *ovid/io.Cap, b *ovid/mem.Buf, t *Target) i64 {
   if t.kind == T_FUNC {
-    ovid/mem.WBytes(io, b, bytes(strptr("fn:"), 3))
+    ovid/mem.WBytes(io, b, "fn:")
   } else if t.kind == T_TYPE {
-    ovid/mem.WBytes(io, b, bytes(strptr("ty:"), 3))
+    ovid/mem.WBytes(io, b, "ty:")
   } else if t.kind == T_CONST {
-    ovid/mem.WBytes(io, b, bytes(strptr("cn:"), 3))
+    ovid/mem.WBytes(io, b, "cn:")
   } else if t.kind == T_FIELD {
-    ovid/mem.WBytes(io, b, bytes(strptr("fld:"), 4))
+    ovid/mem.WBytes(io, b, "fld:")
   } else if t.kind == T_PARAM {
-    ovid/mem.WBytes(io, b, bytes(strptr("pa:"), 3))
+    ovid/mem.WBytes(io, b, "pa:")
   } else {
-    ovid/mem.WBytes(io, b, bytes(strptr("st:"), 3))
+    ovid/mem.WBytes(io, b, "st:")
   }
-  ovid/mem.WBytes(io, b, bytes(t.pkg.pathp, t.pkg.pathn))
+  ovid/mem.WBytes(io, b, t.pkg.path)
   ovid/mem.WByte(io, b, 46)
   if t.own != 0 as *ovid/parse.Decl {
     ovid/mem.WBytes(io, b, bytes(t.own.namep, t.own.namen))
@@ -451,11 +451,11 @@ func WTarget(io *ovid/io.Cap, b *ovid/mem.Buf, t *Target) i64 {
 // func has a result type and no type decl does; a func's body may be empty.
 func WDeclID(io *ovid/io.Cap, b *ovid/mem.Buf, d *ovid/parse.Decl) i64 {
   if d.typn != 0 {
-    ovid/mem.WBytes(io, b, bytes(strptr("fn:"), 3))
+    ovid/mem.WBytes(io, b, "fn:")
   } else {
-    ovid/mem.WBytes(io, b, bytes(strptr("ty:"), 3))
+    ovid/mem.WBytes(io, b, "ty:")
   }
-  ovid/mem.WBytes(io, b, bytes(d.pkg.pathp, d.pkg.pathn))
+  ovid/mem.WBytes(io, b, d.pkg.path)
   ovid/mem.WByte(io, b, 46)
   ovid/mem.WBytes(io, b, bytes(d.namep, d.namen))
   return 0
@@ -485,8 +485,8 @@ func LineFrom(f *ovid/parse.File, off i64, lp i64, ln i64, cur *Cursor) i64 {
       ls = cur.ls
     }
   }
-  while i < off && i < f.n {
-    if load8(f.src + i) == 10 {
+  while i < off && i < len(f.src) {
+    if load8(ptr(f.src) + i) == 10 {
       line = line + 1
       ls = i + 1
     }
@@ -499,16 +499,16 @@ func LineFrom(f *ovid/parse.File, off i64, lp i64, ln i64, cur *Cursor) i64 {
     cur.ls = ls
   }
   var le i64 = ls
-  while le < f.n && load8(f.src + le) != 10 {
+  while le < len(f.src) && load8(ptr(f.src) + le) != 10 {
     le = le + 1
   }
-  while ls < le && (load8(f.src + ls) == 32 || load8(f.src + ls) == 9) {
+  while ls < le && (load8(ptr(f.src) + ls) == 32 || load8(ptr(f.src) + ls) == 9) {
     ls = ls + 1
   }
-  while le > ls && (load8(f.src + (le - 1)) == 32 || load8(f.src + (le - 1)) == 9 || load8(f.src + (le - 1)) == 13) {
+  while le > ls && (load8(ptr(f.src) + (le - 1)) == 32 || load8(ptr(f.src) + (le - 1)) == 9 || load8(ptr(f.src) + (le - 1)) == 13) {
     le = le - 1
   }
-  store64(lp, f.src + ls)
+  store64(lp, ptr(f.src) + ls)
   store64(ln, le - ls)
   return line
 }
@@ -523,7 +523,7 @@ func UseFile(u *ovid/parse.Use) *ovid/parse.File {
 // integer: file number above, offset below.
 func SortKey(u *ovid/parse.Use) i64 {
   var f *ovid/parse.File = UseFile(u)
-  return (f.ord << 32) | (u.tokp - f.src)
+  return (f.ord << 32) | (u.tokp - ptr(f.src))
 }
 
 // NumberFiles gives each module file its place in the list.
@@ -615,7 +615,7 @@ func CmdRefs(io *ovid/io.Cap) i64 {
   if copies > 1 {
     var ab *ovid/mem.Buf = ovid/mem.New(io, 256)
     WTarget(io, ab, t)
-    ovid/mem.WBytes(io, ab, bytes(strptr(" names "), 7))
+    ovid/mem.WBytes(io, ab, " names ")
     ovid/parse.WInt(io, ab, copies)
     ovid/mem.WBytes(io, ab, " nodes (check reports the duplicate)")
     return Fail(io, strptr("ambiguous_id"), 12, ab.data, ab.len)
@@ -655,8 +655,8 @@ func CmdRefs(io *ovid/io.Cap) i64 {
       if last == 0 as *ovid/parse.Decl || last.file != f {
         files = files + 1
       }
-      ovid/mem.WBytes(io, b, bytes(f.dispp, f.dispn))
-      ovid/mem.WBytes(io, b, bytes(strptr("  "), 2))
+      ovid/mem.WBytes(io, b, f.disp)
+      ovid/mem.WBytes(io, b, "  ")
       WDeclID(io, b, u.in)
       ovid/mem.WByte(io, b, 10)
       last = u.in
@@ -666,7 +666,7 @@ func CmdRefs(io *ovid/io.Cap) i64 {
     }
     // The line is the one the node that spells the use starts on, as
     // the Go refs prints it: a func's own result use starts at the func.
-    var off i64 = u.tokp - f.src
+    var off i64 = u.tokp - ptr(f.src)
     if u.node != 0 as *ovid/parse.Node {
       off = u.node.off
     } else if u.kind == ovid/parse.USE_RESULT {
@@ -683,7 +683,7 @@ func CmdRefs(io *ovid/io.Cap) i64 {
       pad = pad - 1
     }
     ovid/mem.WBytes(io, b, bytes(tmp, dn))
-    ovid/mem.WBytes(io, b, bytes(strptr(": "), 2))
+    ovid/mem.WBytes(io, b, ": ")
     ovid/mem.WBytes(io, b, bytes(load64(lp), load64(ln)))
     ovid/mem.WByte(io, b, 10)
     i = i + 1
@@ -707,7 +707,7 @@ func CmdRefs(io *ovid/io.Cap) i64 {
         ovid/mem.WByte(io, b, 44)
       }
       first = false
-      ovid/parse.WStr(io, b, k.pathp, k.pathn)
+      ovid/parse.WStr(io, b, ptr(k.path), len(k.path))
       ovid/mem.WByte(io, b, 58)
       ovid/parse.WInt(io, b, cnt)
     }

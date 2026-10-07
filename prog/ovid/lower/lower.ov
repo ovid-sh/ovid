@@ -223,7 +223,7 @@ func Lookup(l *L, np i64, nn i64) bool {
 func FindPkg(l *L, pp i64, pn i64) *ovid/parse.Pkg {
   var k *ovid/parse.Pkg = l.mod.pkgs
   while k != 0 as *ovid/parse.Pkg {
-    if ovid/mem.Eq(bytes(k.pathp, k.pathn), bytes(pp, pn)) {
+    if ovid/mem.Eq(k.path, bytes(pp, pn)) {
       return k
     }
     k = k.next
@@ -274,8 +274,8 @@ func FieldIsBytes(l *L, bt *ovid/parse.Decl, fp i64, fnn i64) bool {
 }
 
 func Callee(l *L, n *ovid/parse.Node) *ovid/parse.Decl {
-  var pp i64 = l.pkg.pathp
-  var pn i64 = l.pkg.pathn
+  var pp i64 = ptr(l.pkg.path)
+  var pn i64 = len(l.pkg.path)
   if n.pkgn != 0 {
     pp = n.pkgp
     pn = n.pkgn

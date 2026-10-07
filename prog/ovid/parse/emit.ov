@@ -26,7 +26,7 @@ func WC(e *E, c i64) i64 {
 func WInt(io *ovid/io.Cap, b *ovid/mem.Buf, v i64) i64 {
   var tmp i64 = ovid/io.Alloc(io, 64)
   if v == -9223372036854775807 - 1 {
-    return ovid/mem.WBytes(io, b, bytes(strptr("-9223372036854775808"), 20))
+    return ovid/mem.WBytes(io, b, "-9223372036854775808")
   }
   var n i64 = ovid/mem.FormatI64(tmp, v)
   return ovid/mem.WBytes(io, b, bytes(tmp, n))
@@ -75,7 +75,7 @@ func WStr(io *ovid/io.Cap, b *ovid/mem.Buf, p i64, n i64) i64 {
       } else if c == 9 {
         ovid/mem.WByte(io, b, 116)
       } else {
-        ovid/mem.WBytes(io, b, bytes(strptr("u00"), 3))
+        ovid/mem.WBytes(io, b, "u00")
         var hx i64 = ovid/io.Alloc(io, 8)
         ovid/mem.HexOut(hx, c, 2)
         ovid/mem.WBytes(io, b, bytes(hx, 2))
@@ -412,21 +412,21 @@ func EDeclId(e *E, pre i64, pren i64, d *Decl) i64 {
 }
 
 func EPkg(e *E, k *Pkg) i64 {
-  e.pkgp = k.pathp
-  e.pkgn = k.pathn
+  e.pkgp = ptr(k.path)
+  e.pkgn = len(k.path)
   WC(e, 123)
   IdOpen(e, strptr("pkg:"), 4)
-  WL(e, k.pathp, k.pathn)
+  WL(e, ptr(k.path), len(k.path))
   WC(e, 34)
   WL(e, strptr(",\"path\":"), 8)
-  WS(e, k.pathp, k.pathn)
+  WS(e, ptr(k.path), len(k.path))
   var d *Decl = k.ims
   if d != 0 as *Decl {
     WL(e, strptr(",\"imports\":["), 12)
     while d != 0 as *Decl {
       WC(e, 123)
       IdOpen(e, strptr("im:"), 3)
-      WL(e, k.pathp, k.pathn)
+      WL(e, ptr(k.path), len(k.path))
       WC(e, 58)
       WL(e, d.namep, d.namen)
       WC(e, 34)
@@ -490,7 +490,7 @@ func EPkg(e *E, k *Pkg) i64 {
         while f != 0 as *Decl {
           WC(e, 123)
           IdOpen(e, strptr("fld:"), 4)
-          WL(e, k.pathp, k.pathn)
+          WL(e, ptr(k.path), len(k.path))
           WC(e, 46)
           WL(e, d.namep, d.namen)
           WC(e, 46)
@@ -528,7 +528,7 @@ func EPkg(e *E, k *Pkg) i64 {
         while pa != 0 as *Decl {
           WC(e, 123)
           IdOpen(e, strptr("pa:"), 3)
-          WL(e, k.pathp, k.pathn)
+          WL(e, ptr(k.path), len(k.path))
           WC(e, 46)
           WL(e, d.namep, d.namen)
           WC(e, 46)
@@ -579,7 +579,7 @@ func Emit(m *Mod) i64 {
   WL(e, strptr("\",\"module\":"), 11)
   WS(e, m.namep, m.namen)
   WL(e, strptr(",\"entry\":"), 9)
-  WS(e, m.entryp, m.entryn)
+  WS(e, ptr(m.entry), len(m.entry))
   WL(e, strptr(",\"packages\":"), 12)
   var k *Pkg = m.pkgs
   if k == 0 as *Pkg {
@@ -604,24 +604,24 @@ func WPos(io *ovid/io.Cap, b *ovid/mem.Buf, f *File, off i64) i64 {
   var line i64 = 1
   var ls i64 = 0
   var i i64 = 0
-  while i < off && i < f.n {
-    if load8(f.src + i) == 10 {
+  while i < off && i < len(f.src) {
+    if load8(ptr(f.src) + i) == 10 {
       line = line + 1
       ls = i + 1
     }
     i = i + 1
   }
   var le i64 = ls
-  while le < f.n && load8(f.src + le) != 10 {
+  while le < len(f.src) && load8(ptr(f.src) + le) != 10 {
     le = le + 1
   }
   ovid/mem.WBytes(io, b, bytes(strptr(",\"file\":"), 8))
-  WStr(io, b, f.dispp, f.dispn)
+  WStr(io, b, ptr(f.disp), len(f.disp))
   ovid/mem.WBytes(io, b, bytes(strptr(",\"line\":"), 8))
   WInt(io, b, line)
   ovid/mem.WBytes(io, b, bytes(strptr(",\"col\":"), 7))
   WInt(io, b, (off - ls) + 1)
   ovid/mem.WBytes(io, b, bytes(strptr(",\"source\":"), 10))
-  WStr(io, b, f.src + ls, le - ls)
+  WStr(io, b, ptr(f.src) + ls, le - ls)
   return 0
 }

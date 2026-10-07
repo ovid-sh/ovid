@@ -110,10 +110,10 @@ func TestBind(io *ovid/io.Cap) i64 {
   if i != LocOf(c, bT) || j != LocOf(c, bBool) || i == j {
     return 3
   }
-  if !ovid/mem.Eq(bytes(load64(i + 24), load64(i + 32)), bytes(strptr("*T"), 2)) {
+  if !ovid/mem.Eq(bytes(load64(i + 24), load64(i + 32)), "*T") {
     return 4
   }
-  if !ovid/mem.Eq(bytes(load64(j + 24), load64(j + 32)), bytes(strptr("bool"), 4)) {
+  if !ovid/mem.Eq(bytes(load64(j + 24), load64(j + 32)), "bool") {
     return 5
   }
   if load64(i + 16) != load64(j + 16) {

@@ -11,15 +11,12 @@ import ovid/sha
 // been printed as JSON lines.
 type Mod struct {
   io *ovid/io.Cap
-  dirp i64
-  dirn i64
+  dir bytes
   notests bool
   namep i64
   namen i64
-  entryp i64
-  entryn i64
-  stdp i64
-  stdn i64
+  entry bytes
+  std bytes
   sys i64
   sysunk i64
   pkgs *Pkg
@@ -28,11 +25,10 @@ type Mod struct {
   nerr i64
   out *ovid/mem.Buf
   json *ovid/mem.Buf
-  modsrc i64
+  modsrc bytes
   uses *Use
   usest *Use
   nuses i64
-  modlen i64
   ftab i64
   fmask i64
   rev i64
@@ -151,13 +147,12 @@ func ReadMod(m *Mod, src i64, n i64, stdp i64, stdn i64) i64 {
         WStr(m.io, b, src + ls, le - ls)
         ovid/mem.WBytes(m.io, b, "; want `module <name>` or `entry <pkg>`")
         LoadErr(m, strptr("mod"), 3, 0 as *File, 0, b)
-      } else if ovid/mem.Eq(bytes(f0, f0n), bytes(strptr("module"), 6)) {
+      } else if ovid/mem.Eq(bytes(f0, f0n), "module") {
         m.namep = f1
         m.namen = f1n
-      } else if ovid/mem.Eq(bytes(f0, f0n), bytes(strptr("entry"), 5)) {
-        m.entryp = f1
-        m.entryn = f1n
-      } else if ovid/mem.Eq(bytes(f0, f0n), bytes(strptr("std"), 3)) {
+      } else if ovid/mem.Eq(bytes(f0, f0n), "entry") {
+        m.entry = bytes(f1, f1n)
+      } else if ovid/mem.Eq(bytes(f0, f0n), "std") {
         // A module once could name its own standard library here, and with
         // it take the right to call syscall.
         var sb *ovid/mem.Buf = Msg(m.io, strptr("ovid.mod: the std line is no longer supported: the standard library is the directory --std names on the command line; delete the line"), strlen("ovid.mod: the std line is no longer supported: the standard library is the directory --std names on the command line; delete the line"))
@@ -169,21 +164,20 @@ func ReadMod(m *Mod, src i64, n i64, stdp i64, stdn i64) i64 {
       }
     }
   }
-  m.stdp = stdp
-  m.stdn = stdn
+  m.std = bytes(stdp, stdn)
   return 0
 }
 
 // StdHas reports whether the standard library holds a package of this
 // path: a directory there with a .ov file in it.
 func StdHas(m *Mod, pathp i64, pathn i64) bool {
-  if m.stdn == 0 {
+  if len(m.std) == 0 {
     return false
   }
-  var dir i64 = Path(m.io, m.stdp, m.stdn, pathp, pathn)
+  var dir i64 = Path(m.io, ptr(m.std), len(m.std), pathp, pathn)
   var e *File = ListDir(m.io, dir)
   while e != 0 as *File {
-    if !EntIsDir(m.io, dir, e) && HasOvSuffix(e.relp, e.reln) {
+    if !EntIsDir(m.io, dir, e) && HasOvSuffix(ptr(e.rel), len(e.rel)) {
       return true
     }
     e = e.next
@@ -192,7 +186,7 @@ func StdHas(m *Mod, pathp i64, pathn i64) bool {
 }
 
 // ListDir returns the entries of a directory as a list of Files used as
-// (name = relp/reln, std = d_type), sorted by name, without . and ..
+// (name = rel, std = d_type), sorted by name, without . and ..
 // It uses getdents64 through ovid/io.Getdents.
 func ListDir(io *ovid/io.Cap, path i64) *File {
   var fd i64, e i64 = ovid/io.Open(path, 65536, 0)
@@ -212,8 +206,7 @@ func ListDir(io *ovid/io.Cap, path i64) *File {
       var dot bool = (nn == 1 && load8(nm) == 46) || (nn == 2 && load8(nm) == 46 && load8(nm + 1) == 46)
       if !dot {
         var f *File = ovid/io.Alloc(io, sizeof(File)) as *File
-        f.relp = Cat(io, nm, nn, 0, 0)
-        f.reln = nn
+        f.rel = bytes(Cat(io, nm, nn, 0, 0), nn)
         f.std = load8(rec + 18)
         head = InsertByName(head, f)
       }
@@ -225,14 +218,14 @@ func ListDir(io *ovid/io.Cap, path i64) *File {
   return head
 }
 
-// InsertByName inserts f into the list sorted by relp.
+// InsertByName inserts f into the list sorted by rel.
 func InsertByName(head *File, f *File) *File {
-  if head == 0 as *File || Cmp(f.relp, f.reln, head.relp, head.reln) < 0 {
+  if head == 0 as *File || Cmp(ptr(f.rel), len(f.rel), ptr(head.rel), len(head.rel)) < 0 {
     f.next = head
     return f
   }
   var c *File = head
-  while c.next != 0 as *File && Cmp(c.next.relp, c.next.reln, f.relp, f.reln) <= 0 {
+  while c.next != 0 as *File && Cmp(ptr(c.next.rel), len(c.next.rel), ptr(f.rel), len(f.rel)) <= 0 {
     c = c.next
   }
   f.next = c.next
@@ -245,7 +238,7 @@ func EntIsDir(io *ovid/io.Cap, dir i64, e *File) bool {
     return true
   }
   if e.std == 0 {
-    var full i64 = Path(io, dir, ovid/io.CLen(dir), e.relp, e.reln)
+    var full i64 = Path(io, dir, ovid/io.CLen(dir), ptr(e.rel), len(e.rel))
     var isdir bool, _ = ovid/io.IsDir(io, bytes(full, ovid/io.CLen(full)))
     return isdir
   }
@@ -253,11 +246,11 @@ func EntIsDir(io *ovid/io.Cap, dir i64, e *File) bool {
 }
 
 func HasOvSuffix(p i64, n i64) bool {
-  return n >= 3 && ovid/mem.Eq(bytes((p + n) - 3, 3), bytes(strptr(".ov"), 3))
+  return n >= 3 && ovid/mem.Eq(bytes((p + n) - 3, 3), ".ov")
 }
 
 func IsTestFile(p i64, n i64) bool {
-  return n >= 8 && ovid/mem.Eq(bytes((p + n) - 8, 8), bytes(strptr("_test.ov"), 8))
+  return n >= 8 && ovid/mem.Eq(bytes((p + n) - 8, 8), "_test.ov")
 }
 
 // GroupFor finds or makes the package for path p[0:n], keeping m.pkgs
@@ -265,16 +258,15 @@ func IsTestFile(p i64, n i64) bool {
 func GroupFor(m *Mod, p i64, n i64) *Pkg {
   var prev *Pkg = 0 as *Pkg
   var c *Pkg = m.pkgs
-  while c != 0 as *Pkg && Cmp(c.pathp, c.pathn, p, n) < 0 {
+  while c != 0 as *Pkg && Cmp(ptr(c.path), len(c.path), p, n) < 0 {
     prev = c
     c = c.next
   }
-  if c != 0 as *Pkg && Cmp(c.pathp, c.pathn, p, n) == 0 {
+  if c != 0 as *Pkg && Cmp(ptr(c.path), len(c.path), p, n) == 0 {
     return c
   }
   var k *Pkg = ovid/io.Alloc(m.io, sizeof(Pkg)) as *Pkg
-  k.pathp = p
-  k.pathn = n
+  k.path = bytes(p, n)
   k.next = c
   if prev == 0 as *Pkg {
     m.pkgs = k
@@ -290,33 +282,29 @@ func Walk(m *Mod, abs i64, relp i64, reln i64) i64 {
   var e *File = ListDir(m.io, abs)
   while e != 0 as *File {
     var next *File = e.next
-    var full i64 = Path(m.io, abs, ovid/io.CLen(abs), e.relp, e.reln)
-    var crel i64 = Path(m.io, relp, reln, e.relp, e.reln)
-    var creln i64 = e.reln
+    var full i64 = Path(m.io, abs, ovid/io.CLen(abs), ptr(e.rel), len(e.rel))
+    var crel i64 = Path(m.io, relp, reln, ptr(e.rel), len(e.rel))
+    var creln i64 = len(e.rel)
     if reln != 0 {
-      creln = (reln + 1) + e.reln
+      creln = (reln + 1) + len(e.rel)
     }
     if EntIsDir(m.io, abs, e) {
       var modf i64 = Path(m.io, full, ovid/io.CLen(full), strptr("ovid.mod"), 8)
       var st i64 = ovid/io.Alloc(m.io, 256)
-      if load8(e.relp) != 46 && ovid/io.FstatAt(modf, st) != 0 {
+      if load8(ptr(e.rel)) != 46 && ovid/io.FstatAt(modf, st) != 0 {
         Walk(m, full, crel, creln)
       }
-    } else if HasOvSuffix(e.relp, e.reln) && !(m.notests && IsTestFile(e.relp, e.reln)) {
+    } else if HasOvSuffix(ptr(e.rel), len(e.rel)) && !(m.notests && IsTestFile(ptr(e.rel), len(e.rel))) {
       var src bytes, re i64 = ovid/io.ReadFile(m.io, bytes(full, ovid/io.CLen(full)))
       if re == 0 {
         var f *File = ovid/io.Alloc(m.io, sizeof(File)) as *File
-        f.relp = crel
-        f.reln = creln
-        if m.dirn == 1 && load8(m.dirp) == 46 {
-          f.dispp = crel
-          f.dispn = creln
+        f.rel = bytes(crel, creln)
+        if len(m.dir) == 1 && load8(ptr(m.dir)) == 46 {
+          f.disp = bytes(crel, creln)
         } else {
-          f.dispp = full
-          f.dispn = ovid/io.CLen(full)
+          f.disp = bytes(full, ovid/io.CLen(full))
         }
-        f.src = ptr(src)
-        f.n = len(src)
+        f.src = src
         var k *Pkg = GroupFor(m, relp, reln)
         k.files = InsertByName(k.files, f)
       } else {
@@ -346,9 +334,9 @@ func AddPackage(m *Mod, k *Pkg) i64 {
   var f *File = k.files
   while f != 0 as *File {
     AddFileM(m, f)
-    if k.pathn == 0 {
+    if len(k.path) == 0 {
       var b *ovid/mem.Buf = Msg(m.io, strptr("source file is in the module root; put it in a package directory such as "), strlen("source file is in the module root; put it in a package directory such as "))
-      ovid/mem.WBytes(m.io, b, bytes(f.relp, f.reln - 3))
+      ovid/mem.WBytes(m.io, b, bytes(ptr(f.rel), len(f.rel) - 3))
       ovid/mem.WByte(m.io, b, 47)
       LoadErr(m, strptr("layout"), 6, f, 0, b)
     } else {
@@ -356,23 +344,23 @@ func AddPackage(m *Mod, k *Pkg) i64 {
       var one *Pkg = ParseFile(p)
       if p.err != 0 {
         LoadErr(m, strptr("syntax"), 6, f, p.eoff, p.emsg)
-      } else if !ovid/mem.Eq(bytes(one.pathp, one.pathn), bytes(k.pathp, k.pathn)) {
+      } else if !ovid/mem.Eq(one.path, k.path) {
         var lb *ovid/mem.Buf = Msg(m.io, strptr("file says `package "), 19)
-        ovid/mem.WBytes(m.io, lb, bytes(one.pathp, one.pathn))
-        ovid/mem.WBytes(m.io, lb, bytes(strptr("` but sits in directory "), 24))
-        ovid/mem.WBytes(m.io, lb, bytes(k.pathp, k.pathn))
+        ovid/mem.WBytes(m.io, lb, one.path)
+        ovid/mem.WBytes(m.io, lb, "` but sits in directory ")
+        ovid/mem.WBytes(m.io, lb, k.path)
         m.hint = Msg(m.io, strptr("the package path is the directory path; write `package "), strlen("the package path is the directory path; write `package "))
-        ovid/mem.WBytes(m.io, m.hint, bytes(k.pathp, k.pathn))
+        ovid/mem.WBytes(m.io, m.hint, k.path)
         ovid/mem.WByte(m.io, m.hint, 96)
         LoadErr(m, strptr("layout"), 6, f, one.off, lb)
       } else if k.ok == 0 {
-        if k.std == 0 && StdHas(m, k.pathp, k.pathn) {
+        if k.std == 0 && StdHas(m, ptr(k.path), len(k.path)) {
           // Once for the package, at its first file's package clause.
           var rb *ovid/mem.Buf = Msg(m.io, strptr("package "), 8)
-          ovid/mem.WBytes(m.io, rb, bytes(k.pathp, k.pathn))
+          ovid/mem.WBytes(m.io, rb, k.path)
           ovid/mem.WBytes(m.io, rb, " is one the toolchain ships; a module may not have its own")
           m.hint = Msg(m.io, strptr("move these files to a package path of the module's own, and import "), strlen("move these files to a package path of the module's own, and import "))
-          ovid/mem.WBytes(m.io, m.hint, bytes(k.pathp, k.pathn))
+          ovid/mem.WBytes(m.io, m.hint, k.path)
           ovid/mem.WBytes(m.io, m.hint, " for the shipped one")
           LoadErr(m, strptr("reserved_path"), 13, f, one.off, rb)
         }
@@ -444,7 +432,7 @@ func Merge(k *Pkg, one *Pkg) i64 {
 func HavePkg(m *Mod, p i64, n i64) bool {
   var k *Pkg = m.pkgs
   while k != 0 as *Pkg {
-    if ovid/mem.Eq(bytes(k.pathp, k.pathn), bytes(p, n)) {
+    if ovid/mem.Eq(k.path, bytes(p, n)) {
       return true
     }
     k = k.next
@@ -476,15 +464,14 @@ func StdPass(m *Mod) i64 {
         var dup bool = false
         var q *Pkg = need
         while q != 0 as *Pkg {
-          if ovid/mem.Eq(bytes(q.pathp, q.pathn), bytes(im.namep, im.namen)) {
+          if ovid/mem.Eq(q.path, bytes(im.namep, im.namen)) {
             dup = true
           }
           q = q.next
         }
         if !dup {
           var nk *Pkg = ovid/io.Alloc(m.io, sizeof(Pkg)) as *Pkg
-          nk.pathp = im.namep
-          nk.pathn = im.namen
+          nk.path = bytes(im.namep, im.namen)
           nk.next = need
           need = nk
           cnt = cnt + 1
@@ -497,9 +484,9 @@ func StdPass(m *Mod) i64 {
   if cnt == 0 {
     return 0
   }
-  if m.stdn == 0 {
+  if len(m.std) == 0 {
     var b *ovid/mem.Buf = Msg(m.io, strptr("module imports "), 15)
-    ovid/mem.WBytes(m.io, b, bytes(need.pathp, need.pathn))
+    ovid/mem.WBytes(m.io, b, need.path)
     ovid/mem.WBytes(m.io, b, " and no standard library was given; pass --std <dir> (the directory holding ovid/io and ovid/mem)")
     LoadErr(m, strptr("no_std"), 6, 0 as *File, 0, b)
     return 0
@@ -507,12 +494,12 @@ func StdPass(m *Mod) i64 {
   var sorted *Pkg = 0 as *Pkg
   while need != 0 as *Pkg {
     var nx *Pkg = need.next
-    if sorted == 0 as *Pkg || Cmp(need.pathp, need.pathn, sorted.pathp, sorted.pathn) < 0 {
+    if sorted == 0 as *Pkg || Cmp(ptr(need.path), len(need.path), ptr(sorted.path), len(sorted.path)) < 0 {
       need.next = sorted
       sorted = need
     } else {
       var c *Pkg = sorted
-      while c.next != 0 as *Pkg && Cmp(c.next.pathp, c.next.pathn, need.pathp, need.pathn) < 0 {
+      while c.next != 0 as *Pkg && Cmp(ptr(c.next.path), len(c.next.path), ptr(need.path), len(need.path)) < 0 {
         c = c.next
       }
       need.next = c.next
@@ -522,24 +509,21 @@ func StdPass(m *Mod) i64 {
   }
   while sorted != 0 as *Pkg {
     var nxt *Pkg = sorted.next
-    var dir i64 = Path(m.io, m.stdp, m.stdn, sorted.pathp, sorted.pathn)
+    var dir i64 = Path(m.io, ptr(m.std), len(m.std), ptr(sorted.path), len(sorted.path))
     var e *File = ListDir(m.io, dir)
     var files *File = 0 as *File
     while e != 0 as *File {
       var en *File = e.next
-      if !EntIsDir(m.io, dir, e) && HasOvSuffix(e.relp, e.reln) {
-        var full i64 = Path(m.io, dir, ovid/io.CLen(dir), e.relp, e.reln)
+      if !EntIsDir(m.io, dir, e) && HasOvSuffix(ptr(e.rel), len(e.rel)) {
+        var full i64 = Path(m.io, dir, ovid/io.CLen(dir), ptr(e.rel), len(e.rel))
         var src bytes, re i64 = ovid/io.ReadFile(m.io, bytes(full, ovid/io.CLen(full)))
         if re == 0 {
           var f *File = ovid/io.Alloc(m.io, sizeof(File)) as *File
-          var t i64 = Cat(m.io, strptr("std:"), 4, sorted.pathp, sorted.pathn)
-          f.relp = Path(m.io, t, 4 + sorted.pathn, e.relp, e.reln)
-          f.reln = (5 + sorted.pathn) + e.reln
+          var t i64 = Cat(m.io, strptr("std:"), 4, ptr(sorted.path), len(sorted.path))
+          f.rel = bytes(Path(m.io, t, 4 + len(sorted.path), ptr(e.rel), len(e.rel)), (5 + len(sorted.path)) + len(e.rel))
           // Shown as std:<pkg>/<file>, as the Go toolchain shows it.
-          f.dispp = f.relp
-          f.dispn = f.reln
-          f.src = ptr(src)
-          f.n = len(src)
+          f.disp = f.rel
+          f.src = src
           f.std = 1
           files = InsertByName(files, f)
         }
@@ -552,11 +536,11 @@ func StdPass(m *Mod) i64 {
         ovid/mem.CopyN(nm, m.missing, m.nmissing * 16)
         m.missing = nm
       }
-      store64(m.missing + (m.nmissing * 16), sorted.pathp)
-      store64(m.missing + (m.nmissing * 16) + 8, sorted.pathn)
+      store64(m.missing + (m.nmissing * 16), ptr(sorted.path))
+      store64(m.missing + (m.nmissing * 16) + 8, len(sorted.path))
       m.nmissing = m.nmissing + 1
     } else {
-      var k2 *Pkg = GroupFor(m, sorted.pathp, sorted.pathn)
+      var k2 *Pkg = GroupFor(m, ptr(sorted.path), len(sorted.path))
       k2.std = 1
       k2.files = files
       AddPackage(m, k2)
@@ -585,11 +569,11 @@ func Revision(m *Mod) i64 {
     return m.rev
   }
   var b *ovid/mem.Buf = ovid/mem.New(m.io, 1 << 20)
-  RevAdd(m, b, strptr("ovid.mod"), 8, m.modsrc, m.modlen)
+  RevAdd(m, b, strptr("ovid.mod"), 8, ptr(m.modsrc), len(m.modsrc))
   var f *File = m.files
   while f != 0 as *File {
     if f.std == 0 {
-      RevAdd(m, b, f.relp, f.reln, f.src, f.n)
+      RevAdd(m, b, ptr(f.rel), len(f.rel), ptr(f.src), len(f.src))
     }
     f = f.mnext
   }
@@ -604,12 +588,12 @@ func Revision(m *Mod) i64 {
       if f.std != 0 {
         var after bool = last == 0 as *File
         if !after {
-          after = Cmp(f.relp, f.reln, last.relp, last.reln) > 0
+          after = Cmp(ptr(f.rel), len(f.rel), ptr(last.rel), len(last.rel)) > 0
         }
         if after {
           if best == 0 as *File {
             best = f
-          } else if Cmp(f.relp, f.reln, best.relp, best.reln) < 0 {
+          } else if Cmp(ptr(f.rel), len(f.rel), ptr(best.rel), len(best.rel)) < 0 {
             best = f
           }
         }
@@ -619,7 +603,7 @@ func Revision(m *Mod) i64 {
     if best == 0 as *File {
       more = false
     } else {
-      RevAdd(m, b, best.relp, best.reln, best.src, best.n)
+      RevAdd(m, b, ptr(best.rel), len(best.rel), ptr(best.src), len(best.src))
       last = best
     }
   }
@@ -638,8 +622,7 @@ func Load(io *ovid/io.Cap, dirp i64, dirn i64, stdp i64, stdn i64, notests bool)
   var m *Mod = ovid/io.Alloc(io, sizeof(Mod)) as *Mod
   m.io = io
   m.notests = notests
-  m.dirp = dirp
-  m.dirn = dirn
+  m.dir = bytes(dirp, dirn)
   m.out = ovid/mem.New(io, 4096)
   var modp i64 = Path(io, dirp, dirn, strptr("ovid.mod"), 8)
   var msrc bytes, me i64 = ovid/io.ReadFile(io, bytes(modp, ovid/io.CLen(modp)))
@@ -650,9 +633,8 @@ func Load(io *ovid/io.Cap, dirp i64, dirn i64, stdp i64, stdn i64, notests bool)
     LoadErr(m, strptr("no_module"), 9, 0 as *File, 0, b)
     return m
   }
-  m.modsrc = ptr(msrc)
-  m.modlen = len(msrc)
-  ReadMod(m, m.modsrc, m.modlen, stdp, stdn)
+  m.modsrc = msrc
+  ReadMod(m, ptr(m.modsrc), len(m.modsrc), stdp, stdn)
   if m.nerr != 0 {
     return m
   }
