@@ -1053,6 +1053,11 @@ func (c *checker) expr0(e *env, n *ir.Node) string {
 			// b[i] or len(b) on a bytes local: the node becomes the bytes
 			// form, with the parsed name node as its base.
 			c.use(id, n.ID, "name", c.fn.ID, n.NameSpan)
+			if !c.lean && n.Base != nil {
+				// The base is an expression show lists; its type, without
+				// a second use of the local.
+				c.r.Types[n.Base.ID] = "bytes"
+			}
 			if n.Op == "index" {
 				n.Op = "byte"
 				c.want(e, n.Arg, "i64", "index")
@@ -1072,6 +1077,10 @@ func (c *checker) expr0(e *env, n *ir.Node) string {
 		}
 		if cn == nil {
 			return "invalid"
+		}
+		if !c.lean && n.Base != nil {
+			// The base is an expression show lists: the table's type.
+			c.r.Types[n.Base.ID] = fmt.Sprintf("[%d]i64", len(cn.Values))
 		}
 		return "i64"
 	case "add", "sub", "mul", "div", "mod", "and", "or", "xor", "shl", "shr":
