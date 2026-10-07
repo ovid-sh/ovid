@@ -26,56 +26,57 @@
 // stdout: "HTTP/1.1 205 Reset Content\r\nX-A: 1\r\nContent-Length: 0\r\n\r\n"
 // stdout: "HTTP/1.1 200 OK\r\nX-A: 1\r\nContent-Length: 2\r\n\r\n"
 // stdout: "test: 201 /x 3 b=2 7\n"
+// stdout: "has: 110111011\n"
 package demo
 
 import ovid/io
 import ovid/http
 import ovid/mem
 
-func try(io *ovid/io.Cap, label bytes, p i64, n i64) i64 {
-  var r *ovid/http.Request = ovid/http.NewRequest(io, 0, 0, 0, 0)
+func try(io *ovid/io.Cap, label bytes, req bytes) i64 {
+  var r *ovid/http.Request = ovid/http.NewRequest(io, "", "")
   ovid/io.Print(label)
   ovid/io.Print(" ")
-  ovid/io.PrintInt(io, ovid/http.Parse(r, p, n))
+  ovid/io.PrintInt(io, ovid/http.Parse(r, req))
   ovid/io.Print("\n")
   return 0
 }
 
 func show(io *ovid/io.Cap, req *ovid/http.Request, res *ovid/http.Response, result i64) i64 {
   var b *ovid/mem.Buf = ovid/http.Format(io, req, res, result)
-  return ovid/io.Stdout(bytes(b.data, b.len))
+  return ovid/io.Stdout(ovid/mem.Bytes(b))
 }
 
 // handler is what a test calls with a request made by hand.
 func handler(io *ovid/io.Cap, req *ovid/http.Request, res *ovid/http.Response) i64 {
   ovid/http.SetStatus(res, 201)
-  ovid/http.Write(io, res, ovid/http.Path(req), ovid/http.PathLen(req))
-  ovid/http.Write(io, res, strptr(" "), strlen(" "))
-  ovid/http.WriteInt(io, res, ovid/http.BodyLen(req))
-  ovid/http.Write(io, res, strptr(" "), strlen(" "))
-  ovid/http.Write(io, res, ovid/http.Query(req), ovid/http.QueryLen(req))
+  ovid/http.Write(io, res, ovid/http.Path(req))
+  ovid/http.Write(io, res, " ")
+  ovid/http.WriteInt(io, res, len(ovid/http.Body(req)))
+  ovid/http.Write(io, res, " ")
+  ovid/http.Write(io, res, ovid/http.Query(req))
   return 0
 }
 
 func main(io *ovid/io.Cap) i64 {
-  try(io, "ok", strptr("GET / HTTP/1.1\r\nA: b\r\n\r\n"), strlen("GET / HTTP/1.1\r\nA: b\r\n\r\n"))
-  try(io, "http/1.0", strptr("GET / HTTP/1.0\r\n\r\n"), strlen("GET / HTTP/1.0\r\n\r\n"))
-  try(io, "no version", strptr("GET /\r\n\r\n"), strlen("GET /\r\n\r\n"))
-  try(io, "bad version", strptr("GET / HTTP/2\r\n\r\n"), strlen("GET / HTTP/2\r\n\r\n"))
-  try(io, "empty method", strptr(" / HTTP/1.1\r\n\r\n"), strlen(" / HTTP/1.1\r\n\r\n"))
-  try(io, "bare lf", strptr("GET / HTTP/1.1\nA: b\n\n"), strlen("GET / HTTP/1.1\nA: b\n\n"))
-  try(io, "bare cr", strptr("GET / HTTP/1.1\r\nA: b\rc\r\n\r\n"), strlen("GET / HTTP/1.1\r\nA: b\rc\r\n\r\n"))
-  try(io, "folded", strptr("GET / HTTP/1.1\r\nA: b\r\n c\r\n\r\n"), strlen("GET / HTTP/1.1\r\nA: b\r\n c\r\n\r\n"))
-  try(io, "no colon", strptr("GET / HTTP/1.1\r\nA b\r\n\r\n"), strlen("GET / HTTP/1.1\r\nA b\r\n\r\n"))
-  try(io, "space before colon", strptr("GET / HTTP/1.1\r\nA : b\r\n\r\n"), strlen("GET / HTTP/1.1\r\nA : b\r\n\r\n"))
-  try(io, "no blank line", strptr("GET / HTTP/1.1\r\nA: b\r\n"), strlen("GET / HTTP/1.1\r\nA: b\r\n"))
-  try(io, "two lengths", strptr("GET / HTTP/1.1\r\nContent-Length: 1\r\ncontent-length: 1\r\n\r\nx"), strlen("GET / HTTP/1.1\r\nContent-Length: 1\r\ncontent-length: 1\r\n\r\nx"))
-  try(io, "length not digits", strptr("GET / HTTP/1.1\r\nContent-Length: +1\r\n\r\nx"), strlen("GET / HTTP/1.1\r\nContent-Length: +1\r\n\r\nx"))
-  try(io, "body short", strptr("GET / HTTP/1.1\r\nContent-Length: 9\r\n\r\nabc"), strlen("GET / HTTP/1.1\r\nContent-Length: 9\r\n\r\nabc"))
-  try(io, "chunked", strptr("GET / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n"), strlen("GET / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n"))
-  try(io, "control in value", strptr("GET / HTTP/1.1\r\nA: b\x01c\r\n\r\n"), strlen("GET / HTTP/1.1\r\nA: b\x01c\r\n\r\n"))
-  try(io, "del in value", strptr("GET / HTTP/1.1\r\nA: b\x7fc\r\n\r\n"), strlen("GET / HTTP/1.1\r\nA: b\x7fc\r\n\r\n"))
-  try(io, "tab and high bytes in value", strptr("GET / HTTP/1.1\r\nA: b\tc\xc3\xa9\r\n\r\n"), strlen("GET / HTTP/1.1\r\nA: b\tc\xc3\xa9\r\n\r\n"))
+  try(io, "ok", "GET / HTTP/1.1\r\nA: b\r\n\r\n")
+  try(io, "http/1.0", "GET / HTTP/1.0\r\n\r\n")
+  try(io, "no version", "GET /\r\n\r\n")
+  try(io, "bad version", "GET / HTTP/2\r\n\r\n")
+  try(io, "empty method", " / HTTP/1.1\r\n\r\n")
+  try(io, "bare lf", "GET / HTTP/1.1\nA: b\n\n")
+  try(io, "bare cr", "GET / HTTP/1.1\r\nA: b\rc\r\n\r\n")
+  try(io, "folded", "GET / HTTP/1.1\r\nA: b\r\n c\r\n\r\n")
+  try(io, "no colon", "GET / HTTP/1.1\r\nA b\r\n\r\n")
+  try(io, "space before colon", "GET / HTTP/1.1\r\nA : b\r\n\r\n")
+  try(io, "no blank line", "GET / HTTP/1.1\r\nA: b\r\n")
+  try(io, "two lengths", "GET / HTTP/1.1\r\nContent-Length: 1\r\ncontent-length: 1\r\n\r\nx")
+  try(io, "length not digits", "GET / HTTP/1.1\r\nContent-Length: +1\r\n\r\nx")
+  try(io, "body short", "GET / HTTP/1.1\r\nContent-Length: 9\r\n\r\nabc")
+  try(io, "chunked", "GET / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n")
+  try(io, "control in value", "GET / HTTP/1.1\r\nA: b\x01c\r\n\r\n")
+  try(io, "del in value", "GET / HTTP/1.1\r\nA: b\x7fc\r\n\r\n")
+  try(io, "tab and high bytes in value", "GET / HTTP/1.1\r\nA: b\tc\xc3\xa9\r\n\r\n")
 
   var res *ovid/http.Response = ovid/http.NewResponse(io)
   ovid/io.Print("status ")
@@ -88,33 +89,33 @@ func main(io *ovid/io.Cap) i64 {
   // Refused: an empty name, a name with a space, a value with CRLF,
   // Content-Length, and Transfer-Encoding; accepted: X-A.
   ovid/io.Print("headers ")
-  ovid/io.PrintInt(io, ovid/http.SetHeader(io, res, strptr(""), 0, strptr("1"), 1))
+  ovid/io.PrintInt(io, ovid/http.SetHeader(io, res, "", "1"))
   ovid/io.Print(" ")
-  ovid/io.PrintInt(io, ovid/http.SetHeader(io, res, strptr("X A"), strlen("X A"), strptr("1"), 1))
+  ovid/io.PrintInt(io, ovid/http.SetHeader(io, res, "X A", "1"))
   ovid/io.Print(" ")
-  ovid/io.PrintInt(io, ovid/http.SetHeader(io, res, strptr("X-A"), strlen("X-A"), strptr("1\r\nSet-Cookie: x"), strlen("1\r\nSet-Cookie: x")))
+  ovid/io.PrintInt(io, ovid/http.SetHeader(io, res, "X-A", "1\r\nSet-Cookie: x"))
   ovid/io.Print(" ")
-  ovid/io.PrintInt(io, ovid/http.SetHeader(io, res, strptr("Content-length"), strlen("Content-length"), strptr("1"), 1))
+  ovid/io.PrintInt(io, ovid/http.SetHeader(io, res, "Content-length", "1"))
   ovid/io.Print(" ")
-  ovid/io.PrintInt(io, ovid/http.SetHeader(io, res, strptr("transfer-Encoding"), strlen("transfer-Encoding"), strptr("chunked"), strlen("chunked")))
+  ovid/io.PrintInt(io, ovid/http.SetHeader(io, res, "transfer-Encoding", "chunked"))
   ovid/io.Print(" ")
-  ovid/io.PrintInt(io, ovid/http.SetHeader(io, res, strptr("X-A"), strlen("X-A"), strptr("1"), 1))
+  ovid/io.PrintInt(io, ovid/http.SetHeader(io, res, "X-A", "1"))
   ovid/io.Print("\n")
-  ovid/http.Write(io, res, strptr("hi"), strlen("hi"))
+  ovid/http.Write(io, res, "hi")
   // An escape byte and DEL are refused in a value; tab and bytes from
   // 0x80 up are not.
   var other *ovid/http.Response = ovid/http.NewResponse(io)
   ovid/io.Print("values ")
-  ovid/io.PrintInt(io, ovid/http.SetHeader(io, other, strptr("X-B"), 3, strptr("\x1b[31m"), strlen("\x1b[31m")))
+  ovid/io.PrintInt(io, ovid/http.SetHeader(io, other, "X-B", "\x1b[31m"))
   ovid/io.Print(" ")
-  ovid/io.PrintInt(io, ovid/http.SetHeader(io, other, strptr("X-B"), 3, strptr("a\x7f"), strlen("a\x7f")))
+  ovid/io.PrintInt(io, ovid/http.SetHeader(io, other, "X-B", "a\x7f"))
   ovid/io.Print(" ")
-  ovid/io.PrintInt(io, ovid/http.SetHeader(io, other, strptr("X-B"), 3, strptr("a\tb\xc3\xa9"), strlen("a\tb\xc3\xa9")))
+  ovid/io.PrintInt(io, ovid/http.SetHeader(io, other, "X-B", "a\tb\xc3\xa9"))
   ovid/io.Print("\n")
 
-  var ok *ovid/http.Request = ovid/http.NewRequest(io, strptr("GET"), 3, strptr("/"), 1)
-  var bad *ovid/http.Request = ovid/http.NewRequest(io, 0, 0, 0, 0)
-  ovid/http.Parse(bad, strptr("GET /\r\n\r\n"), strlen("GET /\r\n\r\n"))
+  var ok *ovid/http.Request = ovid/http.NewRequest(io, "GET", "/")
+  var bad *ovid/http.Request = ovid/http.NewRequest(io, "", "")
+  ovid/http.Parse(bad, "GET /\r\n\r\n")
   // A handler that failed, a request that could not be read, then the
   // response as the handler left it.
   show(io, ok, res, 1)
@@ -127,20 +128,44 @@ func main(io *ovid/io.Cap) i64 {
   ovid/http.SetStatus(res, 205)
   show(io, ok, res, 0)
   ovid/http.SetStatus(res, 200)
-  show(io, ovid/http.NewRequest(io, strptr("HEAD"), 4, strptr("/"), 1), res, 0)
+  show(io, ovid/http.NewRequest(io, "HEAD", "/"), res, 0)
 
   // A test: a request made by hand, the handler called directly.
-  var req *ovid/http.Request = ovid/http.NewRequest(io, strptr("PUT"), 3, strptr("/x?b=2"), strlen("/x?b=2"))
-  ovid/http.SetBody(io, req, strptr("abc"), 3)
-  ovid/http.AddHeader(io, req, strptr("X-Id"), strlen("X-Id"), strptr("  7 "), strlen("  7 "))
+  var req *ovid/http.Request = ovid/http.NewRequest(io, "PUT", "/x?b=2")
+  ovid/http.SetBody(io, req, "abc")
+  ovid/http.AddHeader(io, req, "X-Id", "  7 ")
   var out *ovid/http.Response = ovid/http.NewResponse(io)
   handler(io, req, out)
   ovid/io.Print("test: ")
   ovid/io.PrintInt(io, ovid/http.Status(out))
   ovid/io.Print(" ")
-  ovid/io.Stdout(bytes(ovid/http.Sent(out), ovid/http.SentLen(out)))
+  ovid/io.Stdout(ovid/http.Sent(out))
   ovid/io.Print(" ")
-  ovid/io.Stdout(bytes(ovid/http.Header(req, strptr("x-id"), 4), ovid/http.HeaderLen(req, strptr("x-id"), 4)))
+  ovid/io.Stdout(ovid/http.Header(req, "x-id"))
+  ovid/io.Print("\n")
+  // A header with an empty value is there, with an empty value; a
+  // missing one is not, and reads as empty too. The same for the
+  // headers a handler set, and one it set with a value is there.
+  ovid/http.AddHeader(io, req, "X-Empty", "")
+  ovid/http.SetHeader(io, out, "X-Set-Empty", "")
+  ovid/http.SetHeader(io, out, "Content-Type", "text/plain")
+  ovid/io.Print("has: ")
+  yes(io, ovid/http.HasHeader(req, "x-empty"))
+  yes(io, len(ovid/http.Header(req, "x-empty")) == 0)
+  yes(io, ovid/http.HasHeader(req, "x-none"))
+  yes(io, len(ovid/http.Header(req, "x-none")) == 0)
+  yes(io, ovid/http.HasSentHeader(out, "x-set-empty"))
+  yes(io, len(ovid/http.SentHeader(out, "x-set-empty")) == 0)
+  yes(io, ovid/http.HasSentHeader(out, "x-set-none"))
+  yes(io, len(ovid/http.SentHeader(out, "x-set-none")) == 0)
+  yes(io, ovid/http.HasSentHeader(out, "content-type"))
   ovid/io.Print("\n")
   return 0
+}
+
+func yes(io *ovid/io.Cap, b bool) i64 {
+  if b {
+    return ovid/io.Print("1")
+  }
+  return ovid/io.Print("0")
 }

@@ -313,7 +313,7 @@ import ovid/io
 import ovid/http
 func handle(io *ovid/io.Cap, req *ovid/http.Request, res *ovid/http.Response) i64 {
   ovid/io.Alloc(io, 200 << 20)
-  ovid/http.Write(io, res, strptr("ok"), 2)
+  ovid/http.Write(io, res, "ok")
   return 0
 }
 `))
