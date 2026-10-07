@@ -206,9 +206,10 @@ func run(p *ir.Program, lean bool) *Result {
 			if !decl(t.ID, t.Name, t.Span) {
 				continue
 			}
-			c.r.Facts = append(c.r.Facts, Fact{"fact": "type", "id": t.ID, "fields": len(t.Fields), "size": len(t.Fields) * 8})
+			c.r.Facts = append(c.r.Facts, Fact{"fact": "type", "id": t.ID, "fields": len(t.Fields), "size": SizeOf(t.Fields)})
 			fseen := map[string]bool{}
-			for i, f := range t.Fields {
+			off := 0
+			for _, f := range t.Fields {
 				if fseen[f.Name] {
 					c.issue(Issue{Code: "duplicate_name", ID: f.ID, At: &f.Span, Message: "field " + f.Name + " is declared twice"})
 					continue
@@ -216,7 +217,8 @@ func run(p *ir.Program, lean bool) *Result {
 				claim(f.ID)
 				fseen[f.Name] = true
 				ft, err := c.resolve(f.Type)
-				c.r.Facts = append(c.r.Facts, Fact{"fact": "field", "id": f.ID, "type": ft, "offset": i * 8})
+				c.r.Facts = append(c.r.Facts, Fact{"fact": "field", "id": f.ID, "type": ft, "offset": off})
+				off += fieldSize(f.Type)
 				if err != nil {
 					c.err(f.ID, "bad_type", err.Error())
 				} else if !scalar(ft) {
@@ -547,6 +549,23 @@ func (c *checker) checkEntry(p *ir.Program) {
 }
 
 // Signature renders fn the way it is written in source.
+// SizeOf is the byte size of a struct with the fields fs: 8 per field,
+// 16 for a bytes, which the lowering splits in two.
+func SizeOf(fs []ir.Field) int {
+	n := 0
+	for _, f := range fs {
+		n += fieldSize(f.Type)
+	}
+	return n
+}
+
+func fieldSize(t string) int {
+	if t == "bytes" {
+		return 16
+	}
+	return 8
+}
+
 // paramWords counts the register words of params: two for a bytes.
 func paramWords(ps []ir.Param) int {
 	w := 0
@@ -1118,6 +1137,10 @@ func (c *checker) expr0(e *env, n *ir.Node) string {
 	case "sizeof":
 		if n.Type == "i64" || n.Type == "bool" {
 			c.issue(Issue{Code: "bad_type", ID: n.ID, Message: "sizeof(" + n.Type + ") is always 8", Hint: "write 8; sizeof takes a struct type"})
+			return "i64"
+		}
+		if n.Type == "bytes" {
+			c.issue(Issue{Code: "bad_type", ID: n.ID, Message: "sizeof(bytes) is always 16", Hint: "write 16; sizeof takes a struct type"})
 			return "i64"
 		}
 		if t, err := c.resolve(n.Type); err != nil {
