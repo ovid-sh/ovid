@@ -627,6 +627,10 @@ func (l *lowerer) stmt(s *ir.Node) ([]*ir.Node, error) {
 			if err != nil {
 				return nil, err
 			}
+			// Both words are read before the first store: through a cast
+			// the destination may overlap the source, and the whole value
+			// is what the assignment means.
+			a, ln = l.fix(a, &p), l.fix(ln, &p)
 			return append(p, &ir.Node{ID: s.ID, Op: "setfield", Base: base, Name: s.Name, Val: a},
 				&ir.Node{Op: "setfield", Base: base, Name: s.Name + "#n", Val: ln}), nil
 		}

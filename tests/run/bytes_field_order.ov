@@ -121,6 +121,17 @@ func main(io *ovid/io.Cap) i64 {
   if sum != 97 + 98 + 99 {
     return Fail(io, 11)
   }
+  // A field assigned from a field of an overlapping view: the value is
+  // read whole before the stores. dst sits 8 bytes into src, so dst.b's
+  // address word is src.b's length word.
+  var mem i64 = ovid/io.Alloc(io, 48)
+  var src *F = mem as *F
+  var dst *F = (mem + 8) as *F
+  src.b = "abcd"
+  dst.b = src.b
+  if len(dst.b) != 4 || dst.b[3] != 100 {
+    return Fail(io, 12)
+  }
   ovid/io.Print("ok\n")
   return 0
 }
