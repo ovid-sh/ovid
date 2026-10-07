@@ -1,0 +1,35 @@
+package ovid/io
+
+// Host ops: syscall numbers no kernel uses, answered only by a wasm host
+// (internal/wasm/host.mjs). Natively each returns -E_NOSYS. They stand in
+// for an upstream service in the async experiments (#75).
+
+const SYS_HOST_SLEEP i64 = 65536
+const SYS_HOST_SUBMIT i64 = 65537
+const SYS_HOST_POLL i64 = 65538
+
+// E_NOSYS is the error of a system call the kernel or host does not have.
+const E_NOSYS i64 = 38
+
+// HostSleep waits ms milliseconds; the instance is suspended meanwhile,
+// so the host may run other work. It returns 0, or an error code.
+func HostSleep(ms i64) i64 {
+  return Code(syscall(SYS_HOST_SLEEP, ms, 0, 0, 0, 0, 0))
+}
+
+// HostSubmit starts a timer of ms milliseconds that completes with tag,
+// and returns at once: 0, or an error code. HostPoll reports it.
+func HostSubmit(ms i64, tag i64) i64 {
+  return Code(syscall(SYS_HOST_SUBMIT, ms, tag, 0, 0, 0, 0))
+}
+
+// HostPoll waits until at least one submitted timer has completed, then
+// writes up to max completed tags (8 bytes each) at buf: the count and 0,
+// or 0 and an error code.
+func HostPoll(buf i64, max i64) (i64, i64) {
+  var r i64 = syscall(SYS_HOST_POLL, buf, max, 0, 0, 0, 0)
+  if r < 0 {
+    return 0, Code(r)
+  }
+  return r, 0
+}

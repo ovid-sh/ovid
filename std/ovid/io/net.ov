@@ -1,0 +1,206 @@
+package ovid/io
+
+// TCP on the loopback interface, epoll, the monotonic clock, and fork:
+// what a server needs to wait on more than one thing (#75). Addresses are
+// 127.0.0.1 only; a port is a plain number.
+
+const SYS_NANOSLEEP i64 = 35
+const SYS_SOCKET i64 = 41
+const SYS_CONNECT i64 = 42
+const SYS_SHUTDOWN i64 = 48
+const SYS_BIND i64 = 49
+const SYS_LISTEN i64 = 50
+const SYS_SETSOCKOPT i64 = 54
+const SYS_FORK i64 = 57
+const SYS_WAIT4 i64 = 61
+const SYS_CLOCK_GETTIME i64 = 228
+const SYS_EPOLL_WAIT i64 = 232
+const SYS_EPOLL_CTL i64 = 233
+const SYS_EXIT_GROUP i64 = 231
+const SYS_ACCEPT4 i64 = 288
+const SYS_EPOLL_CREATE1 i64 = 291
+
+// Flags for Listen, Accept, and Connect.
+const SOCK_NONBLOCK i64 = 2048
+const SOCK_CLOEXEC i64 = 524288
+
+// E_INPROGRESS is what a non-blocking Connect returns while the handshake
+// is under way; the socket becomes writable when it is done.
+const E_INPROGRESS i64 = 115
+
+const EPOLLIN i64 = 1
+const EPOLLOUT i64 = 4
+const EPOLLERR i64 = 8
+const EPOLLHUP i64 = 16
+const EPOLLONESHOT i64 = 1 << 30
+const EPOLLET i64 = 1 << 31
+const EPOLL_CTL_ADD i64 = 1
+const EPOLL_CTL_DEL i64 = 2
+const EPOLL_CTL_MOD i64 = 3
+
+// EVENT is the size of one struct epoll_event (packed on x86-64): the
+// events (4 bytes), then the data (8).
+const EVENT i64 = 12
+
+// sockaddr writes a struct sockaddr_in for 127.0.0.1:port.
+func sockaddr(io *Cap, port i64) i64 {
+  var a i64 = Alloc(io, 16)
+  store16(a, 2)
+  store16(a + 2, bswap16(port))
+  store32(a + 4, 0x0100007f)
+  return a
+}
+
+// Listen opens a TCP socket listening on 127.0.0.1:port, with SO_REUSEADDR
+// and, when reuseport, SO_REUSEPORT (several processes may then listen on
+// the same port, and the kernel spreads connections among them). flags
+// takes SOCK_NONBLOCK and SOCK_CLOEXEC. An fd and 0, or 0 and an error code.
+func Listen(io *Cap, port i64, flags i64, reuseport bool) (i64, i64) {
+  var fd i64 = syscall(SYS_SOCKET, 2, 1 | flags, 0, 0, 0, 0)
+  if fd < 0 {
+    return 0, Code(fd)
+  }
+  var one i64 = Alloc(io, 8)
+  store32(one, 1)
+  syscall(SYS_SETSOCKOPT, fd, 1, 2, one, 4, 0)
+  if reuseport {
+    syscall(SYS_SETSOCKOPT, fd, 1, 15, one, 4, 0)
+  }
+  var r i64 = syscall(SYS_BIND, fd, sockaddr(io, port), 16, 0, 0, 0)
+  if r < 0 {
+    Close(fd)
+    return 0, Code(r)
+  }
+  r = syscall(SYS_LISTEN, fd, 4096, 0, 0, 0, 0)
+  if r < 0 {
+    Close(fd)
+    return 0, Code(r)
+  }
+  return fd, 0
+}
+
+// Accept takes the next connection on a listening fd: its fd and 0, or 0
+// and an error code (E_AGAIN on a non-blocking fd with none waiting).
+// flags take SOCK_NONBLOCK and SOCK_CLOEXEC, for the new fd.
+func Accept(fd i64, flags i64) (i64, i64) {
+  var r i64 = syscall(SYS_ACCEPT4, fd, 0, 0, flags, 0, 0)
+  if r < 0 {
+    return 0, Code(r)
+  }
+  return r, 0
+}
+
+// Connect opens a TCP connection to 127.0.0.1:port. With SOCK_NONBLOCK in
+// flags the result may be the fd and E_INPROGRESS: wait for EPOLLOUT. Else
+// an fd and 0, or 0 and an error code.
+func Connect(io *Cap, port i64, flags i64) (i64, i64) {
+  var fd i64 = syscall(SYS_SOCKET, 2, 1 | flags, 0, 0, 0, 0)
+  if fd < 0 {
+    return 0, Code(fd)
+  }
+  var r i64 = syscall(SYS_CONNECT, fd, sockaddr(io, port), 16, 0, 0, 0)
+  if r == 0 - E_INPROGRESS {
+    return fd, E_INPROGRESS
+  }
+  if r < 0 {
+    Close(fd)
+    return 0, Code(r)
+  }
+  return fd, 0
+}
+
+// Shutdown ends the writing half of a connection (SHUT_WR), so the peer
+// reads the end of the stream. It returns 0, or an error code.
+func Shutdown(fd i64) i64 {
+  return Code(syscall(SYS_SHUTDOWN, fd, 1, 0, 0, 0, 0))
+}
+
+// WriteSome writes up to n bytes at p to fd once: the count and 0, or 0
+// and an error code (E_AGAIN when a non-blocking fd is full). Write, by
+// contrast, loops until all n are written.
+func WriteSome(fd i64, p i64, n i64) (i64, i64) {
+  var w i64 = syscall(SYS_WRITE, fd, p, n, 0, 0, 0)
+  if w < 0 {
+    return 0, Code(w)
+  }
+  return w, 0
+}
+
+// EpollCreate makes an epoll instance: its fd and 0, or 0 and an error code.
+func EpollCreate() (i64, i64) {
+  var r i64 = syscall(SYS_EPOLL_CREATE1, SOCK_CLOEXEC, 0, 0, 0, 0, 0)
+  if r < 0 {
+    return 0, Code(r)
+  }
+  return r, 0
+}
+
+// EpollCtl adds, changes, or removes (op: EPOLL_CTL_*) fd in the epoll
+// instance ep, waiting for events (EPOLL*) and reporting data with them.
+// It returns 0, or an error code.
+func EpollCtl(io *Cap, ep i64, op i64, fd i64, events i64, data i64) i64 {
+  var ev i64 = Alloc(io, 16)
+  store32(ev, events)
+  store64(ev + 4, data)
+  return Code(syscall(SYS_EPOLL_CTL, ep, op, fd, ev, 0, 0))
+}
+
+// EpollWait waits up to timeout ms (-1: no limit) for events on ep, and
+// fills buf with up to max of them, EVENT bytes each (read them with
+// EventMask and EventData): the count and 0, or 0 and an error code.
+func EpollWait(ep i64, buf i64, max i64, timeout i64) (i64, i64) {
+  var r i64 = syscall(SYS_EPOLL_WAIT, ep, buf, max, timeout, 0, 0)
+  if r < 0 {
+    return 0, Code(r)
+  }
+  return r, 0
+}
+
+// EventMask is the events of the i-th epoll_event in buf.
+func EventMask(buf i64, i i64) i64 {
+  return load32(buf + (i * EVENT))
+}
+
+// EventData is the data of the i-th epoll_event in buf.
+func EventData(buf i64, i i64) i64 {
+  return load64((buf + (i * EVENT)) + 4)
+}
+
+// NowNs is the monotonic clock in nanoseconds.
+func NowNs(io *Cap) i64 {
+  var ts i64 = Alloc(io, 16)
+  syscall(SYS_CLOCK_GETTIME, 1, ts, 0, 0, 0, 0)
+  return (load64(ts) * 1000000000) + load64(ts + 8)
+}
+
+// SleepMs blocks the process for ms milliseconds.
+func SleepMs(io *Cap, ms i64) i64 {
+  var ts i64 = Alloc(io, 16)
+  store64(ts, ms / 1000)
+  store64(ts + 8, (ms % 1000) * 1000000)
+  return Code(syscall(SYS_NANOSLEEP, ts, 0, 0, 0, 0, 0))
+}
+
+// Fork copies the process: the child's pid in the parent, 0 in the child,
+// or a negative error. The child has a copy-on-write copy of the heap, the
+// Cap included, and must end with Exit rather than return from main.
+func Fork() i64 {
+  return syscall(SYS_FORK, 0, 0, 0, 0, 0, 0)
+}
+
+// Wait waits for the child pid to end and returns its wait status (exit
+// code in bits 8..15), or a negative error.
+func Wait(io *Cap, pid i64) i64 {
+  var st i64 = Alloc(io, 8)
+  var r i64 = syscall(SYS_WAIT4, pid, st, 0, 0, 0, 0)
+  if r < 0 {
+    return r
+  }
+  return load32(st)
+}
+
+// Exit ends the process (every thread of it) with code.
+func Exit(code i64) i64 {
+  syscall(SYS_EXIT_GROUP, code, 0, 0, 0, 0, 0)
+  return 0
+}

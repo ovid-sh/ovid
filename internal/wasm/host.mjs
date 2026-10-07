@@ -8,7 +8,15 @@
 const SYS = { READ: 0, WRITE: 1, MMAP: 9, MUNMAP: 11, MADVISE: 28, GETPID: 39, EXIT: 60 };
 const ENOSYS = -38n, ENOMEM = -12n, EBADF = -9n;
 
-class Exit extends Error {
+// Host ops: syscall numbers no kernel uses, which only this host answers
+// (std/ovid/io/host.ov names them). The ones that wait need runAsync.
+//   HOST_SLEEP(ms)        wait ms
+//   HOST_SUBMIT(ms, tag)  start a timer of ms that completes with tag; 0 at once
+//   HOST_POLL(buf, max)   wait until a timer has completed, then write up to
+//                         max completed tags (an i64 each) at buf: the count
+export const HOST = { SLEEP: 0x10000, SUBMIT: 0x10001, POLL: 0x10002 };
+
+export class Exit extends Error {
   constructor(code) {
     super(`exit ${code}`);
     this.code = code;
@@ -17,13 +25,63 @@ class Exit extends Error {
 
 // run instantiates module (a WebAssembly.Module) afresh, so no request sees
 // another's memory, feeds it stdin and args (strings), and returns its exit
-// code and output.
-export function run(module, stdin, args = []) {
-  let memory;
+// code and output. No syscall can wait: a host op that would returns
+// ENOSYS. opts.ops adds syscalls: {number: (h, a1, ..., a6) => BigInt}.
+export function run(module, stdin, args = [], opts = {}) {
+  const h = host(stdin, false, opts);
+  const inst = new WebAssembly.Instance(module, { env: { syscall: h.syscall } });
+  h.memory = inst.exports.memory;
+  h.instance = inst;
+  const argv = writeArgs(h, args);
+  let code;
+  try {
+    code = Number(inst.exports._start(BigInt(args.length), BigInt(argv)));
+  } catch (e) {
+    if (!(e instanceof Exit)) throw e;
+    code = e.code;
+  }
+  return { code, stdout: concat(h.out), stderr: concat(h.err) };
+}
+
+// runAsync is run where a syscall may wait: the import is a JSPI
+// WebAssembly.Suspending, so a host op (or an opts.ops handler) that
+// returns a Promise suspends the wasm stack until it settles. It resolves
+// to what run returns.
+export async function runAsync(module, stdin, args = [], opts = {}) {
+  const h = host(stdin, true, opts);
+  const inst = new WebAssembly.Instance(module, { env: { syscall: new WebAssembly.Suspending(h.syscall) } });
+  h.memory = inst.exports.memory;
+  h.instance = inst;
+  const argv = writeArgs(h, args);
+  let code;
+  try {
+    code = Number(await WebAssembly.promising(inst.exports._start)(BigInt(args.length), BigInt(argv)));
+  } catch (e) {
+    if (!(e instanceof Exit)) throw e;
+    code = e.code;
+  }
+  return { code, stdout: concat(h.out), stderr: concat(h.err) };
+}
+
+// host is the state of one instance and its syscall function. h.memory is
+// set once the instance exists; h.bytes() views it (take a new view after
+// anything that can grow memory).
+function host(stdin, canWait, opts) {
+  const h = { memory: null, instance: null, out: [], err: [], canWait };
+  const bytes = (h.bytes = () => new Uint8Array(h.memory.buffer));
   let inPos = 0;
-  const out = [], err = [], freed = [];
-  const bytes = () => new Uint8Array(memory.buffer);
-  const syscall = (n, a, b, c) => {
+  const freed = [];
+  const done = []; // completed HOST_SUBMIT tags not yet polled
+  let wake = null; // resolves the waiting HOST_POLL
+  const poll = (buf, max) => {
+    const n = Math.min(Number(max), done.length);
+    const view = new DataView(h.memory.buffer);
+    for (let i = 0; i < n; i++) view.setBigInt64(Number(buf) + 8 * i, done.shift(), true);
+    return BigInt(n);
+  };
+  h.syscall = (n, a, b, c, d, e, f) => {
+    const extra = opts.ops && opts.ops[Number(n)];
+    if (extra) return extra(h, a, b, c, d, e, f);
     switch (Number(n)) {
       case SYS.READ: {
         if (a !== 0n) return EBADF;
@@ -34,22 +92,22 @@ export function run(module, stdin, args = []) {
       }
       case SYS.WRITE: {
         const chunk = bytes().slice(Number(b), Number(b) + Number(c));
-        if (a === 1n) out.push(chunk);
-        else if (a === 2n) err.push(chunk);
+        if (a === 1n) h.out.push(chunk);
+        else if (a === 2n) h.err.push(chunk);
         else return EBADF;
         return c;
       }
       case SYS.MMAP: {
         // A range munmap gave back is reused, zeroed, before memory grows.
         const pages = Math.ceil(Number(b) / 65536);
-        const i = freed.findIndex((f) => f.pages === pages);
+        const i = freed.findIndex((r) => r.pages === pages);
         if (i >= 0) {
-          const [f] = freed.splice(i, 1);
-          bytes().fill(0, f.addr, f.addr + pages * 65536);
-          return BigInt(f.addr);
+          const [r] = freed.splice(i, 1);
+          bytes().fill(0, r.addr, r.addr + pages * 65536);
+          return BigInt(r.addr);
         }
         try {
-          return BigInt(memory.grow(pages) * 65536);
+          return BigInt(h.memory.grow(pages) * 65536);
         } catch {
           return ENOMEM;
         }
@@ -66,33 +124,47 @@ export function run(module, stdin, args = []) {
         return 1n;
       case SYS.EXIT:
         throw new Exit(Number(BigInt.asIntN(64, a)));
+      case HOST.SLEEP:
+        if (!canWait) return ENOSYS;
+        return new Promise((r) => setTimeout(() => r(0n), Number(a)));
+      case HOST.SUBMIT:
+        setTimeout(() => {
+          done.push(b);
+          if (wake) {
+            const w = wake;
+            wake = null;
+            w();
+          }
+        }, Number(a));
+        return 0n;
+      case HOST.POLL:
+        if (done.length > 0) return poll(a, b);
+        if (!canWait) return ENOSYS;
+        return new Promise((r) => {
+          wake = () => r(poll(a, b));
+        });
       default:
         return ENOSYS;
     }
   };
-  const inst = new WebAssembly.Instance(module, { env: { syscall } });
-  memory = inst.exports.memory;
-  let argv = 0;
-  if (args.length > 0) {
-    const strs = args.map((a) => new TextEncoder().encode(a + "\0"));
-    const need = 8 * args.length + strs.reduce((s, b) => s + b.length, 0);
-    argv = memory.grow(Math.ceil(need / 65536)) * 65536;
-    const view = new DataView(memory.buffer);
-    let p = argv + 8 * args.length;
-    strs.forEach((b, i) => {
-      view.setBigUint64(argv + 8 * i, BigInt(p), true);
-      bytes().set(b, p);
-      p += b.length;
-    });
-  }
-  let code;
-  try {
-    code = Number(inst.exports._start(BigInt(args.length), BigInt(argv)));
-  } catch (e) {
-    if (!(e instanceof Exit)) throw e;
-    code = e.code;
-  }
-  return { code, stdout: concat(out), stderr: concat(err) };
+  return h;
+}
+
+// writeArgs puts args into fresh memory as argv (pointers to NUL-terminated
+// strings) and returns its address, or 0 for none.
+function writeArgs(h, args) {
+  if (args.length === 0) return 0;
+  const strs = args.map((a) => new TextEncoder().encode(a + "\0"));
+  const need = 8 * args.length + strs.reduce((s, b) => s + b.length, 0);
+  const argv = h.memory.grow(Math.ceil(need / 65536)) * 65536;
+  const view = new DataView(h.memory.buffer);
+  let p = argv + 8 * args.length;
+  strs.forEach((b, i) => {
+    view.setBigUint64(argv + 8 * i, BigInt(p), true);
+    h.bytes().set(b, p);
+    p += b.length;
+  });
+  return argv;
 }
 
 export function concat(chunks) {
