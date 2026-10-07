@@ -463,16 +463,42 @@ func WDeclID(io *ovid/io.Cap, b *ovid/mem.Buf, d *ovid/parse.Decl) i64 {
 
 // LineOf is the 1-based line of offset off in f, and the trimmed text of
 // that line: its start and length go to lp/ln.
-func LineOf(f *ovid/parse.File, off i64, lp i64, ln i64) i64 {
+// Cursor remembers where the last LineFrom scan ended (file, byte, line,
+// line start), so the sorted uses of one file are counted in one pass
+// rather than from byte 0 each time.
+type Cursor struct {
+  file *ovid/parse.File
+  pos i64
+  line i64
+  ls i64
+}
+
+// LineFrom is the 1-based line of offset off in f, and the trimmed text of
+// that line (its start and length go to lp/ln). It continues from cur when
+// that lies in the same file before off, and leaves cur at off.
+func LineFrom(f *ovid/parse.File, off i64, lp i64, ln i64, cur *Cursor) i64 {
   var line i64 = 1
   var ls i64 = 0
   var i i64 = 0
+  if cur != 0 as *Cursor {
+    if cur.file == f && cur.pos <= off {
+      i = cur.pos
+      line = cur.line
+      ls = cur.ls
+    }
+  }
   while i < off && i < f.n {
     if load8(f.src + i) == 10 {
       line = line + 1
       ls = i + 1
     }
     i = i + 1
+  }
+  if cur != 0 as *Cursor {
+    cur.file = f
+    cur.pos = i
+    cur.line = line
+    cur.ls = ls
   }
   var le i64 = ls
   while le < f.n && load8(f.src + le) != 10 {
@@ -619,6 +645,7 @@ func CmdRefs(io *ovid/io.Cap) i64 {
   var b *ovid/mem.Buf = ovid/mem.New(io, 4096)
   var lp i64 = ovid/io.Alloc(io, 8)
   var ln i64 = ovid/io.Alloc(io, 8)
+  var cur *Cursor = ovid/io.Alloc(io, sizeof(Cursor)) as *Cursor
   var last *ovid/parse.Decl = 0 as *ovid/parse.Decl
   var files i64 = 0
   var external i64 = 0
@@ -649,7 +676,7 @@ func CmdRefs(io *ovid/io.Cap) i64 {
     } else if u.udecl != 0 as *ovid/parse.Decl {
       off = u.udecl.off
     }
-    var line i64 = LineOf(f, off, lp, ln)
+    var line i64 = LineFrom(f, off, lp, ln, cur)
     var tmp i64 = ovid/io.Alloc(io, 32)
     var dn i64 = ovid/mem.FormatI64(tmp, line)
     var pad i64 = 4 - dn
