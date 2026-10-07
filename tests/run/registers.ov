@@ -167,21 +167,21 @@ func Cond(io *ovid/io.Cap) i64 {
   return sum
 }
 
-func Line(io *ovid/io.Cap, name i64, v i64) i64 {
+func Line(io *ovid/io.Cap, name bytes, v i64) i64 {
   ovid/io.Print(name)
   ovid/io.PrintInt(io, v)
-  ovid/io.Print(strptr("\n"))
+  ovid/io.Print("\n")
   return 0
 }
 
 func main(io *ovid/io.Cap) i64 {
-  Line(io, strptr("leaf "), Leaf6(1, 2, 3, 4, 5, 6))
-  Line(io, strptr("bytes "), Bytes(ovid/io.Alloc(io, 256), 12))
-  Line(io, strptr("words "), Words(io, 100))
-  Line(io, strptr("cmp "), Cmp(3, 7))
-  Line(io, strptr("shift "), Shift(3, 3))
-  Line(io, strptr("div "), Div(100, 7))
-  Line(io, strptr("calls "), Calls(2, 5))
-  Line(io, strptr("cond "), Cond(io))
+  Line(io, "leaf ", Leaf6(1, 2, 3, 4, 5, 6))
+  Line(io, "bytes ", Bytes(ovid/io.Alloc(io, 256), 12))
+  Line(io, "words ", Words(io, 100))
+  Line(io, "cmp ", Cmp(3, 7))
+  Line(io, "shift ", Shift(3, 3))
+  Line(io, "div ", Div(100, 7))
+  Line(io, "calls ", Calls(2, 5))
+  Line(io, "cond ", Cond(io))
   return 0
 }

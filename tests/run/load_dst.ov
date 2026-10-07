@@ -55,10 +55,10 @@ func Bytes(p i64, n i64) i64 {
   return s
 }
 
-func Put(io *ovid/io.Cap, name i64, v i64) i64 {
+func Put(io *ovid/io.Cap, name bytes, v i64) i64 {
   ovid/io.Print(name)
   ovid/io.PrintInt(io, v)
-  ovid/io.Print(strptr("\n"))
+  ovid/io.Print("\n")
   return 0
 }
 
@@ -72,24 +72,24 @@ func main(io *ovid/io.Cap) i64 {
   store64(p + 16, 0x5040302)
   store64(p + 24, 0x700000005)
   // All six are loads; the last goes straight into r9.
-  Put(io, strptr("six "), Six(load8(p), load8(p + 1), load8(p + 2), load8(p + 3), load8(p + 4), load8(p + 5)))
+  Put(io, "six ", Six(load8(p), load8(p + 1), load8(p + 2), load8(p + 3), load8(p + 4), load8(p + 5)))
   // A 32-bit load into r8, which needs a prefix without W. The high half
   // of the word is not read.
-  Put(io, strptr("wide "), Six(1, 2, 3, 4, load32(p + 24), 6))
+  Put(io, "wide ", Six(1, 2, 3, 4, load32(p + 24), 6))
   // A 16-bit load into r9.
-  Put(io, strptr("half "), Six(1, 2, 3, 4, 5, load16(p + 24)))
+  Put(io, "half ", Six(1, 2, 3, 4, 5, load16(p + 24)))
   var r *Node = ovid/io.Alloc(io, sizeof(Node)) as *Node
   r.val = 7
-  Put(io, strptr("field "), Six(r.val, 0, 0, 0, 0, 0))
+  Put(io, "field ", Six(r.val, 0, 0, 0, 0, 0))
   // The first is computed into a temp, then r.val goes straight into rsi.
-  Put(io, strptr("mixed "), Six(load64(p + 16) - 0x5040301, r.val, 1, 2, 3, 4))
+  Put(io, "mixed ", Six(load64(p + 16) - 0x5040301, r.val, 1, 2, 3, 4))
   // The first waits in a temp in the frame while the last's address needs
   // one of its own, past it: a call follows, so no register can hold it.
   var deep i64 = Six(load8(p + 1) + 1, 0, 0, 0, 0, load8(p + ((i - i) + Id(0))))
-  Put(io, strptr("deep "), deep)
+  Put(io, "deep ", deep)
   var q i64 = ovid/io.Alloc(io, 8)
   store64(q, r as i64)
-  Put(io, strptr("cast "), Leaf(load64(q) as *Node))
+  Put(io, "cast ", Leaf(load64(q) as *Node))
   // A list of 1 to 7.
   i = 2
   var h *Node = r
@@ -101,8 +101,8 @@ func main(io *ovid/io.Cap) i64 {
     h = m
     i = i + 1
   }
-  Put(io, strptr("leaf "), Leaf(h))
-  Put(io, strptr("saved "), Saved(h))
-  Put(io, strptr("bytes "), Bytes(p, 6))
+  Put(io, "leaf ", Leaf(h))
+  Put(io, "saved ", Saved(h))
+  Put(io, "bytes ", Bytes(p, 6))
   return 0
 }

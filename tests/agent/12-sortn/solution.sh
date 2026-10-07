@@ -48,7 +48,7 @@ func Sort(io *ovid/io.Cap, p i64, n i64) i64 {
     w = w * 2
   }
   if src != p {
-    ovid/mem.Copy(p, src, n * 8)
+    ovid/mem.CopyN(p, src, n * 8)
   }
   return 0
 }
@@ -100,15 +100,15 @@ func main(io *ovid/io.Cap) i64 {
   while r > 0 && e == 0 {
     if n == size {
       var bigger i64 = ovid/io.Alloc(io, size * 2)
-      ovid/mem.Copy(bigger, buf, n)
+      ovid/mem.CopyN(bigger, buf, n)
       buf = bigger
       size = size * 2
     }
-    r, e = ovid/io.Read(0, buf + n, size - n)
+    r, e = ovid/io.Read(0, bytes(buf + n, size - n))
     n = n + r
   }
   if e != 0 {
-    ovid/io.Eprint(strptr("sortn: cannot read standard input\n"))
+    ovid/io.Eprint("sortn: cannot read standard input\n")
     return 1
   }
   // At most one value per newline, plus a last line without one.
@@ -128,7 +128,7 @@ func main(io *ovid/io.Cap) i64 {
     if i == n || load8(buf + i) == 10 {
       if i > start {
         if Parse(buf + start, i - start, vals + count * 8) != 0 {
-          ovid/io.Eprint(strptr("sortn: a line is not an i64\n"))
+          ovid/io.Eprint("sortn: a line is not an i64\n")
           return 1
         }
         count = count + 1
@@ -143,11 +143,11 @@ func main(io *ovid/io.Cap) i64 {
   i = 0
   while i < count {
     var m i64 = ovid/mem.FormatI64(tmp, load64(vals + i * 8))
-    ovid/mem.WBytes(io, out, tmp, m)
+    ovid/mem.WBytes(io, out, bytes(tmp, m))
     ovid/mem.WByte(io, out, 10)
     i = i + 1
   }
-  ovid/io.Stdout(out.data, out.len)
+  ovid/io.Stdout(bytes(out.data, out.len))
   return 0
 }
 EOF

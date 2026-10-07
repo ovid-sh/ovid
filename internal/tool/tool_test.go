@@ -167,19 +167,19 @@ func main(io *ovid/io.Cap) i64 {
       i = i + 1
     }
     store8(b + n, 7)
-    if ovid/mem.Copy(b, a, n) != n {
+    if ovid/mem.CopyN(b, a, n) != n {
       return 1
     }
     if load8(b + n) != 7 {
       return 2
     }
-    if !ovid/mem.Eq(a, n, b, n) {
+    if !ovid/mem.Eq(bytes(a, n), bytes(b, n)) {
       return 3
     }
     i = 0
     while i < n {
       store8(b + i, 0)
-      if ovid/mem.Eq(a, n, b, n) {
+      if ovid/mem.Eq(bytes(a, n), bytes(b, n)) {
         return 4
       }
       store8(b + i, 65 + i)
@@ -187,19 +187,19 @@ func main(io *ovid/io.Cap) i64 {
     }
     n = n + 1
   }
-  if ovid/mem.Eq(a, 9, b, 10) {
+  if ovid/mem.Eq(bytes(a, 9), bytes(b, 10)) {
     return 5
   }
   // dst three bytes past src: the first three bytes repeat.
-  ovid/mem.Copy(a, strptr("abcdefghijklmnop"), 16)
-  ovid/mem.Copy(a + 3, a, 13)
-  if !ovid/mem.Eq(a, 16, strptr("abcabcabcabcabca"), 16) {
+  ovid/mem.CopyN(a, strptr("abcdefghijklmnop"), 16)
+  ovid/mem.CopyN(a + 3, a, 13)
+  if !ovid/mem.Eq(bytes(a, 16), bytes(strptr("abcabcabcabcabca"), 16)) {
     return 6
   }
   // dst before src: a plain move down.
-  ovid/mem.Copy(a, strptr("abcdefghijklmnop"), 16)
-  ovid/mem.Copy(a, a + 3, 13)
-  if !ovid/mem.Eq(a, 16, strptr("defghijklmnopnop"), 16) {
+  ovid/mem.CopyN(a, strptr("abcdefghijklmnop"), 16)
+  ovid/mem.CopyN(a, a + 3, 13)
+  if !ovid/mem.Eq(bytes(a, 16), bytes(strptr("defghijklmnopnop"), 16)) {
     return 7
   }
   return 0
@@ -219,7 +219,7 @@ func main(io *ovid/io.Cap) i64 {
   var hex i64 = ovid/io.Alloc(io, 80)
   ovid/sha.Sum(io, strptr("abc"), strlen("abc"), raw)
   ovid/sha.Hex(hex, raw)
-  ovid/io.Stdout(hex, 64)
+  ovid/io.Stdout(bytes(hex, 64))
   return 0
 }
 `), "ovid/sha")
@@ -240,8 +240,7 @@ func main(io *ovid/io.Cap) i64 {
   ovid/asm.Syscall(c)
   ovid/asm.Patch(c)
   var b *ovid/mem.Buf = ovid/elf.Link(io, c)
-  var path i64 = ovid/io.Arg(io, 1)
-  if ovid/io.WriteFile(io, path, ovid/io.CLen(path), b.data, b.len, 493) != 0 {
+  if ovid/io.WriteFile(io, ovid/io.Arg(io, 1), ovid/mem.Bytes(b), 493) != 0 {
     return 8
   }
   return 0
@@ -259,13 +258,11 @@ func main(io *ovid/io.Cap) i64 {
 	if _, code := buildRun(t, demo(`package demo
 import ovid/io
 func main(io *ovid/io.Cap) i64 {
-  var path i64 = ovid/io.Arg(io, 1)
-  var nn i64 = ovid/io.Alloc(io, 8)
-  var _, e i64 = ovid/io.ReadFile(io, path, ovid/io.CLen(path), nn)
+  var data bytes, e i64 = ovid/io.ReadFile(io, ovid/io.Arg(io, 1))
   if e != 0 {
     return 9
   }
-  return load64(nn)
+  return len(data)
 }
 `), note); code != 5 {
 		t.Fatalf("readfile len %d", code)
@@ -969,7 +966,7 @@ func Get(n *Node) i64 {
 }
 
 func main(io *ovid/io.Cap) i64 {
-  ovid/io.Print(strptr("before\n"))
+  ovid/io.Print("before\n")
   return Get(0 as *Node)
 }
 `))
@@ -1021,7 +1018,7 @@ func main(io *ovid/io.Cap) i64 {
 		t.Fatalf("stderr: %s", errb)
 	}
 
-	dir = mkmod(t, demo(strings.Replace(src, "COPY", "var b i64 = ovid/io.Alloc(io, 4)\n  ovid/mem.Copy(b, p, 4)\n  p = b", 1)))
+	dir = mkmod(t, demo(strings.Replace(src, "COPY", "var b i64 = ovid/io.Alloc(io, 4)\n  ovid/mem.CopyN(b, p, 4)\n  p = b", 1)))
 	if code := withStdio(t, os.DevNull, stderr, func() int { return Run(dir, nil, io.Discard) }); code != 66 {
 		t.Fatalf("store into a copy: exit %d", code)
 	}
@@ -1040,9 +1037,9 @@ import ovid/io
 
 func main(io *ovid/io.Cap) i64 {
   var buf i64 = ovid/io.Alloc(io, 64)
-  var n i64, _ = ovid/io.Read(0, buf, 64)
-  ovid/io.Stdout(buf, n)
-  ovid/io.Stderr(strptr("to stderr\n"), 10)
+  var n i64, _ = ovid/io.Read(0, bytes(buf, 64))
+  ovid/io.Stdout(bytes(buf, n))
+  ovid/io.Stderr(bytes(strptr("to stderr\n"), 10))
   return 3
 }
 `))
@@ -1620,11 +1617,11 @@ func TestBinaryShape(t *testing.T) {
 	dir := mkmod(t, demo(`package demo
 import ovid/io
 func Unused() i64 {
-  ovid/io.Stdout(strptr("never printed"), strlen("never printed"))
+  ovid/io.Stdout("never printed")
   return 1
 }
 func main(io *ovid/io.Cap) i64 {
-  ovid/io.Stdout(strptr("hi\n"), strlen("hi\n"))
+  ovid/io.Stdout("hi\n")
   return 0
 }
 `))
@@ -1665,7 +1662,7 @@ func TestEditOne(t *testing.T) {
 	dir := mkmod(t, demo("package demo\n\nimport ovid/io\n\nfunc main(io *ovid/io.Cap) i64 {\n  return 1\n}\n"))
 	text := filepath.Join(t.TempDir(), "text.ov")
 	// Quotes and newlines need no escaping; the trailing newline is dropped.
-	os.WriteFile(text, []byte("ovid/io.Stdout(strptr(\"a \\\"b\\\"\\n\"), strlen(\"a \\\"b\\\"\\n\"))\n"), 0o644)
+	os.WriteFile(text, []byte("ovid/io.Stdout(\"a \\\"b\\\"\\n\")\n"), 0o644)
 	var b bytes.Buffer
 	if code := EditOne(dir, EditOp{Op: "insert", Before: "st:demo.main:1", Expect: hashOf(t, dir, "fn:demo.main")}, text, EditOpts{RequireClean: true}, &b); code != 0 {
 		t.Fatalf("insert %d %s", code, b.String())

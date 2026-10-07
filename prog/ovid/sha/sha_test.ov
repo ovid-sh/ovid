@@ -9,14 +9,14 @@ func HexIs(io *ovid/io.Cap, p i64, n i64, want i64) bool {
   var hex i64 = ovid/io.Alloc(io, 64)
   Sum(io, p, n, raw)
   Hex(hex, raw)
-  if ovid/mem.Eq(hex, 64, want, 64) {
+  if ovid/mem.Eq(bytes(hex, 64), bytes(want, 64)) {
     return true
   }
-  ovid/io.Stderr(strptr("got  "), 5)
-  ovid/io.Stderr(hex, 64)
-  ovid/io.Stderr(strptr("\nwant "), 6)
-  ovid/io.Stderr(want, 64)
-  ovid/io.Stderr(strptr("\n"), 1)
+  ovid/io.Stderr(bytes(strptr("got  "), 5))
+  ovid/io.Stderr(bytes(hex, 64))
+  ovid/io.Stderr(bytes(strptr("\nwant "), 6))
+  ovid/io.Stderr(bytes(want, 64))
+  ovid/io.Stderr(bytes(strptr("\n"), 1))
   return false
 }
 

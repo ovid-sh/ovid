@@ -78,7 +78,7 @@ func Link(io *ovid/io.Cap, c *ovid/asm.Code) *ovid/mem.Buf {
     W64(b, io, 0)
     i = i + 1
   }
-  ovid/mem.WBytes(io, b, c.data, c.len)
-  ovid/mem.WBytes(io, b, c.ro, c.ron)
+  ovid/mem.WBytes(io, b, bytes(c.data, c.len))
+  ovid/mem.WBytes(io, b, bytes(c.ro, c.ron))
   return b
 }

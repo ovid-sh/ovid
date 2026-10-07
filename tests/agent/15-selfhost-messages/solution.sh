@@ -5,7 +5,7 @@ set -e
 f=ovid/check/check.ov
 awk '
 /NeedI64\(c, strptr\("arith needs i64"\)/ { arith++; sub(/NeedI64\(.*/, "NeedOp(c, " (arith == 1 ? "true" : "false") ", op, strptr(\"i64\"))"); n++ }
-/Err\(c, .*"comparison types differ"/ { sub(/Err\(.*/, "Mismatch(c, false, op, c.typ, c.tyn, ovid/io.CStr(c.io, lp, ln))"); n++ }
+/Err\(c, .*"comparison types differ"/ { sub(/Err\(.*/, "Mismatch(c, false, op, c.typ, c.tyn, ovid/io.CStr(c.io, bytes(lp, ln)))"); n++ }
 /NeedI64\(c, strptr\("order needs i64"\)/ { order++; sub(/NeedI64\(.*/, "NeedOp(c, " (order == 1 ? "true" : "false") ", op, strptr(\"i64\"))"); n++ }
 /NeedBool\(c, strptr\("logic needs bool"\)/ { logic++; sub(/NeedBool\(.*/, "NeedOp(c, " (logic == 1 ? "true" : "false") ", op, strptr(\"bool\"))"); n++ }
 { print }
@@ -58,15 +58,15 @@ func OpText(op i64) i64 {
 func Mismatch(c *Ch, left bool, op i64, gp i64, gn i64, want i64) i64 {
   var m *ovid/mem.Buf = ovid/mem.New(c.io, 64)
   if left {
-    ovid/mem.WBytes(c.io, m, strptr("left of "), strlen("left of "))
+    ovid/mem.WBytes(c.io, m, "left of ")
   } else {
-    ovid/mem.WBytes(c.io, m, strptr("right of "), strlen("right of "))
+    ovid/mem.WBytes(c.io, m, "right of ")
   }
-  ovid/mem.WBytes(c.io, m, OpText(op), ovid/io.CLen(OpText(op)))
-  ovid/mem.WBytes(c.io, m, strptr(": got "), strlen(": got "))
-  ovid/mem.WBytes(c.io, m, gp, gn)
-  ovid/mem.WBytes(c.io, m, strptr(", want "), strlen(", want "))
-  ovid/mem.WBytes(c.io, m, want, ovid/io.CLen(want))
+  ovid/mem.WBytes(c.io, m, bytes(OpText(op), ovid/io.CLen(OpText(op))))
+  ovid/mem.WBytes(c.io, m, ": got ")
+  ovid/mem.WBytes(c.io, m, bytes(gp, gn))
+  ovid/mem.WBytes(c.io, m, ", want ")
+  ovid/mem.WBytes(c.io, m, bytes(want, ovid/io.CLen(want)))
   return Err(c, strptr("type_mismatch"), strlen("type_mismatch"), m.data, m.len)
 }
 

@@ -7,15 +7,15 @@ import ovid/parse
 // MsgIs reports whether c failed with the message want[0:n].
 func MsgIs(io *ovid/io.Cap, c *C, want i64, n i64) bool {
   if c.err == 0 {
-    ovid/io.Eprint(strptr("no failure\n"))
+    ovid/io.Eprint("no failure\n")
     return false
   }
-  if ovid/mem.Eq(c.msg.data, c.msg.len, want, n) {
+  if ovid/mem.Eq(bytes(c.msg.data, c.msg.len), bytes(want, n)) {
     return true
   }
-  ovid/io.Eprint(strptr("got "))
-  ovid/io.Stderr(c.msg.data, c.msg.len)
-  ovid/io.Eprint(strptr("\n"))
+  ovid/io.Eprint("got ")
+  ovid/io.Stderr(bytes(c.msg.data, c.msg.len))
+  ovid/io.Eprint("\n")
   return false
 }
 
@@ -110,10 +110,10 @@ func TestBind(io *ovid/io.Cap) i64 {
   if i != LocOf(c, bT) || j != LocOf(c, bBool) || i == j {
     return 3
   }
-  if !ovid/mem.Eq(load64(i + 24), load64(i + 32), strptr("*T"), 2) {
+  if !ovid/mem.Eq(bytes(load64(i + 24), load64(i + 32)), bytes(strptr("*T"), 2)) {
     return 4
   }
-  if !ovid/mem.Eq(load64(j + 24), load64(j + 32), strptr("bool"), 4) {
+  if !ovid/mem.Eq(bytes(load64(j + 24), load64(j + 32)), bytes(strptr("bool"), 4)) {
     return 5
   }
   if load64(i + 16) != load64(j + 16) {

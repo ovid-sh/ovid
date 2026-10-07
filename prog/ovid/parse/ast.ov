@@ -54,6 +54,7 @@ const OP_BYTE i64 = 45
 const OP_SLICE i64 = 46
 const OP_BLEN i64 = 47
 const OP_BLOAD i64 = 48
+const OP_PTR i64 = 49
 const OP_LOR i64 = 50
 const OP_LAND i64 = 51
 const OP_EQ i64 = 52
@@ -273,7 +274,7 @@ type File struct {
 // FindDecl returns the decl named np[0:nn] in the list d, or nil.
 func FindDecl(d *Decl, np i64, nn i64) *Decl {
   while d != 0 as *Decl {
-    if ovid/mem.Eq(d.namep, d.namen, np, nn) {
+    if ovid/mem.Eq(bytes(d.namep, d.namen), bytes(np, nn)) {
       return d
     }
     d = d.next
@@ -345,8 +346,8 @@ func FindFunc(m *Mod, pp i64, pn i64, np i64, nn i64) *Decl {
     if f == 0 as *Decl {
       return f
     }
-    if ovid/mem.Eq(f.namep, f.namen, np, nn) {
-      if ovid/mem.Eq(f.pkg.pathp, f.pkg.pathn, pp, pn) {
+    if ovid/mem.Eq(bytes(f.namep, f.namen), bytes(np, nn)) {
+      if ovid/mem.Eq(bytes(f.pkg.pathp, f.pkg.pathn), bytes(pp, pn)) {
         return f
       }
     }
@@ -521,7 +522,7 @@ func ParseConst(p *P, s i64) i64 {
       ErrEnd(p)
     }
   }
-  if !ovid/mem.Eq(tp, tn, strptr("i64"), 3) {
+  if !ovid/mem.Eq(bytes(tp, tn), bytes(strptr("i64"), 3)) {
     if ErrBegin(p) {
       EW(p, strptr("const "), strlen("const "))
       EW(p, np, nn)
@@ -575,7 +576,7 @@ func ParseTable(p *P, s i64, np i64, nn i64) i64 {
     }
     if n >= cap {
       var more i64 = ovid/io.Alloc(p.io, cap * 16)
-      ovid/mem.Copy(more, vals, cap * 8)
+      ovid/mem.CopyN(more, vals, cap * 8)
       vals = more
       cap = cap * 2
     }
@@ -622,7 +623,7 @@ func EvalConst(p *P, n *Node) i64 {
     return n.ival
   }
   if op == OP_NAME {
-    if n.pkgn > 0 && !ovid/mem.Eq(n.pkgp, n.pkgn, p.pkg.pathp, p.pkg.pathn) {
+    if n.pkgn > 0 && !ovid/mem.Eq(bytes(n.pkgp, n.pkgn), bytes(p.pkg.pathp, p.pkg.pathn)) {
       if ErrBegin(p) {
         EW(p, strptr("a const's value cannot name another package's const ("), strlen("a const's value cannot name another package's const ("))
         EW(p, n.pkgp, n.pkgn)
@@ -635,7 +636,7 @@ func EvalConst(p *P, n *Node) i64 {
     }
     var c *Decl = p.pkg.cs
     while c != 0 as *Decl {
-      if ovid/mem.Eq(c.namep, c.namen, n.namep, n.namen) {
+      if ovid/mem.Eq(bytes(c.namep, c.namen), bytes(n.namep, n.namen)) {
         if c.istab != 0 {
           p.cok = false
         }
@@ -648,7 +649,7 @@ func EvalConst(p *P, n *Node) i64 {
   }
   if op == OP_LEN {
     // len(Table) of a table in this package, declared above.
-    if n.pkgn > 0 && !ovid/mem.Eq(n.pkgp, n.pkgn, p.pkg.pathp, p.pkg.pathn) {
+    if n.pkgn > 0 && !ovid/mem.Eq(bytes(n.pkgp, n.pkgn), bytes(p.pkg.pathp, p.pkg.pathn)) {
       if ErrBegin(p) {
         EW(p, strptr("a const's value cannot name another package's table ("), strlen("a const's value cannot name another package's table ("))
         EW(p, n.pkgp, n.pkgn)
@@ -661,7 +662,7 @@ func EvalConst(p *P, n *Node) i64 {
     }
     var lc *Decl = p.pkg.cs
     while lc != 0 as *Decl {
-      if lc.istab != 0 && ovid/mem.Eq(lc.namep, lc.namen, n.namep, n.namen) {
+      if lc.istab != 0 && ovid/mem.Eq(bytes(lc.namep, lc.namen), bytes(n.namep, n.namen)) {
         return lc.tabn
       }
       lc = lc.next
@@ -806,7 +807,7 @@ func ParseFunc(p *P, s i64) i64 {
     d.typ2p = p.tp
     d.typ2n = p.tn
     d.ty2tok = p.ttok
-    if !ovid/mem.Eq(p.tp, p.tn, strptr("i64"), 3) {
+    if !ovid/mem.Eq(bytes(p.tp, p.tn), bytes(strptr("i64"), 3)) {
       if ErrBegin(p) {
         EW(p, strptr("the second result is an error code; write ("), strlen("the second result is an error code; write ("))
         EW(p, d.typp, d.typn)
@@ -1319,6 +1320,13 @@ func Primary0(p *P) *Node {
     bm.num = Eid(p)
     return bm
   }
+  if PeekCall(p, strptr("ptr"), 3) {
+    // ptr(b): the address a bytes starts at, for a syscall.
+    Ident(p)
+    var ad *Node = Builtin(p, OP_PTR, ArgList(p), 1)
+    ad.num = Eid(p)
+    return ad
+  }
   if PeekByte(p, 34) {
     // A string literal is a bytes value in rodata.
     ParseString(p)
@@ -1521,7 +1529,7 @@ func PkgName(p *P, pkgp i64, pkgn i64, np i64, nn i64) *Node {
 func Imported(p *P, sp i64, sn i64) bool {
   var d *Decl = p.pkg.ims
   while d != 0 as *Decl {
-    if ovid/mem.Eq(d.namep, d.namen, sp, sn) {
+    if ovid/mem.Eq(bytes(d.namep, d.namen), bytes(sp, sn)) {
       return true
     }
     d = d.next
@@ -1838,7 +1846,7 @@ func ParseString(p *P) i64 {
         Errorf(p, strptr("bad utf-8"), strlen("bad utf-8"))
         return 0
       }
-      ovid/mem.WBytes(p.io, b, p.src + p.i, sz)
+      ovid/mem.WBytes(p.io, b, bytes(p.src + p.i, sz))
       p.i = p.i + sz
     }
   }

@@ -206,10 +206,10 @@ func Store(a i64, n i64) i64 {
   return bad
 }
 
-func Put(io *ovid/io.Cap, name i64, v i64) i64 {
+func Put(io *ovid/io.Cap, name bytes, v i64) i64 {
   ovid/io.Print(name)
   ovid/io.PrintInt(io, v)
-  ovid/io.Print(strptr("\n"))
+  ovid/io.Print("\n")
   return 0
 }
 
@@ -227,14 +227,14 @@ func main(io *ovid/io.Cap) i64 {
     leaf = leaf + Leaf(a + 8, i, i + 3, i ^ 5)
     i = i + 1
   }
-  Put(io, strptr("leaf "), leaf)
+  Put(io, "leaf ", leaf)
   // Saved reads from 8 bytes below its a.
-  Put(io, strptr("saved "), Saved(a + 16, n))
+  Put(io, "saved ", Saved(a + 16, n))
   var r *Arr = ovid/io.Alloc(io, sizeof(Arr)) as *Arr
   r.data = a
   r.n = n
-  Put(io, strptr("field "), Field(r))
-  Put(io, strptr("fieldcall "), FieldCall(r))
-  Put(io, strptr("store "), Store(a, n))
+  Put(io, "field ", Field(r))
+  Put(io, "fieldcall ", FieldCall(r))
+  Put(io, "store ", Store(a, n))
   return 0
 }

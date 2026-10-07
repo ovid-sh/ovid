@@ -25,6 +25,6 @@ func main(io *ovid/io.Cap) i64 {
   t.Node.v = 7
   t.Item.v = 9
   ovid/io.PrintInt(io, Root(t))
-  ovid/io.Print(strptr("\n"))
+  ovid/io.Print("\n")
   return 0
 }

@@ -11,18 +11,16 @@ func IsSpace(c i64) bool {
 
 func main(io *ovid/io.Cap) i64 {
   if ovid/io.Argc(io) < 2 {
-    ovid/io.Eprint(strptr("usage: wc FILE\n"))
+    ovid/io.Eprint("usage: wc FILE\n")
     return 1
   }
-  var name i64 = ovid/io.Arg(io, 1)
-  var nn i64 = ovid/io.Alloc(io, 8)
-  var data i64, e i64 = ovid/io.ReadFile(io, name, ovid/io.CLen(name), nn)
+  var data bytes, e i64 = ovid/io.ReadFile(io, ovid/io.Arg(io, 1))
   if e != 0 {
-    ovid/io.Eprint(strptr("wc: cannot read the file\n"))
+    ovid/io.Eprint("wc: cannot read the file\n")
     return 1
   }
-  var p i64 = data
-  var n i64 = load64(nn)
+  var p i64 = ptr(data)
+  var n i64 = len(data)
   var lines i64 = 0
   var words i64 = 0
   var inword bool = false
@@ -41,11 +39,11 @@ func main(io *ovid/io.Cap) i64 {
     i = i + 1
   }
   ovid/io.PrintInt(io, lines)
-  ovid/io.Print(strptr(" "))
+  ovid/io.Print(" ")
   ovid/io.PrintInt(io, words)
-  ovid/io.Print(strptr(" "))
+  ovid/io.Print(" ")
   ovid/io.PrintInt(io, n)
-  ovid/io.Print(strptr("\n"))
+  ovid/io.Print("\n")
   return 0
 }
 EOF

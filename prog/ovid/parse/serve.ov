@@ -13,7 +13,7 @@ import ovid/mem
 // (internal/tool/serve.go).
 func ServeHost(m *Mod) i64 {
   var e *Pkg = m.pkgs
-  while e != 0 as *Pkg && !ovid/mem.Eq(e.pathp, e.pathn, m.entryp, m.entryn) {
+  while e != 0 as *Pkg && !ovid/mem.Eq(bytes(e.pathp, e.pathn), bytes(m.entryp, m.entryn)) {
     e = e.next
   }
   if e == 0 as *Pkg {
@@ -24,9 +24,9 @@ func ServeHost(m *Mod) i64 {
   }
   var io *ovid/io.Cap = m.io
   var b *ovid/mem.Buf = ovid/mem.New(io, 1024)
-  ovid/mem.WBytes(io, b, strptr("package "), 8)
-  ovid/mem.WBytes(io, b, m.entryp, m.entryn)
-  ovid/mem.WBytes(io, b, strptr("\n\nfunc main(io *ovid/io.Cap) i64 {\n  var s *ovid/http.Stdio = ovid/http.NewStdio(io)\n  var m *ovid/io.HeapMark = ovid/io.MarkHeap(io)\n  var req *ovid/http.Request = ovid/http.NextStdio(io, s)\n  while req != 0 as *ovid/http.Request {\n    var res *ovid/http.Response = ovid/http.NewResponse(io)\n    var result i64 = 0\n    if ovid/http.Err(req) == 0 {\n      result = handle(io, req, res)\n    }\n    if ovid/http.WriteStdio(io, req, res, result) != 0 {\n      return 1\n    }\n    ovid/io.ResetHeap(io, m)\n    req = ovid/http.NextStdio(io, s)\n  }\n  return 0\n}\n"), strlen("\n\nfunc main(io *ovid/io.Cap) i64 {\n  var s *ovid/http.Stdio = ovid/http.NewStdio(io)\n  var m *ovid/io.HeapMark = ovid/io.MarkHeap(io)\n  var req *ovid/http.Request = ovid/http.NextStdio(io, s)\n  while req != 0 as *ovid/http.Request {\n    var res *ovid/http.Response = ovid/http.NewResponse(io)\n    var result i64 = 0\n    if ovid/http.Err(req) == 0 {\n      result = handle(io, req, res)\n    }\n    if ovid/http.WriteStdio(io, req, res, result) != 0 {\n      return 1\n    }\n    ovid/io.ResetHeap(io, m)\n    req = ovid/http.NextStdio(io, s)\n  }\n  return 0\n}\n"))
+  ovid/mem.WBytes(io, b, bytes(strptr("package "), 8))
+  ovid/mem.WBytes(io, b, bytes(m.entryp, m.entryn))
+  ovid/mem.WBytes(io, b, "\n\nfunc main(io *ovid/io.Cap) i64 {\n  var s *ovid/http.Stdio = ovid/http.NewStdio(io)\n  var m *ovid/io.HeapMark = ovid/io.MarkHeap(io)\n  var req *ovid/http.Request = ovid/http.NextStdio(io, s)\n  while req != 0 as *ovid/http.Request {\n    var res *ovid/http.Response = ovid/http.NewResponse(io)\n    var result i64 = 0\n    if ovid/http.Err(req) == 0 {\n      result = handle(io, req, res)\n    }\n    if ovid/http.WriteStdio(io, req, res, result) != 0 {\n      return 1\n    }\n    ovid/io.ResetHeap(io, m)\n    req = ovid/http.NextStdio(io, s)\n  }\n  return 0\n}\n")
   var f *File = ovid/io.Alloc(io, sizeof(File)) as *File
   f.relp = strptr("serve host")
   f.reln = strlen("serve host")

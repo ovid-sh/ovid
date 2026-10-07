@@ -272,13 +272,11 @@ func TestReadFileRefusedClose(t *testing.T) {
 	dir := mkmod(t, demo(`package demo
 import ovid/io
 func main(io *ovid/io.Cap) i64 {
-  var nn i64 = ovid/io.Alloc(io, 8)
-  var p i64 = ovid/io.Arg(io, 1)
-  var data i64, e i64 = ovid/io.ReadFile(io, p, ovid/io.CLen(p), nn)
+  var data bytes, e i64 = ovid/io.ReadFile(io, ovid/io.Arg(io, 1))
   if e != ovid/io.E_PERM {
     return 10
   }
-  if data != 0 || load64(nn) != 0 {
+  if ptr(data) != 0 || len(data) != 0 {
     return 11
   }
   return 3
@@ -412,7 +410,7 @@ func TestHuge(io *ovid/io.Cap) i64 {
   return p & 1
 }
 func TestReturns71(io *ovid/io.Cap) i64 {
-  ovid/io.Eprint(strptr("out of memory\n"))
+  ovid/io.Eprint("out of memory\n")
   return 71
 }
 func main(io *ovid/io.Cap) i64 {

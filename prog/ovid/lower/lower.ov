@@ -130,13 +130,13 @@ func Program(io *ovid/io.Cap, m *ovid/parse.Mod) i64 {
 }
 
 func IsBytes(tp i64, tn i64) bool {
-  return ovid/mem.Eq(tp, tn, strptr("bytes"), strlen("bytes"))
+  return ovid/mem.Eq(bytes(tp, tn), "bytes")
 }
 
 // NName is name#n, the length half of the pair of the bytes called name.
 func NName(l *L, np i64, nn i64) i64 {
   var d i64 = ovid/io.Alloc(l.io, nn + 2)
-  ovid/mem.Copy(d, np, nn)
+  ovid/mem.CopyN(d, np, nn)
   store8(d + nn, 35)
   store8((d + nn) + 1, 110)
   return d
@@ -209,7 +209,7 @@ func Lookup(l *L, np i64, nn i64) bool {
   var i i64 = l.nenv - 1
   while i >= 0 {
     var rec i64 = l.env + (i * ENVREC)
-    if ovid/mem.Eq(load64(rec), load64(rec + 8), np, nn) {
+    if ovid/mem.Eq(bytes(load64(rec), load64(rec + 8)), bytes(np, nn)) {
       l.typ = load64(rec + 16)
       l.tyn = load64(rec + 24)
       return true
@@ -222,7 +222,7 @@ func Lookup(l *L, np i64, nn i64) bool {
 func FindPkg(l *L, pp i64, pn i64) *ovid/parse.Pkg {
   var k *ovid/parse.Pkg = l.mod.pkgs
   while k != 0 as *ovid/parse.Pkg {
-    if ovid/mem.Eq(k.pathp, k.pathn, pp, pn) {
+    if ovid/mem.Eq(bytes(k.pathp, k.pathn), bytes(pp, pn)) {
       return k
     }
     k = k.next
@@ -269,7 +269,7 @@ func FieldIsBytes(l *L, bt *ovid/parse.Decl, fp i64, fnn i64) bool {
   if g.namen != fnn + 2 {
     return false
   }
-  return ovid/mem.Eq(g.namep, fnn, fp, fnn) && load8(g.namep + fnn) == 35 && load8((g.namep + fnn) + 1) == 110
+  return ovid/mem.Eq(bytes(g.namep, fnn), bytes(fp, fnn)) && load8(g.namep + fnn) == 35 && load8((g.namep + fnn) + 1) == 110
 }
 
 func Callee(l *L, n *ovid/parse.Node) *ovid/parse.Decl {
@@ -426,7 +426,7 @@ func Temp(l *L, tp i64, tn i64, v *ovid/parse.Node, p *Pre) *ovid/parse.Node {
 // Copy is a fresh node with n's contents, off the list n is on.
 func Copy(l *L, n *ovid/parse.Node) *ovid/parse.Node {
   var m *ovid/parse.Node = NewNode(l, n.op)
-  ovid/mem.Copy(m as i64, n as i64, sizeof(ovid/parse.Node))
+  ovid/mem.CopyN(m as i64, n as i64, sizeof(ovid/parse.Node))
   m.next = 0 as *ovid/parse.Node
   return m
 }
@@ -439,7 +439,7 @@ func Become(l *L, n *ovid/parse.Node, np i64, nn i64) i64 {
   var off i64 = n.off
   var end i64 = n.end
   var z i64 = 0
-  ovid/mem.Copy(n as i64, NewNode(l, ovid/parse.OP_NAME) as i64, sizeof(ovid/parse.Node))
+  ovid/mem.CopyN(n as i64, NewNode(l, ovid/parse.OP_NAME) as i64, sizeof(ovid/parse.Node))
   n.namep = np
   n.namen = nn
   n.next = next
@@ -627,6 +627,19 @@ func Expr(l *L, n *ovid/parse.Node, p *Pre) i64 {
     return 0
   }
   var op i64 = n.op
+  // The checker rewrites b[i] and len(b) on a bytes local to byte and
+  // blen; a tree compiled without it still has index and len, which say
+  // the same when the name is a bytes.
+  if (op == ovid/parse.OP_INDEX || op == ovid/parse.OP_LEN) && n.pkgn == 0 && n.base != 0 as *ovid/parse.Node {
+    if Lookup(l, n.namep, n.namen) && IsBytes(l.typ, l.tyn) {
+      if op == ovid/parse.OP_INDEX {
+        op = ovid/parse.OP_BYTE
+      } else {
+        op = ovid/parse.OP_BLEN
+      }
+      n.op = op
+    }
+  }
   if op == ovid/parse.OP_BYTE {
     Pair(l, n.base, p)
     var bp *ovid/parse.Node = l.pa
@@ -639,16 +652,25 @@ func Expr(l *L, n *ovid/parse.Node, p *Pre) i64 {
     n.arg = 0 as *ovid/parse.Node
     return 0
   }
-  if op == ovid/parse.OP_BLEN {
-    Pair(l, n.base, p)
+  if op == ovid/parse.OP_BLEN || op == ovid/parse.OP_PTR {
+    var half *ovid/parse.Node = n.base
+    if op == ovid/parse.OP_PTR {
+      half = n.arg
+    }
+    Pair(l, half, p)
     var ln *ovid/parse.Node = l.pl
+    if op == ovid/parse.OP_PTR {
+      ln = l.pa
+    }
     if ln.op == ovid/parse.OP_NAME {
       Become(l, n, ln.namep, ln.namen)
     } else {
-      // The length of a literal: strlen.
+      // Of a literal: strlen or strptr.
       var next *ovid/parse.Node = n.next
-      ovid/mem.Copy(n as i64, ln as i64, sizeof(ovid/parse.Node))
+      var num i64 = n.num
+      ovid/mem.CopyN(n as i64, ln as i64, sizeof(ovid/parse.Node))
       n.next = next
+      n.num = num
     }
     return 0
   }

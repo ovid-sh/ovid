@@ -9,8 +9,8 @@ func Mid(lo i64, hi i64) bool {
 
 func main(io *ovid/io.Cap) i64 {
   ovid/io.PrintInt(io, Mid(10, 20))
-  ovid/io.Print(strptr("\n"))
+  ovid/io.Print("\n")
   ovid/io.PrintInt(io, Span(3, 11))
-  ovid/io.Print(strptr("\n"))
+  ovid/io.Print("\n")
   return 0
 }

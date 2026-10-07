@@ -17,16 +17,16 @@ type Args struct {
 }
 
 func ArgEq(io *ovid/io.Cap, i i64, lit i64, n i64) bool {
-  var a i64 = ovid/io.Arg(io, i)
-  return ovid/mem.Eq(a, ovid/io.CLen(a), lit, n)
+  var a i64 = ovid/io.ArgC(io, i)
+  return ovid/mem.Eq(bytes(a, ovid/io.CLen(a)), bytes(lit, n))
 }
 
 func Join(io *ovid/io.Cap, dir i64, dirn i64, suf i64, sufn i64) i64 {
   var n i64 = (dirn + 1) + sufn
   var p i64 = ovid/io.Alloc(io, n + 1)
-  ovid/mem.Copy(p, dir, dirn)
+  ovid/mem.CopyN(p, dir, dirn)
   store8(p + dirn, 47)
-  ovid/mem.Copy(p + dirn + 1, suf, sufn)
+  ovid/mem.CopyN(p + dirn + 1, suf, sufn)
   store8(p + n, 0)
   return p
 }
@@ -34,21 +34,21 @@ func Join(io *ovid/io.Cap, dir i64, dirn i64, suf i64, sufn i64) i64 {
 // Usage prints the usage error (exit 64). Keep it in sync with main.
 func Usage(io *ovid/io.Cap, msg i64, msgn i64) i64 {
   var b *ovid/mem.Buf = ovid/mem.New(io, 1024)
-  ovid/mem.WBytes(io, b, strptr("{\"ok\":false,\"error\":\"usage\",\"message\":"), strlen("{\"ok\":false,\"error\":\"usage\",\"message\":"))
+  ovid/mem.WBytes(io, b, "{\"ok\":false,\"error\":\"usage\",\"message\":")
   ovid/parse.WStr(io, b, msg, msgn)
-  ovid/mem.WBytes(io, b, strptr(",\"usage\":\"ovid check [dir] [--std dir] | ovid build [dir] [-o out] [--std dir] | ovid dump [dir] [--std dir] | ovid refs <id|name> [dir] [--std dir]; dir defaults to . and may also be given as -C dir; out defaults to <dir>/bin/<module name>; --std names the directory holding the shipped packages (ovid/io, ovid/mem)\"}\n"), strlen(",\"usage\":\"ovid check [dir] [--std dir] | ovid build [dir] [-o out] [--std dir] | ovid dump [dir] [--std dir] | ovid refs <id|name> [dir] [--std dir]; dir defaults to . and may also be given as -C dir; out defaults to <dir>/bin/<module name>; --std names the directory holding the shipped packages (ovid/io, ovid/mem)\"}\n"))
-  ovid/io.Stdout(b.data, b.len)
+  ovid/mem.WBytes(io, b, ",\"usage\":\"ovid check [dir] [--std dir] | ovid build [dir] [-o out] [--std dir] | ovid dump [dir] [--std dir] | ovid refs <id|name> [dir] [--std dir]; dir defaults to . and may also be given as -C dir; out defaults to <dir>/bin/<module name>; --std names the directory holding the shipped packages (ovid/io, ovid/mem)\"}\n")
+  ovid/io.Stdout(bytes(b.data, b.len))
   return 64
 }
 
 func Fail(io *ovid/io.Cap, code i64, coden i64, detail i64, dn i64) i64 {
   var b *ovid/mem.Buf = ovid/mem.New(io, 1024)
-  ovid/mem.WBytes(io, b, strptr("{\"ok\":false,\"error\":"), strlen("{\"ok\":false,\"error\":"))
+  ovid/mem.WBytes(io, b, "{\"ok\":false,\"error\":")
   ovid/parse.WStr(io, b, code, coden)
-  ovid/mem.WBytes(io, b, strptr(",\"message\":"), strlen(",\"message\":"))
+  ovid/mem.WBytes(io, b, ",\"message\":")
   ovid/parse.WStr(io, b, detail, dn)
-  ovid/mem.WBytes(io, b, strptr("}\n"), 2)
-  ovid/io.Stdout(b.data, b.len)
+  ovid/mem.WBytes(io, b, bytes(strptr("}\n"), 2))
+  ovid/io.Stdout(bytes(b.data, b.len))
   return 1
 }
 
@@ -57,13 +57,13 @@ func Fail(io *ovid/io.Cap, code i64, coden i64, detail i64, dn i64) i64 {
 func LoadFailed(io *ovid/io.Cap, m *ovid/parse.Mod, build bool) i64 {
   var b *ovid/mem.Buf = ovid/mem.New(io, 256)
   if build {
-    ovid/mem.WBytes(io, b, strptr("{\"ok\":false,\"errors\":"), strlen("{\"ok\":false,\"errors\":"))
+    ovid/mem.WBytes(io, b, "{\"ok\":false,\"errors\":")
   } else {
-    ovid/mem.WBytes(io, b, strptr("{\"fact\":\"summary\",\"ok\":false,\"errors\":"), strlen("{\"fact\":\"summary\",\"ok\":false,\"errors\":"))
+    ovid/mem.WBytes(io, b, "{\"fact\":\"summary\",\"ok\":false,\"errors\":")
   }
   ovid/parse.WInt(io, b, m.nerr)
-  ovid/mem.WBytes(io, b, strptr("}\n"), 2)
-  ovid/io.Stdout(b.data, b.len)
+  ovid/mem.WBytes(io, b, bytes(strptr("}\n"), 2))
+  ovid/io.Stdout(bytes(b.data, b.len))
   return 1
 }
 
@@ -73,7 +73,7 @@ func MkParent(io *ovid/io.Cap, path i64) i64 {
   while i >= 0 {
     if load8(path + i) == 47 {
       var p i64 = ovid/io.Alloc(io, i + 1)
-      ovid/mem.Copy(p, path, i)
+      ovid/mem.CopyN(p, path, i)
       store8(p + i, 0)
       ovid/io.Mkdir(p)
       return 0
@@ -98,24 +98,24 @@ func ParseArgs(io *ovid/io.Cap, allowOut bool, wantQ bool) *Args {
       if i + 1 >= n {
         a.bad = Usage(io, strptr("flag needs a value"), strlen("flag needs a value"))
       } else if ArgEq(io, i, strptr("--std"), 5) {
-        a.std = ovid/io.Arg(io, i + 1)
+        a.std = ovid/io.ArgC(io, i + 1)
       } else if ArgEq(io, i, strptr("-o"), 2) {
-        a.out = ovid/io.Arg(io, i + 1)
+        a.out = ovid/io.ArgC(io, i + 1)
       } else if a.dir != 0 {
         a.bad = Usage(io, strptr("more than one module dir"), strlen("more than one module dir"))
       } else {
-        a.dir = ovid/io.Arg(io, i + 1)
+        a.dir = ovid/io.ArgC(io, i + 1)
       }
       i = i + 2
-    } else if load8(ovid/io.Arg(io, i)) == 45 {
-      a.bad = Usage(io, ovid/io.Arg(io, i), ovid/io.CLen(ovid/io.Arg(io, i)))
+    } else if load8(ovid/io.ArgC(io, i)) == 45 {
+      a.bad = Usage(io, ovid/io.ArgC(io, i), ovid/io.CLen(ovid/io.ArgC(io, i)))
     } else if wantQ && a.q == 0 {
-      a.q = ovid/io.Arg(io, i)
+      a.q = ovid/io.ArgC(io, i)
       i = i + 1
     } else if a.dir != 0 {
       a.bad = Usage(io, strptr("more than one module dir"), strlen("more than one module dir"))
     } else {
-      a.dir = ovid/io.Arg(io, i)
+      a.dir = ovid/io.ArgC(io, i)
       i = i + 1
     }
   }
@@ -169,7 +169,7 @@ func CmdDump(io *ovid/io.Cap) i64 {
     return 1
   }
   ovid/parse.Emit(m)
-  ovid/io.Stdout(m.json.data, m.json.len)
+  ovid/io.Stdout(bytes(m.json.data, m.json.len))
   return 0
 }
 
@@ -203,16 +203,16 @@ func CmdBuild(io *ovid/io.Cap) i64 {
     return Fail(io, strptr("compile"), strlen("compile"), msg.data, msg.len)
   }
   MkParent(io, out)
-  if ovid/io.WriteFileAtomic(io, out, ovid/io.CLen(out), b.data, b.len, 493) != 0 {
+  if ovid/io.WriteFileAtomic(io, bytes(out, ovid/io.CLen(out)), bytes(b.data, b.len), 493) != 0 {
     return Fail(io, strptr("write"), strlen("write"), out, ovid/io.CLen(out))
   }
   var qb *ovid/mem.Buf = ovid/mem.New(io, 1024)
-  ovid/mem.WBytes(io, qb, strptr("{\"ok\":true,\"output\":"), strlen("{\"ok\":true,\"output\":"))
+  ovid/mem.WBytes(io, qb, "{\"ok\":true,\"output\":")
   ovid/parse.WStr(io, qb, out, ovid/io.CLen(out))
-  ovid/mem.WBytes(io, qb, strptr(",\"bytes\":"), strlen(",\"bytes\":"))
+  ovid/mem.WBytes(io, qb, ",\"bytes\":")
   ovid/parse.WInt(io, qb, b.len)
   // Every system call the program can make, in increasing order.
-  ovid/mem.WBytes(io, qb, strptr(",\"syscalls\":["), strlen(",\"syscalls\":["))
+  ovid/mem.WBytes(io, qb, ",\"syscalls\":[")
   var sn i64 = 0
   var first bool = true
   while sn < ovid/cg.SYSMAX {
@@ -227,11 +227,11 @@ func CmdBuild(io *ovid/io.Cap) i64 {
   }
   ovid/mem.WByte(io, qb, 93)
   if m.sysunk != 0 {
-    ovid/mem.WBytes(io, qb, strptr(",\"syscalls_unknown\":"), strlen(",\"syscalls_unknown\":"))
+    ovid/mem.WBytes(io, qb, ",\"syscalls_unknown\":")
     ovid/parse.WInt(io, qb, m.sysunk)
   }
-  ovid/mem.WBytes(io, qb, strptr("}\n"), 2)
-  ovid/io.Stdout(qb.data, qb.len)
+  ovid/mem.WBytes(io, qb, bytes(strptr("}\n"), 2))
+  ovid/io.Stdout(bytes(qb.data, qb.len))
   return 0
 }
 
@@ -251,10 +251,10 @@ func main(io *ovid/io.Cap) i64 {
   if ArgEq(io, 1, strptr("refs"), 4) {
     return CmdRefs(io)
   }
-  var cmd i64 = ovid/io.Arg(io, 1)
+  var cmd i64 = ovid/io.ArgC(io, 1)
   var b *ovid/mem.Buf = ovid/mem.New(io, 256)
-  ovid/mem.WBytes(io, b, strptr("unknown command "), strlen("unknown command "))
-  ovid/mem.WBytes(io, b, cmd, ovid/io.CLen(cmd))
-  ovid/mem.WBytes(io, b, strptr("; commands: check build dump refs"), strlen("; commands: check build dump refs"))
+  ovid/mem.WBytes(io, b, "unknown command ")
+  ovid/mem.WBytes(io, b, bytes(cmd, ovid/io.CLen(cmd)))
+  ovid/mem.WBytes(io, b, "; commands: check build dump refs")
   return Usage(io, b.data, b.len)
 }

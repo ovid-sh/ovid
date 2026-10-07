@@ -104,7 +104,7 @@ func UseType(c *Ch, kind i64, tp i64, tn i64, tok i64, in *ovid/parse.Decl) *ovi
 }
 
 func WLit(c *Ch, p i64, n i64) i64 {
-  return ovid/mem.WBytes(c.io, c.b, p, n)
+  return ovid/mem.WBytes(c.io, c.b, bytes(p, n))
 }
 
 func WRaw(c *Ch, p i64, n i64) i64 {
@@ -137,13 +137,13 @@ func WStr(c *Ch, p i64, n i64) i64 {
 func WNum(c *Ch, v i64) i64 {
   var tmp i64 = ovid/io.Alloc(c.io, 64)
   var n i64 = ovid/mem.FormatI64(tmp, v)
-  return ovid/mem.WBytes(c.io, c.b, tmp, n)
+  return ovid/mem.WBytes(c.io, c.b, bytes(tmp, n))
 }
 
 func Line(c *Ch) i64 {
   if !c.quiet {
     ovid/mem.WByte(c.io, c.b, 10)
-    ovid/io.Stdout(c.b.data, c.b.len)
+    ovid/io.Stdout(bytes(c.b.data, c.b.len))
   }
   c.b.len = 0
   return 0
@@ -157,46 +157,46 @@ func WId(c *Ch, b *ovid/mem.Buf) i64 {
   var d *ovid/parse.Decl = c.hd
   var o *ovid/parse.Decl = c.ho
   if c.hk == H_PKG {
-    ovid/mem.WBytes(io, b, strptr("pkg:"), 4)
-    return ovid/mem.WBytes(io, b, k.pathp, k.pathn)
+    ovid/mem.WBytes(io, b, bytes(strptr("pkg:"), 4))
+    return ovid/mem.WBytes(io, b, bytes(k.pathp, k.pathn))
   }
   if c.hk == H_IMPORT {
-    ovid/mem.WBytes(io, b, strptr("im:"), 3)
-    ovid/mem.WBytes(io, b, k.pathp, k.pathn)
+    ovid/mem.WBytes(io, b, bytes(strptr("im:"), 3))
+    ovid/mem.WBytes(io, b, bytes(k.pathp, k.pathn))
     ovid/mem.WByte(io, b, 58)
-    return ovid/mem.WBytes(io, b, d.namep, d.namen)
+    return ovid/mem.WBytes(io, b, bytes(d.namep, d.namen))
   }
   if c.hk == H_NODE {
     var n *ovid/parse.Node = c.hn
     if ovid/parse.IsStmt(n.op) {
-      ovid/mem.WBytes(io, b, strptr("st:"), 3)
+      ovid/mem.WBytes(io, b, bytes(strptr("st:"), 3))
     } else {
-      ovid/mem.WBytes(io, b, strptr("ex:"), 3)
+      ovid/mem.WBytes(io, b, bytes(strptr("ex:"), 3))
     }
-    ovid/mem.WBytes(io, b, k.pathp, k.pathn)
+    ovid/mem.WBytes(io, b, bytes(k.pathp, k.pathn))
     ovid/mem.WByte(io, b, 46)
-    ovid/mem.WBytes(io, b, o.namep, o.namen)
+    ovid/mem.WBytes(io, b, bytes(o.namep, o.namen))
     ovid/mem.WByte(io, b, 58)
     return ovid/parse.WInt(io, b, n.num)
   }
   if c.hk == H_CONST {
-    ovid/mem.WBytes(io, b, strptr("cn:"), 3)
+    ovid/mem.WBytes(io, b, bytes(strptr("cn:"), 3))
   } else if c.hk == H_TYPE {
-    ovid/mem.WBytes(io, b, strptr("ty:"), 3)
+    ovid/mem.WBytes(io, b, bytes(strptr("ty:"), 3))
   } else if c.hk == H_FIELD {
-    ovid/mem.WBytes(io, b, strptr("fld:"), 4)
+    ovid/mem.WBytes(io, b, bytes(strptr("fld:"), 4))
   } else if c.hk == H_FUNC {
-    ovid/mem.WBytes(io, b, strptr("fn:"), 3)
+    ovid/mem.WBytes(io, b, bytes(strptr("fn:"), 3))
   } else {
-    ovid/mem.WBytes(io, b, strptr("pa:"), 3)
+    ovid/mem.WBytes(io, b, bytes(strptr("pa:"), 3))
   }
-  ovid/mem.WBytes(io, b, k.pathp, k.pathn)
+  ovid/mem.WBytes(io, b, bytes(k.pathp, k.pathn))
   ovid/mem.WByte(io, b, 46)
   if c.hk == H_FIELD || c.hk == H_PARAM {
-    ovid/mem.WBytes(io, b, o.namep, o.namen)
+    ovid/mem.WBytes(io, b, bytes(o.namep, o.namen))
     ovid/mem.WByte(io, b, 46)
   }
-  return ovid/mem.WBytes(io, b, d.namep, d.namen)
+  return ovid/mem.WBytes(io, b, bytes(d.namep, d.namen))
 }
 
 // WHerePos appends the source position of what the checker is at.
@@ -307,12 +307,12 @@ func Claim(c *Ch) i64 {
     var sn i64 = load64(rec + 8)
     if sp == 0 {
       var keep i64 = ovid/io.Alloc(c.io, n)
-      ovid/mem.Copy(keep, p, n)
+      ovid/mem.CopyN(keep, p, n)
       store64(rec, keep)
       store64(rec + 8, n)
       return 0
     }
-    if ovid/mem.Eq(sp, sn, p, n) {
+    if ovid/mem.Eq(bytes(sp, sn), bytes(p, n)) {
       return 1
     }
     idx = (idx + 1) & c.tabmask
@@ -343,7 +343,7 @@ func Lookup(c *Ch, np i64, nn i64) i64 {
   var i i64 = c.nenv - 1
   while i >= 0 {
     var rec i64 = c.env + (i * 56)
-    if ovid/mem.Eq(load64(rec), load64(rec + 8), np, nn) {
+    if ovid/mem.Eq(bytes(load64(rec), load64(rec + 8)), bytes(np, nn)) {
       return rec
     }
     i = i - 1
@@ -429,7 +429,7 @@ func NeedBytes(c *Ch, msg i64, msgn i64) i64 {
 }
 
 func IsTy(c *Ch, p i64, n i64) bool {
-  return ovid/mem.Eq(c.typ, c.tyn, p, n)
+  return ovid/mem.Eq(bytes(c.typ, c.tyn), bytes(p, n))
 }
 
 func Bad(c *Ch) bool {
@@ -437,7 +437,7 @@ func Bad(c *Ch) bool {
 }
 
 func TyEq(p i64, n i64, q i64, m i64) bool {
-  return ovid/mem.Eq(p, n, q, m)
+  return ovid/mem.Eq(bytes(p, n), bytes(q, m))
 }
 
 // FindPkg returns the package of path pp[0:pn], the first loaded if two
@@ -450,7 +450,7 @@ func FindPkg(c *Ch, pp i64, pn i64) *ovid/parse.Pkg {
     if k == 0 as *ovid/parse.Pkg {
       return k
     }
-    if ovid/mem.Eq(k.pathp, k.pathn, pp, pn) {
+    if ovid/mem.Eq(bytes(k.pathp, k.pathn), bytes(pp, pn)) {
       return k
     }
     idx = (idx + 1) & c.pmask
@@ -542,7 +542,7 @@ func Table(c *Ch, n *ovid/parse.Node) *ovid/parse.Decl {
 }
 
 func Imported(c *Ch, pp i64, pn i64) bool {
-  if ovid/mem.Eq(c.pathp, c.pathn, pp, pn) {
+  if ovid/mem.Eq(bytes(c.pathp, c.pathn), bytes(pp, pn)) {
     return true
   }
   return ovid/parse.FindDecl(c.pkg.ims, pp, pn) != 0 as *ovid/parse.Decl
@@ -760,6 +760,14 @@ func CheckExprIn(c *Ch, n *ovid/parse.Node) i64 {
     CheckExpr(c, n.right)
     NeedI64(c, strptr("length of bytes"), strlen("length of bytes"))
     return SetBytes(c)
+  }
+  if op == ovid/parse.OP_PTR {
+    if n.arg == 0 as *ovid/parse.Node {
+      return BuiltinArity(c, n, false)
+    }
+    CheckExpr(c, n.arg)
+    NeedBytes(c, strptr("operand of ptr"), strlen("operand of ptr"))
+    return SetI64(c)
   }
   if op == ovid/parse.OP_BYTE {
     CheckExpr(c, n.base)
@@ -1006,7 +1014,7 @@ func CheckExprIn(c *Ch, n *ovid/parse.Node) i64 {
   if op == ovid/parse.OP_SYSCALL {
     // The path alone is not enough: the package must have come from the
     // standard library, which a module cannot supply.
-    if !ovid/mem.Eq(c.pathp, c.pathn, strptr("ovid/io"), strlen("ovid/io")) || c.pkg.std == 0 {
+    if !ovid/mem.Eq(bytes(c.pathp, c.pathn), "ovid/io") || c.pkg.std == 0 {
       Err(c, strptr("syscall_forbidden"), strlen("syscall_forbidden"), strptr("only ovid/io"), strlen("only ovid/io"))
     }
     var a *ovid/parse.Node = n.args
@@ -1167,7 +1175,7 @@ func CheckStmt(c *Ch, s *ovid/parse.Node) i64 {
       t1n = c.tyn
     }
     if !ovid/parse.IsBlank(s.name2p, s.name2n) {
-      if ovid/mem.Eq(s.namep, s.namen, s.name2p, s.name2n) {
+      if ovid/mem.Eq(bytes(s.namep, s.namen), bytes(s.name2p, s.name2n)) {
         Err(c, strptr("duplicate_name"), strlen("duplicate_name"), s.name2p, s.name2n)
       }
       t2p = RecvTy(c, s, s.name2p, s.name2n, s.typ2p, s.typ2n)
@@ -1400,8 +1408,8 @@ func CheckMain(c *Ch) i64 {
   var ok bool = false
   var p *ovid/parse.Decl = fn.sub
   if ovid/parse.CountDecls(p) == 1 {
-    if ovid/mem.Eq(p.typp, p.typn, strptr("*ovid/io.Cap"), strlen("*ovid/io.Cap")) {
-      if ovid/mem.Eq(fn.typp, fn.typn, strptr("i64"), strlen("i64")) && fn.typ2n == 0 {
+    if ovid/mem.Eq(bytes(p.typp, p.typn), "*ovid/io.Cap") {
+      if ovid/mem.Eq(bytes(fn.typp, fn.typn), "i64") && fn.typ2n == 0 {
         ok = true
       }
     }
@@ -1419,18 +1427,18 @@ func CheckMain(c *Ch) i64 {
 // func handle(io *ovid/io.Cap, req *ovid/http.Request, res *ovid/http.Response) i64.
 func HandleSig(fn *ovid/parse.Decl) bool {
   var p *ovid/parse.Decl = fn.sub
-  if ovid/parse.CountDecls(p) != 3 || !ovid/mem.Eq(fn.typp, fn.typn, strptr("i64"), 3) || fn.typ2n != 0 {
+  if ovid/parse.CountDecls(p) != 3 || !ovid/mem.Eq(bytes(fn.typp, fn.typn), bytes(strptr("i64"), 3)) || fn.typ2n != 0 {
     return false
   }
-  if !ovid/mem.Eq(p.typp, p.typn, strptr("*ovid/io.Cap"), strlen("*ovid/io.Cap")) {
-    return false
-  }
-  p = p.next
-  if !ovid/mem.Eq(p.typp, p.typn, strptr("*ovid/http.Request"), strlen("*ovid/http.Request")) {
+  if !ovid/mem.Eq(bytes(p.typp, p.typn), "*ovid/io.Cap") {
     return false
   }
   p = p.next
-  return ovid/mem.Eq(p.typp, p.typn, strptr("*ovid/http.Response"), strlen("*ovid/http.Response"))
+  if !ovid/mem.Eq(bytes(p.typp, p.typn), "*ovid/http.Request") {
+    return false
+  }
+  p = p.next
+  return ovid/mem.Eq(bytes(p.typp, p.typn), "*ovid/http.Response")
 }
 
 // Opaque reports whether the type is a pointer to one of ovid/io's types
@@ -1439,10 +1447,10 @@ func HandleSig(fn *ovid/parse.Decl) bool {
 // taken apart: so outside ovid/io one cannot be made by a cast or turned
 // into an address by one, and its fields cannot be read or written.
 func Opaque(c *Ch, tp i64, tn i64) bool {
-  if tn < strlen("*ovid/io.") || !ovid/mem.Eq(tp, strlen("*ovid/io."), strptr("*ovid/io."), strlen("*ovid/io.")) {
+  if tn < strlen("*ovid/io.") || !ovid/mem.Eq(bytes(tp, strlen("*ovid/io.")), "*ovid/io.") {
     return false
   }
-  return !ovid/mem.Eq(c.pathp, c.pathn, strptr("ovid/io"), strlen("ovid/io")) || c.pkg.std == 0
+  return !ovid/mem.Eq(bytes(c.pathp, c.pathn), "ovid/io") || c.pkg.std == 0
 }
 
 // CheckAbi checks that ovid/io.Cap starts with the six fields the runtime
@@ -1471,10 +1479,10 @@ func CheckAbi(c *Ch) i64 {
     if f == 0 as *ovid/parse.Decl {
       ok = false
     } else {
-      if !ovid/mem.Eq(f.namep, f.namen, names + (i * 5), 4) {
+      if !ovid/mem.Eq(bytes(f.namep, f.namen), bytes(names + (i * 5), 4)) {
         ok = false
       }
-      if !ovid/mem.Eq(f.typp, f.typn, strptr("i64"), strlen("i64")) {
+      if !ovid/mem.Eq(bytes(f.typp, f.typn), "i64") {
         ok = false
       }
       f = f.next
@@ -1637,7 +1645,7 @@ func Walk(c *Ch, k *ovid/parse.Pkg) bool {
   var r *ovid/parse.Pkg = c.croot
   var im *ovid/parse.Decl = k.ims
   while im != 0 as *ovid/parse.Decl {
-    if ovid/mem.Eq(im.namep, im.namen, r.pathp, r.pathn) {
+    if ovid/mem.Eq(bytes(im.namep, im.namen), bytes(r.pathp, r.pathn)) {
       store64(c.cpath + (c.cn * 8), r as i64)
       c.cn = c.cn + 1
       return true
@@ -1784,14 +1792,14 @@ func CheckCycle(c *Ch, r *ovid/parse.Pkg) i64 {
       c.cn = 1
       if Walk(c, t) {
         var mb *ovid/mem.Buf = ovid/mem.New(c.io, 64)
-        ovid/mem.WBytes(c.io, mb, strptr("import cycle: "), strlen("import cycle: "))
+        ovid/mem.WBytes(c.io, mb, "import cycle: ")
         var i i64 = 0
         while i < c.cn {
           var k *ovid/parse.Pkg = load64(c.cpath + (i * 8)) as *ovid/parse.Pkg
           if i != 0 {
-            ovid/mem.WBytes(c.io, mb, strptr(" -> "), 4)
+            ovid/mem.WBytes(c.io, mb, bytes(strptr(" -> "), 4))
           }
-          ovid/mem.WBytes(c.io, mb, k.pathp, k.pathn)
+          ovid/mem.WBytes(c.io, mb, bytes(k.pathp, k.pathn))
           i = i + 1
         }
         HereDecl(c, H_IMPORT, r, im, im)
@@ -1851,7 +1859,7 @@ func RunMode(io *ovid/io.Cap, m *ovid/parse.Mod, build bool, quiet bool) i64 {
       c.pathn = k.pathn
       if Claim(c) != 0 {
         Err(c, strptr("duplicate_name"), strlen("duplicate_name"), im.namep, im.namen)
-      } else if ovid/mem.Eq(im.namep, im.namen, k.pathp, k.pathn) {
+      } else if ovid/mem.Eq(bytes(im.namep, im.namen), bytes(k.pathp, k.pathn)) {
         Err(c, strptr("import_self"), strlen("import_self"), im.namep, im.namen)
       } else if FindPkg(c, im.namep, im.namen) == 0 as *ovid/parse.Pkg {
         Err(c, strptr("unknown_package"), strlen("unknown_package"), im.namep, im.namen)
@@ -1910,7 +1918,7 @@ func RunMode(io *ovid/io.Cap, m *ovid/parse.Mod, build bool, quiet bool) i64 {
   WLit(c, strptr(",\"funcs\":"), strlen(",\"funcs\":"))
   WNum(c, c.nfunc)
   WLit(c, strptr(",\"revision\":\""), strlen(",\"revision\":\""))
-  ovid/mem.WBytes(c.io, c.b, ovid/parse.Revision(m), 16)
+  ovid/mem.WBytes(c.io, c.b, bytes(ovid/parse.Revision(m), 16))
   ovid/mem.WByte(c.io, c.b, 34)
   ovid/mem.WByte(c.io, c.b, 125)
   Line(c)

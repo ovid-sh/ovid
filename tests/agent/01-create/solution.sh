@@ -11,7 +11,7 @@ func Square(n i64) i64 {
 
 func main(io *ovid/io.Cap) i64 {
   ovid/io.PrintInt(io, Square(12))
-  ovid/io.Print(strptr("\n"))
+  ovid/io.Print("\n")
   return 0
 }
 EOF

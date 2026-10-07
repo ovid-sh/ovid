@@ -312,6 +312,14 @@ func (l *lowerer) expr(n *ir.Node, p *pre) (*ir.Node, error) {
 	if n == nil {
 		return nil, nil
 	}
+	// The checker rewrites b[i] and len(b) on a bytes local to byte and
+	// blen; a tree compiled without it (a load alone) still has index and
+	// len, which say the same when the name is a bytes.
+	if (n.Op == "index" || n.Op == "len") && n.Pkg == "" && l.lookup(n.Name) == "bytes" && n.Base != nil {
+		m := *n
+		m.Op = map[string]string{"index": "byte", "len": "blen"}[n.Op]
+		n = &m
+	}
 	switch n.Op {
 	case "byte":
 		bp, bn, err := l.pair(n.Base, p)
@@ -326,6 +334,9 @@ func (l *lowerer) expr(n *ir.Node, p *pre) (*ir.Node, error) {
 	case "blen":
 		_, bn, err := l.pair(n.Base, p)
 		return bn, err
+	case "ptr":
+		a, _, err := l.pair(n.Arg, p)
+		return a, err
 	case "land", "lor":
 		left, err := l.expr(n.Left, p)
 		if err != nil {

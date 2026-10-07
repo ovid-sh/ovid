@@ -52,7 +52,7 @@ func New(io *ovid/io.Cap) *Code {
 // Double returns a zeroed copy of the n bytes at p with room for 2n.
 func Double(c *Code, p i64, n i64) i64 {
   var d i64 = ovid/io.Alloc(c.io, n * 2)
-  ovid/mem.Copy(d, p, n)
+  ovid/mem.CopyN(d, p, n)
   return d
 }
 
@@ -541,7 +541,7 @@ func RoBytes(c *Code, p i64, n i64) i64 {
     c.rocap = c.rocap * 2
   }
   var off i64 = c.ron
-  ovid/mem.Copy(c.ro + off, p, n)
+  ovid/mem.CopyN(c.ro + off, p, n)
   c.ron = off + n
   return off
 }
@@ -878,7 +878,7 @@ func StrSlot(c *Code, p i64, n i64) i64 {
     if off == 0 {
       return r
     }
-    if ovid/mem.Eq((c.ro + off) - 1, load64(r + 8), p, n) {
+    if ovid/mem.Eq(bytes((c.ro + off) - 1, load64(r + 8)), bytes(p, n)) {
       return r
     }
     h = (h + 1) & c.smask
@@ -899,7 +899,7 @@ func Intern(c *Code, p i64, n i64) i64 {
     c.rocap = c.rocap * 2
   }
   var off i64 = c.ron
-  ovid/mem.Copy(c.ro + off, p, n)
+  ovid/mem.CopyN(c.ro + off, p, n)
   store8(c.ro + off + n, 0)
   c.ron = off + n + 1
   store64(r, off + 1)

@@ -15,6 +15,6 @@ func Order(n i64, each i64) i64 {
 
 func main(io *ovid/io.Cap) i64 {
   ovid/io.PrintInt(io, Order(2, 150))
-  ovid/io.Print(strptr("\n"))
+  ovid/io.Print("\n")
   return 0
 }

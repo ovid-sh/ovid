@@ -90,7 +90,7 @@ func MethodLen(r *Request) i64 {
 // MethodIs reports whether the method is the n bytes at lit:
 // ovid/http.MethodIs(req, strptr("GET"), strlen("GET")).
 func MethodIs(r *Request, lit i64, n i64) bool {
-  return ovid/mem.Eq(r.method, r.methodn, lit, n)
+  return ovid/mem.Eq(bytes(r.method, r.methodn), bytes(lit, n))
 }
 
 // Path is the request target up to "?", not percent-decoded.
@@ -108,7 +108,7 @@ func PathLen(r *Request) i64 {
 
 // PathIs reports whether the path is the n bytes at lit.
 func PathIs(r *Request, lit i64, n i64) bool {
-  return ovid/mem.Eq(r.target, PathLen(r), lit, n)
+  return ovid/mem.Eq(bytes(r.target, PathLen(r)), bytes(lit, n))
 }
 
 // Query is what follows "?" in the target, or empty (QueryLen 0).
@@ -184,7 +184,7 @@ func AddHeader(io *ovid/io.Cap, r *Request, name i64, nn i64, val i64, vn i64) i
     return -1
   }
   var b *ovid/mem.Buf = ovid/mem.New(io, (r.hdrn + nn) + (vn + 4))
-  ovid/mem.WBytes(io, b, r.hdr, r.hdrn)
+  ovid/mem.WBytes(io, b, bytes(r.hdr, r.hdrn))
   putHeader(io, b, name, nn, val, vn)
   r.hdr = b.data
   r.hdrn = b.len
@@ -239,13 +239,13 @@ func SetHeader(io *ovid/io.Cap, res *Response, name i64, nn i64, val i64, vn i64
 
 // Write appends n bytes at p to the response body and returns 0.
 func Write(io *ovid/io.Cap, res *Response, p i64, n i64) i64 {
-  return ovid/mem.WBytes(io, res.body, p, n)
+  return ovid/mem.WBytes(io, res.body, bytes(p, n))
 }
 
 // WriteInt appends v in decimal to the response body and returns 0.
 func WriteInt(io *ovid/io.Cap, res *Response, v i64) i64 {
   var d i64 = ovid/io.Alloc(io, 56)
-  return ovid/mem.WBytes(io, res.body, d, ovid/mem.FormatI64(d, v))
+  return ovid/mem.WBytes(io, res.body, bytes(d, ovid/mem.FormatI64(d, v)))
 }
 
 // Status is the response's status code.
@@ -376,12 +376,12 @@ func ReadStdio(io *ovid/io.Cap) *Request {
 func fill(s *Stdio, want i64) i64 {
   if (s.start + want) > (MAX_REQUEST + 1) {
     var rest i64 = s.len - s.start
-    ovid/mem.Copy(s.buf, s.buf + s.start, rest)
+    ovid/mem.CopyN(s.buf, s.buf + s.start, rest)
     zero(s.buf + rest, s.start)
     s.len = rest
     s.start = 0
   }
-  var n i64, e i64 = ovid/io.Read(0, s.buf + s.len, (s.start + want) - s.len)
+  var n i64, e i64 = ovid/io.Read(0, bytes(s.buf + s.len, (s.start + want) - s.len))
   if e != 0 {
     s.eof = 2
     return 0
@@ -481,8 +481,8 @@ func parse(r *Request, p i64, n i64) i64 {
   if sp2 == (sp1 + 1) || sp2 >= eol || load8(p + sp2) != 32 {
     return ERR_SYNTAX
   }
-  if !ovid/mem.Eq(p + (sp2 + 1), (eol - sp2) - 1, strptr("HTTP/1.1"), strlen("HTTP/1.1")) {
-    if !ovid/mem.Eq(p + (sp2 + 1), (eol - sp2) - 1, strptr("HTTP/1.0"), strlen("HTTP/1.0")) {
+  if !ovid/mem.Eq(bytes(p + (sp2 + 1), (eol - sp2) - 1), "HTTP/1.1") {
+    if !ovid/mem.Eq(bytes(p + (sp2 + 1), (eol - sp2) - 1), "HTTP/1.0") {
       return ERR_SYNTAX
     }
   }
@@ -551,7 +551,7 @@ func parse(r *Request, p i64, n i64) i64 {
 // handler result other than 0 with 500; both drop what the handler wrote.
 func WriteStdio(io *ovid/io.Cap, req *Request, res *Response, result i64) i64 {
   var b *ovid/mem.Buf = Format(io, req, res, result)
-  if ovid/io.Write(1, b.data, b.len) != 0 {
+  if ovid/io.Write(1, bytes(b.data, b.len)) != 0 {
     return 1
   }
   return 0
@@ -582,24 +582,24 @@ func Format(io *ovid/io.Cap, req *Request, res *Response, result i64) *ovid/mem.
   }
   var b *ovid/mem.Buf = ovid/mem.New(io, (hdr.len + body.len) + 128)
   var d i64 = ovid/io.Alloc(io, 56)
-  ovid/mem.WBytes(io, b, strptr("HTTP/1.1 "), strlen("HTTP/1.1 "))
-  ovid/mem.WBytes(io, b, d, ovid/mem.FormatI64(d, status))
+  ovid/mem.WBytes(io, b, "HTTP/1.1 ")
+  ovid/mem.WBytes(io, b, bytes(d, ovid/mem.FormatI64(d, status)))
   ovid/mem.WByte(io, b, 32)
   reason(io, b, status)
-  ovid/mem.WBytes(io, b, strptr("\r\n"), strlen("\r\n"))
-  ovid/mem.WBytes(io, b, hdr.data, hdr.len)
+  ovid/mem.WBytes(io, b, "\r\n")
+  ovid/mem.WBytes(io, b, bytes(hdr.data, hdr.len))
   // A 1xx, 204, or 304 response has no body and no Content-Length.
   if status < 200 || status == 204 || status == 304 {
-    ovid/mem.WBytes(io, b, strptr("\r\n"), strlen("\r\n"))
+    ovid/mem.WBytes(io, b, "\r\n")
     return b
   }
-  ovid/mem.WBytes(io, b, strptr("Content-Length: "), strlen("Content-Length: "))
-  ovid/mem.WBytes(io, b, d, ovid/mem.FormatI64(d, body.len))
-  ovid/mem.WBytes(io, b, strptr("\r\n\r\n"), strlen("\r\n\r\n"))
+  ovid/mem.WBytes(io, b, "Content-Length: ")
+  ovid/mem.WBytes(io, b, bytes(d, ovid/mem.FormatI64(d, body.len)))
+  ovid/mem.WBytes(io, b, "\r\n\r\n")
   if req.err == 0 && MethodIs(req, strptr("HEAD"), strlen("HEAD")) {
     return b
   }
-  ovid/mem.WBytes(io, b, body.data, body.len)
+  ovid/mem.WBytes(io, b, bytes(body.data, body.len))
   return b
 }
 
@@ -607,33 +607,33 @@ func Format(io *ovid/io.Cap, req *Request, res *Response, result i64) *ovid/mem.
 // phrase may be empty.
 func reason(io *ovid/io.Cap, b *ovid/mem.Buf, s i64) i64 {
   if s == 200 {
-    return ovid/mem.WBytes(io, b, strptr("OK"), strlen("OK"))
+    return ovid/mem.WBytes(io, b, "OK")
   } else if s == 201 {
-    return ovid/mem.WBytes(io, b, strptr("Created"), strlen("Created"))
+    return ovid/mem.WBytes(io, b, "Created")
   } else if s == 204 {
-    return ovid/mem.WBytes(io, b, strptr("No Content"), strlen("No Content"))
+    return ovid/mem.WBytes(io, b, "No Content")
   } else if s == 205 {
-    return ovid/mem.WBytes(io, b, strptr("Reset Content"), strlen("Reset Content"))
+    return ovid/mem.WBytes(io, b, "Reset Content")
   } else if s == 301 {
-    return ovid/mem.WBytes(io, b, strptr("Moved Permanently"), strlen("Moved Permanently"))
+    return ovid/mem.WBytes(io, b, "Moved Permanently")
   } else if s == 302 {
-    return ovid/mem.WBytes(io, b, strptr("Found"), strlen("Found"))
+    return ovid/mem.WBytes(io, b, "Found")
   } else if s == 304 {
-    return ovid/mem.WBytes(io, b, strptr("Not Modified"), strlen("Not Modified"))
+    return ovid/mem.WBytes(io, b, "Not Modified")
   } else if s == 400 {
-    return ovid/mem.WBytes(io, b, strptr("Bad Request"), strlen("Bad Request"))
+    return ovid/mem.WBytes(io, b, "Bad Request")
   } else if s == 403 {
-    return ovid/mem.WBytes(io, b, strptr("Forbidden"), strlen("Forbidden"))
+    return ovid/mem.WBytes(io, b, "Forbidden")
   } else if s == 404 {
-    return ovid/mem.WBytes(io, b, strptr("Not Found"), strlen("Not Found"))
+    return ovid/mem.WBytes(io, b, "Not Found")
   } else if s == 405 {
-    return ovid/mem.WBytes(io, b, strptr("Method Not Allowed"), strlen("Method Not Allowed"))
+    return ovid/mem.WBytes(io, b, "Method Not Allowed")
   } else if s == 413 {
-    return ovid/mem.WBytes(io, b, strptr("Content Too Large"), strlen("Content Too Large"))
+    return ovid/mem.WBytes(io, b, "Content Too Large")
   } else if s == 500 {
-    return ovid/mem.WBytes(io, b, strptr("Internal Server Error"), strlen("Internal Server Error"))
+    return ovid/mem.WBytes(io, b, "Internal Server Error")
   } else if s == 501 {
-    return ovid/mem.WBytes(io, b, strptr("Not Implemented"), strlen("Not Implemented"))
+    return ovid/mem.WBytes(io, b, "Not Implemented")
   }
   return 0
 }
@@ -707,10 +707,10 @@ func valueEnd(h i64, hn i64, off i64) i64 {
 
 // putHeader appends "name: value\r\n" to b.
 func putHeader(io *ovid/io.Cap, b *ovid/mem.Buf, name i64, nn i64, val i64, vn i64) i64 {
-  ovid/mem.WBytes(io, b, name, nn)
-  ovid/mem.WBytes(io, b, strptr(": "), strlen(": "))
-  ovid/mem.WBytes(io, b, val, vn)
-  return ovid/mem.WBytes(io, b, strptr("\r\n"), strlen("\r\n"))
+  ovid/mem.WBytes(io, b, bytes(name, nn))
+  ovid/mem.WBytes(io, b, ": ")
+  ovid/mem.WBytes(io, b, bytes(val, vn))
+  return ovid/mem.WBytes(io, b, "\r\n")
 }
 
 // lowerEq compares the an bytes at a with the bn bytes at b, ignoring the
@@ -801,6 +801,6 @@ func parseLen(p i64, n i64) i64 {
 
 func copyOf(io *ovid/io.Cap, p i64, n i64) i64 {
   var d i64 = ovid/io.Alloc(io, n + 1)
-  ovid/mem.Copy(d, p, n)
+  ovid/mem.CopyN(d, p, n)
   return d
 }

@@ -16,7 +16,7 @@ type E struct {
 }
 
 func WL(e *E, s i64, n i64) i64 {
-  return ovid/mem.WBytes(e.io, e.b, s, n)
+  return ovid/mem.WBytes(e.io, e.b, bytes(s, n))
 }
 
 func WC(e *E, c i64) i64 {
@@ -26,10 +26,10 @@ func WC(e *E, c i64) i64 {
 func WInt(io *ovid/io.Cap, b *ovid/mem.Buf, v i64) i64 {
   var tmp i64 = ovid/io.Alloc(io, 64)
   if v == -9223372036854775807 - 1 {
-    return ovid/mem.WBytes(io, b, strptr("-9223372036854775808"), 20)
+    return ovid/mem.WBytes(io, b, bytes(strptr("-9223372036854775808"), 20))
   }
   var n i64 = ovid/mem.FormatI64(tmp, v)
-  return ovid/mem.WBytes(io, b, tmp, n)
+  return ovid/mem.WBytes(io, b, bytes(tmp, n))
 }
 
 // ValidUtf8 reports whether p[0:n] is all valid UTF-8.
@@ -58,13 +58,13 @@ func WStr(io *ovid/io.Cap, b *ovid/mem.Buf, p i64, n i64) i64 {
     if c >= 128 {
       sz = Utf8Len(p + i, n - i)
       if sz == 0 {
-        ovid/mem.WBytes(io, b, p + s, i - s)
-        ovid/mem.WBytes(io, b, strptr("\\ufffd"), 6)
+        ovid/mem.WBytes(io, b, bytes(p + s, i - s))
+        ovid/mem.WBytes(io, b, bytes(strptr("\\ufffd"), 6))
         s = i + 1
         sz = 1
       }
     } else if c == 34 || c == 92 || c < 32 {
-      ovid/mem.WBytes(io, b, p + s, i - s)
+      ovid/mem.WBytes(io, b, bytes(p + s, i - s))
       ovid/mem.WByte(io, b, 92)
       if c == 34 || c == 92 {
         ovid/mem.WByte(io, b, c)
@@ -75,16 +75,16 @@ func WStr(io *ovid/io.Cap, b *ovid/mem.Buf, p i64, n i64) i64 {
       } else if c == 9 {
         ovid/mem.WByte(io, b, 116)
       } else {
-        ovid/mem.WBytes(io, b, strptr("u00"), 3)
+        ovid/mem.WBytes(io, b, bytes(strptr("u00"), 3))
         var hx i64 = ovid/io.Alloc(io, 8)
         ovid/mem.HexOut(hx, c, 2)
-        ovid/mem.WBytes(io, b, hx, 2)
+        ovid/mem.WBytes(io, b, bytes(hx, 2))
       }
       s = i + 1
     }
     i = i + sz
   }
-  ovid/mem.WBytes(io, b, p + s, n - s)
+  ovid/mem.WBytes(io, b, bytes(p + s, n - s))
   ovid/mem.WByte(io, b, 34)
   return 0
 }
@@ -222,6 +222,9 @@ func WOp(e *E, op i64) i64 {
   }
   if op == OP_BLEN {
     return WL(e, strptr("blen"), 4)
+  }
+  if op == OP_PTR {
+    return WL(e, strptr("ptr"), 3)
   }
   if op == OP_LEN {
     return WL(e, strptr("len"), 3)
@@ -375,7 +378,7 @@ func ENode(e *E, n *Node) i64 {
     var i i64 = 0
     while i < n.strn {
       ovid/mem.HexOut(hx, load8(n.strp + i), 2)
-      ovid/mem.WBytes(e.io, e.b, hx, 2)
+      ovid/mem.WBytes(e.io, e.b, bytes(hx, 2))
       i = i + 1
     }
     WL(e, strptr("\""), 1)
@@ -612,13 +615,13 @@ func WPos(io *ovid/io.Cap, b *ovid/mem.Buf, f *File, off i64) i64 {
   while le < f.n && load8(f.src + le) != 10 {
     le = le + 1
   }
-  ovid/mem.WBytes(io, b, strptr(",\"file\":"), 8)
+  ovid/mem.WBytes(io, b, bytes(strptr(",\"file\":"), 8))
   WStr(io, b, f.dispp, f.dispn)
-  ovid/mem.WBytes(io, b, strptr(",\"line\":"), 8)
+  ovid/mem.WBytes(io, b, bytes(strptr(",\"line\":"), 8))
   WInt(io, b, line)
-  ovid/mem.WBytes(io, b, strptr(",\"col\":"), 7)
+  ovid/mem.WBytes(io, b, bytes(strptr(",\"col\":"), 7))
   WInt(io, b, (off - ls) + 1)
-  ovid/mem.WBytes(io, b, strptr(",\"source\":"), 10)
+  ovid/mem.WBytes(io, b, bytes(strptr(",\"source\":"), 10))
   WStr(io, b, f.src + ls, le - ls)
   return 0
 }

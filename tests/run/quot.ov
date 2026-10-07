@@ -168,10 +168,10 @@ func Full(x i64) i64 {
   return bad
 }
 
-func Put(io *ovid/io.Cap, name i64, v i64) i64 {
+func Put(io *ovid/io.Cap, name bytes, v i64) i64 {
   ovid/io.Print(name)
   ovid/io.PrintInt(io, v)
-  ovid/io.Print(strptr("\n"))
+  ovid/io.Print("\n")
   return 0
 }
 
@@ -197,11 +197,11 @@ func main(io *ovid/io.Cap) i64 {
     x = (x * 6364136223846793005) + 1442695040888963407
     i = i + 1
   }
-  Put(io, strptr("pair "), pair)
-  Put(io, strptr("assign "), assign)
-  Put(io, strptr("branch "), branch)
-  Put(io, strptr("loop "), loop)
-  Put(io, strptr("calls "), calls)
-  Put(io, strptr("full "), full)
+  Put(io, "pair ", pair)
+  Put(io, "assign ", assign)
+  Put(io, "branch ", branch)
+  Put(io, "loop ", loop)
+  Put(io, "calls ", calls)
+  Put(io, "full ", full)
   return 0
 }

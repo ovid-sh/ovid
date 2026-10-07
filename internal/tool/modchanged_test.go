@@ -18,16 +18,15 @@ func writerMod(t *testing.T, outside string) string {
 	t.Helper()
 	dir := mkmod(t, demo("package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  return 0\n}\n"))
 	lit := func(rel string) string {
-		p := filepath.Join(dir, rel)
-		return fmt.Sprintf("strptr(%q), %d", p, len(p))
+		return fmt.Sprintf("%q", filepath.Join(dir, rel))
 	}
 	out := filepath.Join(outside, "notes.txt")
 	src := `package demo
 
 import ovid/io
 
-func Put(io *ovid/io.Cap, path i64, n i64) i64 {
-  return ovid/io.WriteFile(io, path, n, strptr("package demo\n"), 13, 420)
+func Put(io *ovid/io.Cap, path bytes) i64 {
+  return ovid/io.WriteFile(io, path, "package demo\n", 420)
 }
 
 func TestA_Passes(io *ovid/io.Cap) i64 {
@@ -43,7 +42,7 @@ func TestC_RewritesASource(io *ovid/io.Cap) i64 {
 }
 
 func TestD_RewritesOvidMod(io *ovid/io.Cap) i64 {
-  return ovid/io.WriteFile(io, ` + lit("ovid.mod") + `, strptr("module demo\nentry demo\n\n"), 24, 420)
+  return ovid/io.WriteFile(io, ` + lit("ovid.mod") + `, "module demo\nentry demo\n\n", 420)
 }
 
 func TestE_RemovesASource(io *ovid/io.Cap) i64 {
@@ -51,7 +50,7 @@ func TestE_RemovesASource(io *ovid/io.Cap) i64 {
 }
 
 func TestF_WritesElsewhere(io *ovid/io.Cap) i64 {
-  return ovid/io.WriteFile(io, ` + fmt.Sprintf("strptr(%q), %d", out, len(out)) + `, strptr("fine\n"), 5, 420)
+  return ovid/io.WriteFile(io, ` + fmt.Sprintf("%q", out) + `, "fine\n", 420)
 }
 `
 	for rel, text := range map[string]string{
@@ -124,7 +123,7 @@ func TestRunReportsAChangedModule(t *testing.T) {
 	t.Setenv(module.PathsEnv, "module")
 	dir := mkmod(t, demo("package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  return 0\n}\n"))
 	p := filepath.Join(dir, "demo", "gen.ov")
-	main := fmt.Sprintf("package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  if ovid/io.Argc(io) > 1 {\n    return ovid/io.WriteFile(io, strptr(%q), %d, strptr(\"package demo\\n\"), 13, 420)\n  }\n  return 0\n}\n", p, len(p))
+	main := fmt.Sprintf("package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  if ovid/io.Argc(io) > 1 {\n    return ovid/io.WriteFile(io, %q, \"package demo\\n\", 420)\n  }\n  return 0\n}\n", p)
 	if err := os.WriteFile(filepath.Join(dir, "demo", "main.ov"), []byte(main), 0o644); err != nil {
 		t.Fatal(err)
 	}

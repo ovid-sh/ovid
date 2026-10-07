@@ -1,6 +1,6 @@
 package hello
 import ovid/io
 func main(io *ovid/io.Cap) i64 {
-  ovid/io.Print(strptr("hello from a Nix-built Ovid binary\n"))
+  ovid/io.Print("hello from a Nix-built Ovid binary\n")
   return 0
 }
