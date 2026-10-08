@@ -287,8 +287,8 @@ func FuncHash(path bytes, name bytes) i64 {
 }
 
 // IndexFuncs builds m.ftab, an open-addressing table from package path and
-// name to the func's Decl, and sets each func's and type's pkg. Of two funcs with one
-// name the first is kept; check reports the second.
+// name to the func's Decl, and sets each const's, type's, and func's pkg.
+// Of two funcs with one name the first is kept; check reports the second.
 func IndexFuncs(m *Mod) i64 {
   var total i64 = 0
   var k *Pkg = m.pkgs
