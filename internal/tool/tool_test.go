@@ -2036,12 +2036,14 @@ func TestSelfHost(t *testing.T) {
 
 	// On a module whose decls are duplicated, which check rejects, the
 	// self-hosted refs refuses what this one refuses, for the same reason:
-	// a field only a later copy of the type has is found there, and a
-	// duplicated id is ambiguous_id before its kind is looked at.
+	// a field only a later copy of the type has is found there, by its id
+	// or its qualified name, and a duplicated id is ambiguous_id before
+	// its kind is looked at.
 	dup := mkmod(t, map[string]string{"ovid.mod": "module app\nentry app\n",
 		"app/a.ov": "package app\nimport ovid/io\ntype T struct {\n  a i64\n}\nfunc F(io *ovid/io.Cap) i64 {\n  var x i64, e i64 = ovid/io.ReadFile(io, \"f\")\n  return x + e\n}\nfunc main(io *ovid/io.Cap) i64 {\n  var t *T = ovid/io.Alloc(io, sizeof(T)) as *T\n  return t.a + F(io)\n}\n",
 		"app/b.ov": "package app\nimport ovid/io\ntype T struct {\n  a i64\n  f i64\n}\nfunc F(io *ovid/io.Cap) i64 {\n  var y i64 = 2\n  return y\n}\n"})
-	for q, want := range map[string]string{"fld:app.T.f": "", "fld:app.T.a": "ambiguous_id", "st:app.F:1": "ambiguous_id", "ex:app.F:1": "ambiguous_id", "fld:app.T.g": "not_found"} {
+	for q, want := range map[string]string{"fld:app.T.f": "", "fld:app.T.a": "ambiguous_id", "st:app.F:1": "ambiguous_id", "ex:app.F:1": "ambiguous_id", "fld:app.T.g": "not_found",
+		"T.f": "", "T.a": "ambiguous_id", "F.io": "ambiguous_id"} {
 		b.Reset()
 		Refs(dup, q, true, Page{}, &b)
 		gr := last(t, b.String())

@@ -257,18 +257,13 @@ func ByID(m *ovid/parse.Mod, t *Target, q bytes) i64 {
   } else if kind == T_CONST {
     t.d = ovid/parse.FindDecl(k.cs, bytes(np, nn))
   } else if kind == T_FIELD || kind == T_PARAM {
-    // The first copy of the owner that has the member: the Go index
-    // holds the id from whichever copy has it.
     var owners *ovid/parse.Decl = k.fs
     if kind == T_FIELD {
       owners = k.ts
     }
-    while owners != 0 as *ovid/parse.Decl && t.d == 0 as *ovid/parse.Decl {
-      if Eq2(owners.name, bytes(op, on)) {
-        t.own = owners
-        t.d = ovid/parse.FindDecl(owners.sub, bytes(np, nn))
-      }
-      owners = owners.next
+    t.own = OwnerWith(owners, bytes(op, on), bytes(np, nn))
+    if t.own != 0 as *ovid/parse.Decl {
+      t.d = ovid/parse.FindDecl(t.own.sub, bytes(np, nn))
     }
   } else {
     // The first copy of the func that has the statement, likewise.
@@ -375,11 +370,11 @@ func ByName(m *ovid/parse.Mod, t *Target, q bytes) i64 {
   k = m.pkgs
   while k != 0 as *ovid/parse.Pkg {
     if pn < 0 || PkgIs(k, bytes(pp, pn)) {
-      var ty *ovid/parse.Decl = ovid/parse.FindDecl(k.ts, bytes(op, on))
+      var ty *ovid/parse.Decl = OwnerWith(k.ts, bytes(op, on), bytes(np, nn))
       if ty != 0 as *ovid/parse.Decl {
         Found(t, T_FIELD, k, ovid/parse.FindDecl(ty.sub, bytes(np, nn)), ty)
       }
-      var fn *ovid/parse.Decl = ovid/parse.FindDecl(k.fs, bytes(op, on))
+      var fn *ovid/parse.Decl = OwnerWith(k.fs, bytes(op, on), bytes(np, nn))
       if fn != 0 as *ovid/parse.Decl {
         Found(t, T_PARAM, k, ovid/parse.FindDecl(fn.sub, bytes(np, nn)), fn)
       }
@@ -387,6 +382,19 @@ func ByName(m *ovid/parse.Mod, t *Target, q bytes) i64 {
     k = k.next
   }
   return 0
+}
+
+// OwnerWith is the first decl in the list named owner that has a member
+// named name, or nil: the Go index holds a field's or param's id from
+// whichever copy of a duplicated owner has it.
+func OwnerWith(d *ovid/parse.Decl, owner bytes, name bytes) *ovid/parse.Decl {
+  while d != 0 as *ovid/parse.Decl {
+    if Eq2(d.name, owner) && ovid/parse.FindDecl(d.sub, name) != 0 as *ovid/parse.Decl {
+      return d
+    }
+    d = d.next
+  }
+  return 0 as *ovid/parse.Decl
 }
 
 // CountNamed counts the decls in the list d named name.
