@@ -39,7 +39,24 @@ type lowerer struct {
 	bfunc  map[string]int  // "pkg.Func" → words its result takes (2 or 3)
 	scopes []map[string]string
 	tmp    int
+	locals map[string]*local // the function's locals, for the check elision
+	free   []freePair        // b[i] needs no check here
 }
+
+// local is what the check elision knows about one of a function's
+// names: how often it is declared (a param or a var; var2 too), the
+// value of its one var, whether anything assigns it, and whether every
+// assignment is name = name + k with k a positive literal.
+type local struct {
+	decls    int
+	val      *ir.Node
+	assigned bool
+	grows    bool
+}
+
+// freePair is a loop's bytes and index whose b[i] the condition proves
+// in bounds.
+type freePair struct{ b, i string }
 
 // pre is the list of statements a lowering places before the statement
 // it is working on.
@@ -110,9 +127,155 @@ func (l *lowerer) fn(fn *ir.Func) error {
 			fn.Result2 = "i64"
 		}
 	}
+	l.locals = map[string]*local{}
+	for _, pa := range fn.Params {
+		l.local(pa.Name).decls++
+	}
+	l.scan(fn.Body)
+	l.free = nil
 	body, err := l.stmts(fn.Body)
 	fn.Body = body
 	return err
+}
+
+func (l *lowerer) local(name string) *local {
+	c := l.locals[name]
+	if c == nil {
+		c = &local{grows: true}
+		l.locals[name] = c
+	}
+	return c
+}
+
+// scan records the declarations and assignments of the function's
+// names, through every block.
+func (l *lowerer) scan(ss []*ir.Node) {
+	for _, s := range ss {
+		switch s.Op {
+		case "var":
+			c := l.local(s.Name)
+			c.decls++
+			c.val = s.Val
+		case "var2":
+			l.local(s.Name).decls++
+			l.local(s.Two.Name).decls++
+		case "assign":
+			c := l.local(s.Name)
+			c.assigned = true
+			if growth(s) < 1 {
+				c.grows = false
+			}
+		case "assign2":
+			for _, nm := range []string{s.Name, s.Two.Name} {
+				c := l.local(nm)
+				c.assigned, c.grows = true, false
+			}
+		}
+		l.scan(s.Then)
+		l.scan(s.Else)
+		l.scan(s.Body)
+	}
+}
+
+// growth is the k of the statement name = name + k, k a positive
+// literal, or 0 when s is not one.
+func growth(s *ir.Node) int64 {
+	v := s.Val
+	if s.Op != "assign" || v.Op != "add" || v.Left.Op != "name" || v.Left.Pkg != "" || v.Left.Name != s.Name || v.Right.Op != "int" || v.Right.Int < 1 {
+		return 0
+	}
+	return v.Right.Int
+}
+
+// lenOf is the bytes local b when n is len(b), or "".
+func (l *lowerer) lenOf(n *ir.Node) string {
+	if n == nil || (n.Op != "len" && n.Op != "blen") {
+		return ""
+	}
+	b := n.Base
+	if n.Op == "len" {
+		if n.Pkg != "" || b == nil {
+			return ""
+		}
+		b = name(n.Name)
+	}
+	if b.Op != "name" || b.Pkg != "" || l.lookup(b.Name) != "bytes" {
+		return ""
+	}
+	return b.Name
+}
+
+// freeLoop says what the while statement s proves: its condition is
+// i < len(b), or i < n with n the one var len(b), where b and n are
+// never assigned, i is declared once as a var with a literal that is
+// not negative and only ever grows by a positive literal, and the body
+// assigns i only in its own top-level statements. Then b[i] is in
+// bounds in the condition and in the body's statements before the
+// first of those, which is the k returned (len(body) when there is
+// none); ok is false when s proves nothing.
+func (l *lowerer) freeLoop(s *ir.Node) (p freePair, k int, ok bool) {
+	c := s.Cond
+	if c.Op == "land" {
+		c = c.Left
+	}
+	if c.Op != "lt" || c.Left.Op != "name" || c.Left.Pkg != "" {
+		return p, 0, false
+	}
+	i := c.Left.Name
+	b := l.lenOf(c.Right)
+	if b == "" && c.Right.Op == "name" && c.Right.Pkg == "" {
+		if n := l.locals[c.Right.Name]; n != nil && n.decls == 1 && !n.assigned && n.val != nil {
+			b = l.lenOf(n.val)
+		}
+	}
+	if b == "" {
+		return p, 0, false
+	}
+	if bl := l.locals[b]; bl == nil || bl.decls != 1 || bl.assigned {
+		return p, 0, false
+	}
+	il := l.locals[i]
+	if il == nil || il.decls != 1 || il.val == nil || il.val.Op != "int" || il.val.Int < 0 || !il.grows {
+		return p, 0, false
+	}
+	k = len(s.Body)
+	for j, t := range s.Body {
+		if t.Op == "assign" && t.Name == i {
+			if j < k {
+				k = j
+			}
+			continue
+		}
+		if assigns(t, i) {
+			return p, 0, false
+		}
+	}
+	return freePair{b, i}, k, true
+}
+
+// assigns says whether a statement under s (not s itself) assigns name.
+func assigns(s *ir.Node, name string) bool {
+	for _, ss := range [][]*ir.Node{s.Then, s.Else, s.Body} {
+		for _, t := range ss {
+			if (t.Op == "assign" && t.Name == name) || assigns(t, name) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// isFree says whether b[i] needs no check where the lowering stands.
+func (l *lowerer) isFree(b, i *ir.Node) bool {
+	if b.Op != "name" || i.Op != "name" || b.Pkg != "" || i.Pkg != "" {
+		return false
+	}
+	for _, f := range l.free {
+		if f.b == b.Name && f.i == i.Name {
+			return true
+		}
+	}
+	return false
 }
 
 // bind records a local's type in its resolved form (*pkg.T), which the
@@ -371,6 +534,7 @@ func (l *lowerer) expr(n *ir.Node, p *pre) (*ir.Node, error) {
 	}
 	switch n.Op {
 	case "byte":
+		free := l.isFree(n.Base, n.Arg)
 		bp, bn, err := l.pair(n.Base, p)
 		if err != nil {
 			return nil, err
@@ -381,6 +545,9 @@ func (l *lowerer) expr(n *ir.Node, p *pre) (*ir.Node, error) {
 			return nil, err
 		}
 		l.fixAt(p, at, &bp, &bn)
+		if free {
+			return &ir.Node{ID: n.ID, Op: "load8", Arg: add(bp, i)}, nil
+		}
 		return &ir.Node{ID: n.ID, Op: "bload", Base: bp, Left: i, Right: bn}, nil
 	case "blen":
 		_, bn, err := l.pair(n.Base, p)
@@ -511,10 +678,23 @@ func (l *lowerer) insertTemp(p *pre, at int, n **ir.Node) {
 }
 
 func (l *lowerer) stmts(ss []*ir.Node) ([]*ir.Node, error) {
+	return l.region(ss, -1)
+}
+
+// region lowers the statements of a block; with k not negative, the last
+// entry of l.free holds for the first k of them only and is dropped
+// after them.
+func (l *lowerer) region(ss []*ir.Node, k int) ([]*ir.Node, error) {
 	l.push()
 	defer l.pop()
+	if k >= 0 {
+		defer func() { l.free = l.free[:len(l.free)-1] }()
+	}
 	var out []*ir.Node
-	for _, s := range ss {
+	for j, s := range ss {
+		if j == k {
+			l.free[len(l.free)-1] = freePair{}
+		}
 		lowered, err := l.stmt(s)
 		if err != nil {
 			return nil, err
@@ -645,6 +825,7 @@ func (l *lowerer) stmt(s *ir.Node) ([]*ir.Node, error) {
 		return append(p, &m), nil
 	case "setbyte":
 		ix := s.Base
+		free := l.isFree(ix.Base, ix.Arg)
 		bp, bn, err := l.pair(ix.Base, &p)
 		if err != nil {
 			return nil, err
@@ -666,8 +847,11 @@ func (l *lowerer) stmt(s *ir.Node) ([]*ir.Node, error) {
 		} else {
 			l.fixAt(&p, at, &bp, &bn)
 		}
-		return append(p, &ir.Node{Op: "chk", Addr: i, Val: bn},
-			&ir.Node{ID: s.ID, Op: "store8", Addr: add(bp, i), Val: v}), nil
+		store := &ir.Node{ID: s.ID, Op: "store8", Addr: add(bp, i), Val: v}
+		if free {
+			return append(p, store), nil
+		}
+		return append(p, &ir.Node{Op: "chk", Addr: i, Val: bn}, store), nil
 	case "return":
 		if s.Val != nil && l.typeOf(s.Val) == "bytes" {
 			if s.Val.Op == "call" && s.Val2 == nil {
@@ -718,12 +902,21 @@ func (l *lowerer) stmt(s *ir.Node) ([]*ir.Node, error) {
 		m.Cond, m.Then, m.Else = cond, then, els
 		return append(p, &m), nil
 	case "while":
+		// A loop over b by i needs no check of b[i] in its condition and
+		// before i grows: the condition proved it.
+		k := len(s.Body)
+		if f, kk, ok := l.freeLoop(s); ok {
+			l.free = append(l.free, f)
+			k = kk
+		} else {
+			l.free = append(l.free, freePair{})
+		}
 		var cp pre
 		cond, err := l.expr(s.Cond, &cp)
 		if err != nil {
 			return nil, err
 		}
-		body, err := l.stmts(s.Body)
+		body, err := l.region(s.Body, k)
 		if err != nil {
 			return nil, err
 		}

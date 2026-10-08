@@ -1268,6 +1268,39 @@ func TestNegativeLiteral(io *ovid/io.Cap) i64 {
   var b bytes = bytes(ovid/io.Alloc(io, 4), -1)
   return len(b)
 }
+func TestLoopAfter(io *ovid/io.Cap) i64 {
+  var b bytes = "abc"
+  var s i64 = 0
+  var i i64 = 0
+  while i < len(b) {
+    i = i + 1
+    s = s + b[i]
+  }
+  return s
+}
+func TestLoopBack(io *ovid/io.Cap) i64 {
+  var b bytes = "abc"
+  var s i64 = 0
+  var i i64 = 0
+  while i < len(b) {
+    s = s + b[i]
+    i = i - 1
+  }
+  return s
+}
+func TestLoopGrown(io *ovid/io.Cap) i64 {
+  var b bytes = "abc"
+  var s i64 = 0
+  var i i64 = 0
+  while i < len(b) {
+    if i == 1 {
+      i = i + 1
+    }
+    s = s + b[i + 1]
+    i = i + 1
+  }
+  return s
+}
 func TestEdges(io *ovid/io.Cap) i64 {
   var b bytes = bytes(ovid/io.Alloc(io, 4), 4)
   Put(b, 0)
@@ -1297,6 +1330,7 @@ func TestEdges(io *ovid/io.Cap) i64 {
 		"TestInWhile":         "  while len(b[k:k + 1]) == 1 {",
 		"TestNegativeLength":  "  var b bytes = bytes(ovid/io.Alloc(io, 4), 0 - 1)",
 		"TestNegativeLiteral": "  var b bytes = bytes(ovid/io.Alloc(io, 4), -1)",
+		"TestLoopAfter":       "    s = s + b[i]", "TestLoopBack": "    s = s + b[i]", "TestLoopGrown": "    s = s + b[i + 1]",
 	} {
 		r := got["fn:demo."+name]
 		at, _ := r["at"].(map[string]any)
@@ -1525,6 +1559,33 @@ func TestBytesFieldCodegen(t *testing.T) {
 	}
 	if !bytes.Equal(out[0], out[1]) {
 		t.Fatalf("a bytes field compiles to %d bytes, the pair of i64 fields to %d", len(out[1]), len(out[0]))
+	}
+}
+
+// TestBytesLoopCodegen: a loop over b by i whose condition proves b[i]
+// in bounds compiles to the same code as the loop over a pointer and a
+// length with no check at all.
+func TestBytesLoopCodegen(t *testing.T) {
+	body := "  var s i64 = 0\n  var i i64 = 0\n  while i < n {\n    s = s + LOAD\n    i = i + 1\n  }\n  return s\n}\n"
+	tail := "func main(io *ovid/io.Cap) i64 {\n  return Sum(\"abc\")\n}\n"
+	pair := mkmod(t, demo("package demo\nimport ovid/io\nfunc Sum(b i64, m i64) i64 {\n  var n i64 = m\n"+strings.NewReplacer("LOAD", "load8(b + i)").Replace(body)+
+		strings.NewReplacer("Sum(\"abc\")", "Sum(strptr(\"abc\"), strlen(\"abc\"))").Replace(tail)))
+	checked := mkmod(t, demo("package demo\nimport ovid/io\nfunc Sum(b bytes) i64 {\n  var n i64 = len(b)\n"+strings.NewReplacer("LOAD", "b[i]").Replace(body)+tail))
+	var out [2][]byte
+	for i, dir := range []string{pair, checked} {
+		bin := filepath.Join(t.TempDir(), "x")
+		var b bytes.Buffer
+		if code := Build(dir, bin, &b); code != 0 {
+			t.Fatalf("build %d: %s", i, b.String())
+		}
+		data, err := os.ReadFile(bin)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out[i] = data
+	}
+	if !bytes.Equal(out[0], out[1]) {
+		t.Fatalf("the checked loop compiles to %d bytes, the pointer loop to %d", len(out[1]), len(out[0]))
 	}
 }
 

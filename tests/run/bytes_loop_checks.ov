@@ -1,0 +1,60 @@
+package demo
+import ovid/io
+import ovid/mem
+// exit: 0
+// stdout: "ok\n"
+
+// Loops whose condition proves b[i] in bounds read without a check (the
+// loops it does not prove keep theirs: TestBytesBounds has them, since
+// they must trap).
+
+// Sum is the shape the check leaves: i from 0, up by 1, against len(b).
+func Sum(b bytes) i64 {
+  var s i64 = 0
+  var i i64 = 0
+  while i < len(b) {
+    s = s + b[i]
+    i = i + 1
+  }
+  return s
+}
+
+// SumN is the same against a copy of the length, and b[i] in the
+// condition's right side.
+func SumN(b bytes) i64 {
+  var s i64 = 0
+  var i i64 = 0
+  var n i64 = len(b)
+  while i < n && b[i] != 0 {
+    s = s + b[i]
+    i = i + 1
+  }
+  return s
+}
+
+// Fill stores by two, from an index set once.
+func Fill(b bytes) i64 {
+  var i i64 = 0
+  while i < len(b) {
+    b[i] = 7
+    i = i + 2
+  }
+  return 0
+}
+
+func main(io *ovid/io.Cap) i64 {
+  var b bytes = ovid/io.AllocBytes(io, 6)
+  ovid/mem.Copy(b, "abcdef")
+  if Sum(b) != 97 + 98 + 99 + 100 + 101 + 102 {
+    return 1
+  }
+  if SumN(b) != 97 + 98 + 99 + 100 + 101 + 102 {
+    return 2
+  }
+  Fill(b)
+  if b[0] != 7 || b[1] != 98 || b[4] != 7 || b[5] != 102 {
+    return 3
+  }
+  ovid/io.Print("ok\n")
+  return 0
+}
