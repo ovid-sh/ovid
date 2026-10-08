@@ -34,6 +34,7 @@ type parser struct {
 	fn      *ir.Func
 	ec      int
 	sc      int
+	cuses   []ir.ConstUse // the consts the const being parsed names
 }
 
 type mark struct {
@@ -333,6 +334,7 @@ func (p *parser) parseConst(s int) {
 	typ, _ := p.parseType()
 	p.expect('=')
 	ex := p.parseExpr()
+	p.cuses = nil
 	v, ok := p.evalConst(ex)
 	if !ok {
 		p.errorf("const %s is not a constant integer expression", name)
@@ -342,6 +344,7 @@ func (p *parser) parseConst(s int) {
 	}
 	p.pkg.Consts = append(p.pkg.Consts, ir.Const{
 		ID: "cn:" + p.pkg.Path + "." + name, Name: name, Type: "i64", Value: v, Span: p.span(s), NameSpan: ns,
+		Uses: p.cuses,
 	})
 	p.expectEnd()
 }
@@ -359,6 +362,7 @@ func (p *parser) parseTable(s int, name string, ns ir.Span) {
 	p.expect('=')
 	p.expect('{')
 	var vals []int64
+	p.cuses = nil
 	for !p.peekByte('}') {
 		if p.eof() {
 			p.errorf("unclosed table")
@@ -379,7 +383,7 @@ func (p *parser) parseTable(s int, name string, ns ir.Span) {
 	}
 	p.pkg.Consts = append(p.pkg.Consts, ir.Const{
 		ID: "cn:" + p.pkg.Path + "." + name, Name: name, Type: fmt.Sprintf("[%d]i64", n), Table: true, Values: vals,
-		Span: p.span(s), NameSpan: ns,
+		Span: p.span(s), NameSpan: ns, Uses: p.cuses,
 	})
 	p.expectEnd()
 }
@@ -397,6 +401,7 @@ func (p *parser) evalConst(n *ir.Node) (int64, bool) {
 		}
 		for _, c := range p.pkg.Consts {
 			if c.Name == n.Name {
+				p.cuses = append(p.cuses, ir.ConstUse{Name: c.Name, Span: n.NameSpan})
 				return c.Value, !c.Table
 			}
 		}
@@ -408,6 +413,7 @@ func (p *parser) evalConst(n *ir.Node) (int64, bool) {
 		}
 		for _, c := range p.pkg.Consts {
 			if c.Name == n.Name && c.Table {
+				p.cuses = append(p.cuses, ir.ConstUse{Name: c.Name, Span: n.NameSpan})
 				return int64(len(c.Values)), true
 			}
 		}

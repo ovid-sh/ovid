@@ -447,10 +447,13 @@ func WTarget(io *ovid/io.Cap, b *ovid/mem.Buf, t *Target) i64 {
   return 0
 }
 
-// WDeclID writes the id of the func or type d (the "in" of a use). Every
-// func has a result type and no type decl does; a func's body may be empty.
+// WDeclID writes the id of the func, type, or const d (the "in" of a
+// use). Every func has a result type and no type decl does; a func's body
+// may be empty; a const is on its package's list.
 func WDeclID(io *ovid/io.Cap, b *ovid/mem.Buf, d *ovid/parse.Decl) i64 {
-  if len(d.typ) != 0 {
+  if IsConst(d) {
+    ovid/mem.WBytes(io, b, "cn:")
+  } else if len(d.typ) != 0 {
     ovid/mem.WBytes(io, b, "fn:")
   } else {
     ovid/mem.WBytes(io, b, "ty:")
@@ -459,6 +462,19 @@ func WDeclID(io *ovid/io.Cap, b *ovid/mem.Buf, d *ovid/parse.Decl) i64 {
   ovid/mem.WByte(io, b, 46)
   ovid/mem.WBytes(io, b, d.name)
   return 0
+}
+
+// IsConst says whether d is one of its package's consts, which a use in
+// another const's value sits in.
+func IsConst(d *ovid/parse.Decl) bool {
+  var c *ovid/parse.Decl = d.pkg.cs
+  while c != 0 as *ovid/parse.Decl {
+    if c == d {
+      return true
+    }
+    c = c.next
+  }
+  return false
 }
 
 // Cursor remembers where the last LineFrom scan ended (file, byte, line,

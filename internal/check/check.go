@@ -190,6 +190,10 @@ func run(p *ir.Program, lean bool) *Result {
 			}
 		}
 		for _, cn := range pkg.Consts {
+			// The consts its value names, folded by the parser, are uses.
+			for _, u := range cn.Uses {
+				c.use("cn:"+pkg.Path+"."+u.Name, cn.ID, "name", cn.ID, u.Span)
+			}
 			if !decl(cn.ID, cn.Name, cn.Span) {
 				continue
 			}
