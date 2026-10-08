@@ -383,16 +383,27 @@ func AddPackage(m *Mod, k *Pkg) i64 {
 }
 
 func Merge(k *Pkg, one *Pkg) i64 {
+  // A file's imports are checked against the earlier files' only, as
+  // the Go loader does: one the file itself repeats is kept twice, and
+  // check reports it.
+  var end *Decl = k.imt
   var im *Decl = one.ims
   while im != 0 as *Decl {
     var next *Decl = im.next
     var seen bool = false
-    var c *Decl = k.ims
+    var c *Decl = 0 as *Decl
+    if end != 0 as *Decl {
+      c = k.ims
+    }
     while c != 0 as *Decl && !seen {
       if ovid/mem.Eq(c.name, im.name) {
         seen = true
       }
-      c = c.next
+      if c == end {
+        c = 0 as *Decl
+      } else {
+        c = c.next
+      }
     }
     if !seen {
       im.next = 0 as *Decl
