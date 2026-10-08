@@ -1324,6 +1324,15 @@ func TestLoopEntryWrap(io *ovid/io.Cap) i64 {
   }
   return s
 }
+func TestLoopStoreAfter(io *ovid/io.Cap) i64 {
+  var b bytes = bytes(ovid/io.Alloc(io, 3), 3)
+  var i i64 = 0
+  while i < len(b) {
+    i = i + 1
+    b[i] = 1
+  }
+  return 0
+}
 func TestLoopConstN(io *ovid/io.Cap) i64 {
   var b bytes = "abc"
   var s i64 = 0
@@ -1380,7 +1389,7 @@ func TestEdges(io *ovid/io.Cap) i64 {
 		"TestNegativeLength":  "  var b bytes = bytes(ovid/io.Alloc(io, 4), 0 - 1)",
 		"TestNegativeLiteral": "  var b bytes = bytes(ovid/io.Alloc(io, 4), -1)",
 		"TestLoopAfter":       "    s = s + b[i]", "TestLoopBack": "    s = s + b[i]", "TestLoopGrown": "    s = s + b[i]",
-		"TestLoopWrap": "    s = s + b[i]", "TestLoopEntryWrap": "    s = s + b[i]", "TestLoopConstN": "    s = s + b[i]", "TestLoopConstI": "    s = s + b[I]",
+		"TestLoopWrap": "    s = s + b[i]", "TestLoopEntryWrap": "    s = s + b[i]", "TestLoopStoreAfter": "    b[i] = 1", "TestLoopConstN": "    s = s + b[i]", "TestLoopConstI": "    s = s + b[I]",
 	} {
 		r := got["fn:demo."+name]
 		at, _ := r["at"].(map[string]any)
@@ -1613,14 +1622,14 @@ func TestBytesFieldCodegen(t *testing.T) {
 }
 
 // TestBytesLoopCodegen: a loop over b by i whose condition proves b[i]
-// in bounds compiles to the same code as the loop over a pointer and a
-// length with no check at all.
+// in bounds, reading and storing it, compiles to the same code as the
+// loop over a pointer and a length with no check at all.
 func TestBytesLoopCodegen(t *testing.T) {
-	body := "  var s i64 = 0\n  var i i64 = 0\n  while i < n {\n    s = s + LOAD\n    i = i + 1\n  }\n  return s\n}\n"
+	body := "  var s i64 = 0\n  var i i64 = 0\n  while i < n {\n    s = s + LOAD\n    STORE\n    i = i + 1\n  }\n  return s\n}\n"
 	tail := "func main(io *ovid/io.Cap) i64 {\n  return Sum(\"abc\")\n}\n"
-	pair := mkmod(t, demo("package demo\nimport ovid/io\nfunc Sum(b i64, m i64) i64 {\n  var n i64 = m\n"+strings.NewReplacer("LOAD", "load8(b + i)").Replace(body)+
+	pair := mkmod(t, demo("package demo\nimport ovid/io\nfunc Sum(b i64, m i64) i64 {\n  var n i64 = m\n"+strings.NewReplacer("LOAD", "load8(b + i)", "STORE", "store8(b + i, s & 255)").Replace(body)+
 		strings.NewReplacer("Sum(\"abc\")", "Sum(strptr(\"abc\"), strlen(\"abc\"))").Replace(tail)))
-	checked := mkmod(t, demo("package demo\nimport ovid/io\nfunc Sum(b bytes) i64 {\n  var n i64 = len(b)\n"+strings.NewReplacer("LOAD", "b[i]").Replace(body)+tail))
+	checked := mkmod(t, demo("package demo\nimport ovid/io\nfunc Sum(b bytes) i64 {\n  var n i64 = len(b)\n"+strings.NewReplacer("LOAD", "b[i]", "STORE", "b[i] = s & 255").Replace(body)+tail))
 	var out [2][]byte
 	for i, dir := range []string{pair, checked} {
 		bin := filepath.Join(t.TempDir(), "x")

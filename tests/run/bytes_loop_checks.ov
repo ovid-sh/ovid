@@ -32,12 +32,22 @@ func SumN(b bytes) i64 {
   return s
 }
 
-// Fill stores by two: a step that is not one keeps its check (it could
-// wrap i past 2^63), and the loop still runs.
+// Fill stores without a check, the shape Sum reads in.
 func Fill(b bytes) i64 {
   var i i64 = 0
   while i < len(b) {
     b[i] = 7
+    i = i + 1
+  }
+  return 0
+}
+
+// FillTwo stores by two: a step that is not one keeps its check (it
+// could wrap i past 2^63), and the loop still runs.
+func FillTwo(b bytes) i64 {
+  var i i64 = 0
+  while i < len(b) {
+    b[i] = 9
     i = i + 2
   }
   return 0
@@ -53,8 +63,12 @@ func main(io *ovid/io.Cap) i64 {
     return 2
   }
   Fill(b)
-  if b[0] != 7 || b[1] != 98 || b[4] != 7 || b[5] != 102 {
+  if Sum(b) != 7 * 6 {
     return 3
+  }
+  FillTwo(b)
+  if b[0] != 9 || b[1] != 7 || b[4] != 9 || b[5] != 7 {
+    return 4
   }
   ovid/io.Print("ok\n")
   return 0
