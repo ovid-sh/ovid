@@ -1648,6 +1648,45 @@ func TestBytesLoopCodegen(t *testing.T) {
 	}
 }
 
+// constUses names consts in other consts' values and a table's elements.
+const constUses = "package demo\nimport ovid/io\nconst One i64 = 1\nconst Two i64 = One + 1\nconst T [3]i64 = {\n  One,\n  Two * One,\n  0\n}\nconst N i64 = len(T)\nfunc main(io *ovid/io.Cap) i64 {\n  return Two + T[0] + N\n}\n"
+
+// TestConstUses: refs, rename, and move see a const named in another
+// const's value and in a table's elements, which the parser folds away.
+func TestConstUses(t *testing.T) {
+	dir := mkmod(t, demo(constUses))
+	var b bytes.Buffer
+	if code := Refs(dir, "One", true, Page{}, &b); code != ExitOK || last(t, b.String())["total"] != float64(3) {
+		t.Fatalf("refs One: %d %s", code, b.String())
+	}
+	b.Reset()
+	if code := Refs(dir, "T", true, Page{}, &b); code != ExitOK || last(t, b.String())["total"] != float64(2) {
+		t.Fatalf("refs T: %d %s", code, b.String())
+	}
+	b.Reset()
+	if code := Rename(dir, "cn:demo.One", "Uno", false, &b); code != ExitOK {
+		t.Fatalf("rename: %d %s", code, b.String())
+	}
+	src := readFile(t, dir, "demo/main.ov")
+	if strings.Contains(src, "One") || strings.Count(src, "Uno") != 4 {
+		t.Fatalf("rename left:\n%s", src)
+	}
+	b.Reset()
+	if code := Check(dir, false, &b); code != ExitOK {
+		t.Fatalf("check after rename: %s", b.String())
+	}
+	// A const may not name another package's, so moving one that another
+	// const names is refused, for that reason (move rewrote the use), and
+	// nothing is written.
+	b.Reset()
+	if code := Move(dir, "Uno", "demo/util", "", false, &b); code == ExitOK || !strings.Contains(last(t, b.String())["message"].(string), "cannot name another package's const") {
+		t.Fatalf("move: %s", b.String())
+	}
+	if readFile(t, dir, "demo/main.ov") != src {
+		t.Fatal("a refused move wrote")
+	}
+}
+
 // TestBytesFieldLayout: a bytes field is two words, and what outline and
 // check --facts say about a struct's size and its fields' offsets agree
 // with the code generator.
@@ -2051,6 +2090,20 @@ func TestSelfHost(t *testing.T) {
 		sr := last(t, out)
 		if gr["error"] != sr["error"] || (want == "" && gr["ok"] != true) || (want != "" && gr["error"] != want) {
 			t.Fatalf("refs %s on duplicates: self-hosted %v, go %v, want %q", q, sr, gr, want)
+		}
+	}
+
+	// A const named in another const's value or a table's elements is a
+	// use for both, which the parser folded away.
+	cmod := mkmod(t, demo(constUses))
+	for _, q := range []string{"One", "T", "Two"} {
+		b.Reset()
+		if code := Refs(cmod, q, false, Page{}, &b); code != 0 {
+			t.Fatalf("refs %s: %s", q, b.String())
+		}
+		got, code := runIn(t, cmod, s1, "refs", q, ".", "--std", stdDir)
+		if code != 0 || got != b.String() {
+			t.Fatalf("refs %s in consts: self-hosted (exit %d) differs from go:\n--- self\n%s\n--- go\n%s", q, code, got, b.String())
 		}
 	}
 

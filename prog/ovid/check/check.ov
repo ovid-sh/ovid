@@ -1539,6 +1539,24 @@ func Taken(c *Ch, d *ovid/parse.Decl, a *ovid/parse.Decl, b *ovid/parse.Decl) bo
 func Consts(c *Ch, k *ovid/parse.Pkg) i64 {
   var d *ovid/parse.Decl = k.cs
   while d != 0 as *ovid/parse.Decl {
+    // The consts its value names, folded by the parser, are uses, in
+    // source order (the parser kept them newest first).
+    var cu *ovid/parse.Use = d.cuses
+    var rev *ovid/parse.Use = 0 as *ovid/parse.Use
+    while cu != 0 as *ovid/parse.Use {
+      var cn *ovid/parse.Use = cu.next
+      cu.next = rev
+      rev = cu
+      cu = cn
+    }
+    d.cuses = 0 as *ovid/parse.Use
+    while rev != 0 as *ovid/parse.Use {
+      var rn *ovid/parse.Use = rev.next
+      var u *ovid/parse.Use = NewUse(c, ovid/parse.USE_NAME, 0 as *ovid/parse.Node, d, rev.tok)
+      u.decl = rev.decl
+      u.udecl = d
+      rev = rn
+    }
     HereDecl(c, H_CONST, k, d, 0 as *ovid/parse.Decl)
     if Taken(c, d, k.ts, k.fs) {
       Err(c, "duplicate_name", d.name)

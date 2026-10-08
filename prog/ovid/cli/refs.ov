@@ -481,10 +481,13 @@ func WTarget(io *ovid/io.Cap, b *ovid/mem.Buf, t *Target) i64 {
   return 0
 }
 
-// WDeclID writes the id of the func or type d (the "in" of a use). Every
-// func has a result type and no type decl does; a func's body may be empty.
+// WDeclID writes the id of the func, type, or const d (the "in" of a
+// use). Every func has a result type and no type decl does; a func's body
+// may be empty; a const is on its package's list.
 func WDeclID(io *ovid/io.Cap, b *ovid/mem.Buf, d *ovid/parse.Decl) i64 {
-  if len(d.typ) != 0 {
+  if IsConst(d) {
+    ovid/mem.WBytes(io, b, "cn:")
+  } else if len(d.typ) != 0 {
     ovid/mem.WBytes(io, b, "fn:")
   } else {
     ovid/mem.WBytes(io, b, "ty:")
@@ -493,6 +496,23 @@ func WDeclID(io *ovid/io.Cap, b *ovid/mem.Buf, d *ovid/parse.Decl) i64 {
   ovid/mem.WByte(io, b, 46)
   ovid/mem.WBytes(io, b, d.name)
   return 0
+}
+
+// IsConst says whether d is one of its package's consts, which a use in
+// another const's value sits in. A field or param has no package of its
+// own set, and is not one.
+func IsConst(d *ovid/parse.Decl) bool {
+  if d.pkg == 0 as *ovid/parse.Pkg {
+    return false
+  }
+  var c *ovid/parse.Decl = d.pkg.cs
+  while c != 0 as *ovid/parse.Decl {
+    if c == d {
+      return true
+    }
+    c = c.next
+  }
+  return false
 }
 
 // Cursor remembers where the last LineFrom scan ended (file, byte, line,
@@ -548,7 +568,8 @@ func LineFrom(f *ovid/parse.File, off i64, out i64, cur *Cursor) i64 {
   return line
 }
 
-// UseFile is the file a use sits in: that of the func or type it is in.
+// UseFile is the file a use sits in: that of the func, type, or const it
+// is in.
 func UseFile(u *ovid/parse.Use) *ovid/parse.File {
   return u.in.file
 }
@@ -709,12 +730,14 @@ func CmdRefs(io *ovid/io.Cap) i64 {
     }
     // The line is the one the node that spells the use starts on, as
     // the Go refs prints it: a func's own result use starts at the func.
+    // A const named in a const's value has no node of its own, and a
+    // table's elements may run over lines, so its line is the name's.
     var off i64 = ptr(u.tok) - ptr(f.src)
     if u.node != 0 as *ovid/parse.Node {
       off = u.node.off
     } else if u.kind == ovid/parse.USE_RESULT {
       off = u.in.off
-    } else if u.udecl != 0 as *ovid/parse.Decl {
+    } else if u.udecl != 0 as *ovid/parse.Decl && !IsConst(u.udecl) {
       off = u.udecl.off
     }
     var line i64 = LineFrom(f, off, out, cur)

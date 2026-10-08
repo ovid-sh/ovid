@@ -60,6 +60,17 @@ type Const struct {
 	Values   []int64 `json:"values,omitempty"`
 	Span     Span    `json:"-"`
 	NameSpan Span    `json:"-"`
+	// Uses are the consts of the package its value (or a table's
+	// elements) names, which the parser folded away: the checker records
+	// a use of each, so refs and rename see them.
+	Uses []ConstUse `json:"-"`
+}
+
+// ConstUse is a const named in another const's value: its name and the
+// name token.
+type ConstUse struct {
+	Name string
+	Span Span
 }
 
 type TypeDecl struct {

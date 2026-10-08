@@ -166,7 +166,9 @@ type Node struct {
 // once the code generator has placed them in rodata, their offset + 1. A
 // func with two results has the second, its error code, in typ2. The
 // lowering sets bres on a func declared to return bytes: 2 result words,
-// or 3 for (bytes, i64).
+// or 3 for (bytes, i64). cuses are the uses of the consts a const's value
+// (or a table's elements) names, which the parser folded away; the
+// checker adds them to the module's.
 type Decl struct {
   name bytes
   typ bytes
@@ -189,6 +191,7 @@ type Decl struct {
   tytok i64
   ty2tok i64
   bres i64
+  cuses *Use
 }
 
 // What a use is, as refs and rename see it: the node spells the target's
@@ -284,8 +287,8 @@ func FuncHash(path bytes, name bytes) i64 {
 }
 
 // IndexFuncs builds m.ftab, an open-addressing table from package path and
-// name to the func's Decl, and sets each func's and type's pkg. Of two funcs with one
-// name the first is kept; check reports the second.
+// name to the func's Decl, and sets each const's, type's, and func's pkg.
+// Of two funcs with one name the first is kept; check reports the second.
 func IndexFuncs(m *Mod) i64 {
   var total i64 = 0
   var k *Pkg = m.pkgs
@@ -301,6 +304,11 @@ func IndexFuncs(m *Mod) i64 {
   m.fmask = sz - 1
   k = m.pkgs
   while k != 0 as *Pkg {
+    var cn *Decl = k.cs
+    while cn != 0 as *Decl {
+      cn.pkg = k
+      cn = cn.next
+    }
     var t *Decl = k.ts
     while t != 0 as *Decl {
       t.pkg = k
@@ -493,6 +501,7 @@ func ParseConst(p *P, s i64) i64 {
   Expect(p, 61)
   var ex *Node = ParseExpr(p)
   p.cok = true
+  p.cuses = 0 as *Use
   var v i64 = EvalConst(p, ex)
   if !p.cok {
     if ErrBegin(p) {
@@ -513,6 +522,7 @@ func ParseConst(p *P, s i64) i64 {
   var d *Decl = NewDecl(p, t, s)
   d.typ = "i64"
   d.val = v
+  d.cuses = p.cuses
   AddConst(p.pkg, d)
   ExpectEnd(p)
   return 0
@@ -534,6 +544,7 @@ func ParseTable(p *P, s i64, name bytes) i64 {
   var cap i64 = 16
   var vals i64 = ovid/io.Alloc(p.io, cap * 8)
   var n i64 = 0
+  p.cuses = 0 as *Use
   while p.err == 0 && !PeekByte(p, 125) {
     if Eof(p) {
       Errorf(p, "unclosed table")
@@ -584,8 +595,21 @@ func ParseTable(p *P, s i64, name bytes) i64 {
   d.istab = 1
   d.tab = vals
   d.tabn = n
+  d.cuses = p.cuses
   AddConst(p.pkg, d)
   ExpectEnd(p)
+  return 0
+}
+
+// ConstUse records, for the const being parsed, a use of c spelled by the
+// name token tok.
+func ConstUse(p *P, c *Decl, tok bytes) i64 {
+  var u *Use = ovid/io.Alloc(p.io, sizeof(Use)) as *Use
+  u.kind = USE_NAME
+  u.decl = c
+  u.tok = tok
+  u.next = p.cuses
+  p.cuses = u
   return 0
 }
 
@@ -615,6 +639,7 @@ func EvalConst(p *P, n *Node) i64 {
     var c *Decl = p.pkg.cs
     while c != 0 as *Decl {
       if ovid/mem.Eq(c.name, n.name) {
+        ConstUse(p, c, n.name)
         if c.istab != 0 {
           p.cok = false
         }
@@ -641,6 +666,7 @@ func EvalConst(p *P, n *Node) i64 {
     var lc *Decl = p.pkg.cs
     while lc != 0 as *Decl {
       if lc.istab != 0 && ovid/mem.Eq(lc.name, n.name) {
+        ConstUse(p, lc, n.name)
         return lc.tabn
       }
       lc = lc.next

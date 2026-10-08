@@ -27,6 +27,7 @@ type P struct {
   sc i64
   tok bytes
   cok bool
+  cuses *Use
   path bytes
   kwat i64
   kwend i64
