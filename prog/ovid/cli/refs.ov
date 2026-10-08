@@ -499,8 +499,12 @@ func WDeclID(io *ovid/io.Cap, b *ovid/mem.Buf, d *ovid/parse.Decl) i64 {
 }
 
 // IsConst says whether d is one of its package's consts, which a use in
-// another const's value sits in.
+// another const's value sits in. A field or param has no package of its
+// own set, and is not one.
 func IsConst(d *ovid/parse.Decl) bool {
+  if d.pkg == 0 as *ovid/parse.Pkg {
+    return false
+  }
   var c *ovid/parse.Decl = d.pkg.cs
   while c != 0 as *ovid/parse.Decl {
     if c == d {
