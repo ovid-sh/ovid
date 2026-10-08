@@ -564,7 +564,8 @@ func LineFrom(f *ovid/parse.File, off i64, out i64, cur *Cursor) i64 {
   return line
 }
 
-// UseFile is the file a use sits in: that of the func or type it is in.
+// UseFile is the file a use sits in: that of the func, type, or const it
+// is in.
 func UseFile(u *ovid/parse.Use) *ovid/parse.File {
   return u.in.file
 }
@@ -725,12 +726,14 @@ func CmdRefs(io *ovid/io.Cap) i64 {
     }
     // The line is the one the node that spells the use starts on, as
     // the Go refs prints it: a func's own result use starts at the func.
+    // A const named in a const's value has no node of its own, and a
+    // table's elements may run over lines, so its line is the name's.
     var off i64 = ptr(u.tok) - ptr(f.src)
     if u.node != 0 as *ovid/parse.Node {
       off = u.node.off
     } else if u.kind == ovid/parse.USE_RESULT {
       off = u.in.off
-    } else if u.udecl != 0 as *ovid/parse.Decl {
+    } else if u.udecl != 0 as *ovid/parse.Decl && !IsConst(u.udecl) {
       off = u.udecl.off
     }
     var line i64 = LineFrom(f, off, out, cur)

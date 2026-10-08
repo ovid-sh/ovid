@@ -551,6 +551,11 @@ func findRefs(m *module.Module, res *check.Result, target *module.Loc) ([]ref, e
 			}
 		} else if l := m.Index()[u.ID]; l != nil {
 			r.span = l.Span
+			if _, ok := l.Node.(*ir.Const); ok {
+				// A const named in a const's value has no node of its own,
+				// and a table's elements may run over lines: the name's.
+				r.span = u.Span
+			}
 		}
 		out = append(out, r)
 	}
