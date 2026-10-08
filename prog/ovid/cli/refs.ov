@@ -24,6 +24,7 @@ type Target struct {
   own *ovid/parse.Decl
   nmatch i64
   bad *ovid/mem.Buf
+  copies i64
 }
 
 // Eq2 reports whether the two strings are the same.
@@ -107,51 +108,62 @@ func HasExpr(s *ovid/parse.Node, num i64) bool {
   return false
 }
 
-// IdExists reports whether the pkg:, im:, or ex: id q (colon at c)
+// IdCopies counts the nodes the pkg:, im:, or ex: id q (colon at c)
 // names something in the module.
-func IdExists(m *ovid/parse.Mod, q bytes, c i64) bool {
+func IdCopies(m *ovid/parse.Mod, q bytes, c i64) i64 {
   var rp i64 = (ptr(q) + c) + 1
   var rn i64 = (len(q) - c) - 1
   if load8(ptr(q)) == 112 {
     var k *ovid/parse.Pkg = m.pkgs
     while k != 0 as *ovid/parse.Pkg {
       if Eq2(k.path, bytes(rp, rn)) {
-        return true
+        return 1
       }
       k = k.next
     }
-    return false
+    return 0
   }
   if load8(ptr(q)) == 105 {
     // im:<pkg>:<import path>
     var c2 i64 = Split(bytes(rp, rn), 58)
     if c2 < 0 {
-      return false
+      return 0
     }
     var k *ovid/parse.Pkg = m.pkgs
     while k != 0 as *ovid/parse.Pkg {
       if Eq2(k.path, bytes(rp, c2)) {
-        return ovid/parse.FindDecl(k.ims, bytes((rp + c2) + 1, (rn - c2) - 1)) != 0 as *ovid/parse.Decl
+        return CountNamed(k.ims, bytes((rp + c2) + 1, (rn - c2) - 1))
       }
       k = k.next
     }
-    return false
+    return 0
   }
-  // ex:<pkg>.<func>:<num>
+  // ex:<pkg>.<func>:<num>, in every copy of the func
   var c3 i64 = Split(bytes(rp, rn), 58)
   if c3 < 0 {
-    return false
+    return 0
   }
   var num i64 = ParseInt(bytes((rp + c3) + 1, (rn - c3) - 1))
   var dot i64 = Split(bytes(rp, c3), 46)
   if dot < 1 || num < 0 {
-    return false
+    return 0
   }
-  var fn *ovid/parse.Decl = ovid/parse.FindFunc(m, bytes(rp, dot), bytes((rp + dot) + 1, (c3 - dot) - 1))
-  if fn == 0 as *ovid/parse.Decl {
-    return false
+  var pk *ovid/parse.Pkg = m.pkgs
+  while pk != 0 as *ovid/parse.Pkg && !Eq2(pk.path, bytes(rp, dot)) {
+    pk = pk.next
   }
-  return HasExpr(fn.body, num)
+  if pk == 0 as *ovid/parse.Pkg {
+    return 0
+  }
+  var n i64 = 0
+  var fn *ovid/parse.Decl = pk.fs
+  while fn != 0 as *ovid/parse.Decl {
+    if Eq2(fn.name, bytes((rp + dot) + 1, (c3 - dot) - 1)) && HasExpr(fn.body, num) {
+      n = n + 1
+    }
+    fn = fn.next
+  }
+  return n
 }
 
 // ByID resolves a full id (fn:pkg.N, ty:pkg.N, cn:pkg.N, fld:pkg.T.f,
@@ -179,8 +191,10 @@ func ByID(m *ovid/parse.Mod, t *Target, q bytes) i64 {
     kind = T_VAR
   } else if Eq2(q[0:colon], "ex") || Eq2(q[0:colon], "pkg") || Eq2(q[0:colon], "im") {
     // An id refs cannot follow, as the Go refs says; one that names
-    // nothing is not found, as there.
-    if !IdExists(m, q, colon) {
+    // nothing is not found, as there, and one that names several copies
+    // is ambiguous_id first, as there.
+    t.copies = IdCopies(m, q, colon)
+    if t.copies == 0 {
       return 0
     }
     t.bad = ovid/mem.New(m.io, 256)
@@ -242,20 +256,31 @@ func ByID(m *ovid/parse.Mod, t *Target, q bytes) i64 {
     t.d = ovid/parse.FindDecl(k.ts, bytes(np, nn))
   } else if kind == T_CONST {
     t.d = ovid/parse.FindDecl(k.cs, bytes(np, nn))
-  } else if kind == T_FIELD {
-    t.own = ovid/parse.FindDecl(k.ts, bytes(op, on))
-    if t.own != 0 as *ovid/parse.Decl {
-      t.d = ovid/parse.FindDecl(t.own.sub, bytes(np, nn))
+  } else if kind == T_FIELD || kind == T_PARAM {
+    // The first copy of the owner that has the member: the Go index
+    // holds the id from whichever copy has it.
+    var owners *ovid/parse.Decl = k.fs
+    if kind == T_FIELD {
+      owners = k.ts
     }
-  } else if kind == T_PARAM {
-    t.own = ovid/parse.FindDecl(k.fs, bytes(op, on))
-    if t.own != 0 as *ovid/parse.Decl {
-      t.d = ovid/parse.FindDecl(t.own.sub, bytes(np, nn))
+    while owners != 0 as *ovid/parse.Decl && t.d == 0 as *ovid/parse.Decl {
+      if Eq2(owners.name, bytes(op, on)) {
+        t.own = owners
+        t.d = ovid/parse.FindDecl(owners.sub, bytes(np, nn))
+      }
+      owners = owners.next
     }
   } else {
-    t.own = ovid/parse.FindDecl(k.fs, bytes(np, nn))
-    if t.own != 0 as *ovid/parse.Decl && num >= 0 {
-      t.vn = FindVar(t.own.body, num)
+    // The first copy of the func that has the statement, likewise.
+    var fns *ovid/parse.Decl = k.fs
+    while fns != 0 as *ovid/parse.Decl && t.vn == 0 as *ovid/parse.Node {
+      if Eq2(fns.name, bytes(np, nn)) {
+        t.own = fns
+        if num >= 0 {
+          t.vn = FindVar(fns.body, num)
+        }
+      }
+      fns = fns.next
     }
     if t.vn == 0 as *ovid/parse.Node {
       return 0
@@ -609,17 +634,26 @@ func CmdRefs(io *ovid/io.Cap) i64 {
   if t.nmatch > 1 {
     return Fail(io, "ambiguous", "several declarations have that name; use a full id")
   }
-  if t.bad != 0 as *ovid/mem.Buf {
-    return Fail(io, "unsupported", bytes(t.bad.data, t.bad.len))
+  // A duplicated id is refused before a kind refs cannot follow, as the
+  // Go refs resolves the id before it looks at the kind.
+  var copies i64 = t.copies
+  if t.d != 0 as *ovid/parse.Decl || t.vn != 0 as *ovid/parse.Node {
+    copies = Copies(t)
   }
-  var copies i64 = Copies(t)
   if copies > 1 {
     var ab *ovid/mem.Buf = ovid/mem.New(io, 256)
-    WTarget(io, ab, t)
+    if t.bad != 0 as *ovid/mem.Buf && t.d == 0 as *ovid/parse.Decl && t.vn == 0 as *ovid/parse.Node {
+      ovid/mem.WBytes(io, ab, bytes(a.q, qn))
+    } else {
+      WTarget(io, ab, t)
+    }
     ovid/mem.WBytes(io, ab, " names ")
     ovid/parse.WInt(io, ab, copies)
     ovid/mem.WBytes(io, ab, " nodes (check reports the duplicate)")
     return Fail(io, "ambiguous_id", bytes(ab.data, ab.len))
+  }
+  if t.bad != 0 as *ovid/mem.Buf {
+    return Fail(io, "unsupported", bytes(t.bad.data, t.bad.len))
   }
   // The uses of t as (key, use) pairs, sorted by file and position.
   NumberFiles(m)
