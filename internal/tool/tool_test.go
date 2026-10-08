@@ -1295,10 +1295,10 @@ func TestLoopGrown(io *ovid/io.Cap) i64 {
   var s i64 = 0
   var i i64 = 0
   while i < len(b) {
-    if i == 1 {
+    if i == 2 {
       i = i + 1
     }
-    s = s + b[i + 1]
+    s = s + b[i]
     i = i + 1
   }
   return s
@@ -1368,7 +1368,7 @@ func TestEdges(io *ovid/io.Cap) i64 {
 		"TestInWhile":         "  while len(b[k:k + 1]) == 1 {",
 		"TestNegativeLength":  "  var b bytes = bytes(ovid/io.Alloc(io, 4), 0 - 1)",
 		"TestNegativeLiteral": "  var b bytes = bytes(ovid/io.Alloc(io, 4), -1)",
-		"TestLoopAfter":       "    s = s + b[i]", "TestLoopBack": "    s = s + b[i]", "TestLoopGrown": "    s = s + b[i + 1]",
+		"TestLoopAfter":       "    s = s + b[i]", "TestLoopBack": "    s = s + b[i]", "TestLoopGrown": "    s = s + b[i]",
 		"TestLoopWrap": "    s = s + b[i]", "TestLoopConstN": "    s = s + b[i]", "TestLoopConstI": "    s = s + b[I]",
 	} {
 		r := got["fn:demo."+name]
