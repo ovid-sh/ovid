@@ -1676,9 +1676,10 @@ func TestConstUses(t *testing.T) {
 		t.Fatalf("check after rename: %s", b.String())
 	}
 	// A const may not name another package's, so moving one that another
-	// const names is refused, and nothing is written.
+	// const names is refused, for that reason (move rewrote the use), and
+	// nothing is written.
 	b.Reset()
-	if code := Move(dir, "Uno", "demo/util", "", false, &b); code == ExitOK {
+	if code := Move(dir, "Uno", "demo/util", "", false, &b); code == ExitOK || !strings.Contains(last(t, b.String())["message"].(string), "cannot name another package's const") {
 		t.Fatalf("move: %s", b.String())
 	}
 	if readFile(t, dir, "demo/main.ov") != src {
