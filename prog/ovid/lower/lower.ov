@@ -49,7 +49,7 @@ type L struct {
 // Loc is what the check elision knows about one of a function's names:
 // how often it is declared (a param or a var; var2 too), the value of
 // its one var, whether anything assigns it, and whether every
-// assignment is name = name + k with k a positive literal.
+// assignment is name = name + 1.
 type Loc struct {
   name bytes
   decls i64
@@ -256,7 +256,7 @@ func Scan(l *L, s *ovid/parse.Node) i64 {
     } else if op == ovid/parse.OP_ASSIGN {
       var c3 *Loc = Local(l, s.name)
       c3.assigned = true
-      if Growth(s) < 1 {
+      if Growth(s) != 1 {
         c3.grows = false
       }
     } else if op == ovid/parse.OP_ASSIGN2 {
@@ -316,13 +316,15 @@ func LenOf(l *L, n *ovid/parse.Node) bytes {
 // FreeLoop says what the while statement s proves: its condition is
 // i < len(b), or i < n with n the one var len(b), where b and n are
 // never assigned, i is declared once as a var with a literal that is
-// not negative and only ever grows by a positive literal, and the body
-// assigns i only in its own top-level statements. Then b[i] is in
-// bounds in the condition and in the body's statements before the
-// first of those, which is the count returned (the body's length when
-// there is none), with b and i in l.fb and l.fi; -1 when s proves
-// nothing. The names must be locals in scope here: a package constant
-// can spell the same, and the list is by name.
+// not negative and only ever grows by one, and the body assigns i only
+// in its own top-level statements. Then b[i] is in bounds in the
+// condition and in the body's statements before the first of those,
+// which is the count returned (the body's length when there is none),
+// with b and i in l.fb and l.fi; -1 when s proves nothing. Growing by
+// one cannot wrap, since i < len(b) < 2^63 first; a larger step could,
+// to a negative i the signed condition lets through. The names must be
+// locals in scope here: a package constant can spell the same, and the
+// list is by name.
 func FreeLoop(l *L, s *ovid/parse.Node) i64 {
   var c *ovid/parse.Node = s.cond
   if c.op == ovid/parse.OP_LAND {

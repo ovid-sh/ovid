@@ -32,7 +32,8 @@ func SumN(b bytes) i64 {
   return s
 }
 
-// Fill stores by two, from an index set once.
+// Fill stores by two: a step that is not one keeps its check (it could
+// wrap i past 2^63), and the loop still runs.
 func Fill(b bytes) i64 {
   var i i64 = 0
   while i < len(b) {

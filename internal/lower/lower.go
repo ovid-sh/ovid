@@ -46,7 +46,7 @@ type lowerer struct {
 // local is what the check elision knows about one of a function's
 // names: how often it is declared (a param or a var; var2 too), the
 // value of its one var, whether anything assigns it, and whether every
-// assignment is name = name + k with k a positive literal.
+// assignment is name = name + 1.
 type local struct {
 	decls    int
 	val      *ir.Node
@@ -162,7 +162,7 @@ func (l *lowerer) scan(ss []*ir.Node) {
 		case "assign":
 			c := l.local(s.Name)
 			c.assigned = true
-			if growth(s) < 1 {
+			if growth(s) != 1 {
 				c.grows = false
 			}
 		case "assign2":
@@ -208,13 +208,14 @@ func (l *lowerer) lenOf(n *ir.Node) string {
 // freeLoop says what the while statement s proves: its condition is
 // i < len(b), or i < n with n the one var len(b), where b and n are
 // never assigned, i is declared once as a var with a literal that is
-// not negative and only ever grows by a positive literal, and the body
-// assigns i only in its own top-level statements. Then b[i] is in
-// bounds in the condition and in the body's statements before the
-// first of those, which is the k returned (len(body) when there is
-// none); ok is false when s proves nothing. The names must be locals
-// in scope here: a package constant can spell the same, and the table
-// is by name.
+// not negative and only ever grows by one, and the body assigns i only
+// in its own top-level statements. Then b[i] is in bounds in the
+// condition and in the body's statements before the first of those,
+// which is the k returned (len(body) when there is none); ok is false
+// when s proves nothing. Growing by one cannot wrap, since i < len(b)
+// < 2^63 first; a larger step could, to a negative i the signed
+// condition lets through. The names must be locals in scope here: a
+// package constant can spell the same, and the table is by name.
 func (l *lowerer) freeLoop(s *ir.Node) (p freePair, k int, ok bool) {
 	c := s.Cond
 	if c.Op == "land" {
