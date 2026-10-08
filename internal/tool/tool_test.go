@@ -1313,6 +1313,17 @@ func TestLoopWrap(io *ovid/io.Cap) i64 {
   }
   return s
 }
+func TestLoopEntryWrap(io *ovid/io.Cap) i64 {
+  var b bytes = "abc"
+  var s i64 = 0
+  var i i64 = 9223372036854775807
+  i = i + 1
+  while i < len(b) {
+    s = s + b[i]
+    i = i + 1
+  }
+  return s
+}
 func TestLoopConstN(io *ovid/io.Cap) i64 {
   var b bytes = "abc"
   var s i64 = 0
@@ -1369,7 +1380,7 @@ func TestEdges(io *ovid/io.Cap) i64 {
 		"TestNegativeLength":  "  var b bytes = bytes(ovid/io.Alloc(io, 4), 0 - 1)",
 		"TestNegativeLiteral": "  var b bytes = bytes(ovid/io.Alloc(io, 4), -1)",
 		"TestLoopAfter":       "    s = s + b[i]", "TestLoopBack": "    s = s + b[i]", "TestLoopGrown": "    s = s + b[i]",
-		"TestLoopWrap": "    s = s + b[i]", "TestLoopConstN": "    s = s + b[i]", "TestLoopConstI": "    s = s + b[I]",
+		"TestLoopWrap": "    s = s + b[i]", "TestLoopEntryWrap": "    s = s + b[i]", "TestLoopConstN": "    s = s + b[i]", "TestLoopConstI": "    s = s + b[I]",
 	} {
 		r := got["fn:demo."+name]
 		at, _ := r["at"].(map[string]any)

@@ -315,18 +315,19 @@ func LenOf(l *L, n *ovid/parse.Node) bytes {
 
 // FreeLoop says what the while statement s proves: its condition is
 // i < len(b), or i < n with n the one var len(b), where b and n are
-// never assigned, i is declared once as a var with a literal that is
-// not negative and only ever grows by one, and the body assigns i only
-// in its own top-level statements. Then b[i] is in bounds in the
-// condition and in the body's statements before the first of those,
-// which is the count returned (the body's length when there is none),
-// with b and i in l.fb and l.fi; -1 when s proves nothing. The step of
-// one is what keeps i from wrapping to a negative the signed condition
-// would let through: one growth from i < len(b) stays below 2^63;
-// several in one iteration, or growth outside the loop, could wrap only
-// with a length within a few of 2^63, which no memory has. The names
-// must be locals in scope here: a package constant can spell the same,
-// and the list is by name.
+// never assigned, i is declared once as a var with a literal from 0 to
+// 2^31 and only ever grows by one, and the body assigns i only in its
+// own top-level statements. Then b[i] is in bounds in the condition and
+// in the body's statements before the first of those, which is the
+// count returned (the body's length when there is none), with b and i
+// in l.fb and l.fi; -1 when s proves nothing. The small start and the
+// step of one are what keep i from wrapping to a negative the signed
+// condition would let through: one growth from i < len(b) stays below
+// 2^63; several in one iteration, or growth outside the loop, could
+// wrap only with a length within a few of 2^63, which no memory has, or
+// after 2^63 - 2^31 executed steps, which no run has. The names must be
+// locals in scope here: a package constant can spell the same, and the
+// list is by name.
 func FreeLoop(l *L, s *ovid/parse.Node) i64 {
   var c *ovid/parse.Node = s.cond
   if c.op == ovid/parse.OP_LAND {
@@ -354,7 +355,7 @@ func FreeLoop(l *L, s *ovid/parse.Node) i64 {
     return -1
   }
   var il *Loc = Local(l, i)
-  if il.decls != 1 || il.val == 0 as *ovid/parse.Node || il.val.op != ovid/parse.OP_INT || il.val.ival < 0 || !il.grows {
+  if il.decls != 1 || il.val == 0 as *ovid/parse.Node || il.val.op != ovid/parse.OP_INT || il.val.ival < 0 || il.val.ival > 2147483648 || !il.grows {
     return -1
   }
   var k i64 = -1

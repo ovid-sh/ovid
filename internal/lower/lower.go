@@ -207,17 +207,18 @@ func (l *lowerer) lenOf(n *ir.Node) string {
 
 // freeLoop says what the while statement s proves: its condition is
 // i < len(b), or i < n with n the one var len(b), where b and n are
-// never assigned, i is declared once as a var with a literal that is
-// not negative and only ever grows by one, and the body assigns i only
-// in its own top-level statements. Then b[i] is in bounds in the
-// condition and in the body's statements before the first of those,
-// which is the k returned (len(body) when there is none); ok is false
-// when s proves nothing. The step of one is what keeps i from wrapping
-// to a negative the signed condition would let through: one growth
-// from i < len(b) stays below 2^63; several in one iteration, or growth
-// outside the loop, could wrap only with a length within a few of 2^63,
-// which no memory has. The names must be locals in scope here: a
-// package constant can spell the same, and the table is by name.
+// never assigned, i is declared once as a var with a literal from 0 to
+// 2^31 and only ever grows by one, and the body assigns i only in its
+// own top-level statements. Then b[i] is in bounds in the condition and
+// in the body's statements before the first of those, which is the k
+// returned (len(body) when there is none); ok is false when s proves
+// nothing. The small start and the step of one are what keep i from
+// wrapping to a negative the signed condition would let through: one
+// growth from i < len(b) stays below 2^63; several in one iteration, or
+// growth outside the loop, could wrap only with a length within a few
+// of 2^63, which no memory has, or after 2^63 - 2^31 executed steps,
+// which no run has. The names must be locals in scope here: a package
+// constant can spell the same, and the table is by name.
 func (l *lowerer) freeLoop(s *ir.Node) (p freePair, k int, ok bool) {
 	c := s.Cond
 	if c.Op == "land" {
@@ -243,7 +244,7 @@ func (l *lowerer) freeLoop(s *ir.Node) (p freePair, k int, ok bool) {
 		return p, 0, false
 	}
 	il := l.locals[i]
-	if il == nil || il.decls != 1 || il.val == nil || il.val.Op != "int" || il.val.Int < 0 || !il.grows {
+	if il == nil || il.decls != 1 || il.val == nil || il.val.Op != "int" || il.val.Int < 0 || il.val.Int > 1<<31 || !il.grows {
 		return p, 0, false
 	}
 	k = len(s.Body)
