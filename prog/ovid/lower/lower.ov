@@ -320,11 +320,13 @@ func LenOf(l *L, n *ovid/parse.Node) bytes {
 // in its own top-level statements. Then b[i] is in bounds in the
 // condition and in the body's statements before the first of those,
 // which is the count returned (the body's length when there is none),
-// with b and i in l.fb and l.fi; -1 when s proves nothing. Growing by
-// one cannot wrap, since i < len(b) < 2^63 first; a larger step could,
-// to a negative i the signed condition lets through. The names must be
-// locals in scope here: a package constant can spell the same, and the
-// list is by name.
+// with b and i in l.fb and l.fi; -1 when s proves nothing. The step of
+// one is what keeps i from wrapping to a negative the signed condition
+// would let through: one growth from i < len(b) stays below 2^63;
+// several in one iteration, or growth outside the loop, could wrap only
+// with a length within a few of 2^63, which no memory has. The names
+// must be locals in scope here: a package constant can spell the same,
+// and the list is by name.
 func FreeLoop(l *L, s *ovid/parse.Node) i64 {
   var c *ovid/parse.Node = s.cond
   if c.op == ovid/parse.OP_LAND {
