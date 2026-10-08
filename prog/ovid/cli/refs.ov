@@ -25,6 +25,7 @@ type Target struct {
   nmatch i64
   bad *ovid/mem.Buf
   copies i64
+  name bytes
 }
 
 // Eq2 reports whether the two strings are the same.
@@ -282,15 +283,7 @@ func ByID(m *ovid/parse.Mod, t *Target, q bytes) i64 {
       return 0
     }
     t.nmatch = 1
-    if t.vn.op == ovid/parse.OP_VAR2 {
-      t.bad = ovid/mem.New(m.io, 256)
-      ovid/mem.WBytes(m.io, t.bad, q)
-      ovid/mem.WBytes(m.io, t.bad, " declares two locals, ")
-      ovid/mem.WBytes(m.io, t.bad, t.vn.name)
-      ovid/mem.WBytes(m.io, t.bad, " and ")
-      ovid/mem.WBytes(m.io, t.bad, t.vn.name2)
-      ovid/mem.WBytes(m.io, t.bad, ", and an id names only one; refs cannot reach either yet (ovid grep finds their uses)")
-    } else if t.vn.op != ovid/parse.OP_VAR {
+    if t.vn.op != ovid/parse.OP_VAR && t.vn.op != ovid/parse.OP_VAR2 {
       t.bad = ovid/mem.New(m.io, 256)
       ovid/mem.WBytes(m.io, t.bad, "refs works on funcs, types, fields, consts, params, and var statements; ")
       ovid/mem.WBytes(m.io, t.bad, q)
@@ -443,9 +436,13 @@ func Copies(t *Target) i64 {
   return n
 }
 
-// Hits reports whether use u is of target t.
+// Hits reports whether use u is of target t: of a var2 statement, of
+// the one local t.name picks, which the use's token spells.
 func Hits(t *Target, u *ovid/parse.Use) bool {
   if t.kind == T_VAR {
+    if t.vn.op == ovid/parse.OP_VAR2 && !ovid/mem.Eq(u.tok, t.name) {
+      return false
+    }
     return u.vnode == t.vn
   }
   return u.decl == t.d && u.decl != 0 as *ovid/parse.Decl
@@ -636,6 +633,22 @@ func MergeSort(a i64, tmp i64, n i64) i64 {
   return 0
 }
 
+// NameFail refuses a --name the target does not declare, as the Go refs
+// does: "<id> declares own[ and second], not <name>".
+func NameFail(io *ovid/io.Cap, t *Target, own bytes, second bytes) i64 {
+  var nb *ovid/mem.Buf = ovid/mem.New(io, 256)
+  WTarget(io, nb, t)
+  ovid/mem.WBytes(io, nb, " declares ")
+  ovid/mem.WBytes(io, nb, own)
+  if len(second) != 0 {
+    ovid/mem.WBytes(io, nb, " and ")
+    ovid/mem.WBytes(io, nb, second)
+  }
+  ovid/mem.WBytes(io, nb, ", not ")
+  ovid/mem.WBytes(io, nb, t.name)
+  return Fail(io, "not_found", ovid/mem.Bytes(nb))
+}
+
 // CmdRefs prints every use of the named decl, grouped under the file and
 // decl each use is in, then the JSON last line the Go toolchain's refs
 // prints.
@@ -684,6 +697,37 @@ func CmdRefs(io *ovid/io.Cap) i64 {
   }
   if t.bad != 0 as *ovid/mem.Buf {
     return Fail(io, "unsupported", bytes(t.bad.data, t.bad.len))
+  }
+  // --name: one of a var2's two locals, which it must be given; for any
+  // other target its own name.
+  if a.name != 0 {
+    t.name = bytes(a.name, ovid/io.CLen(a.name))
+  }
+  var own bytes = ""
+  if t.kind == T_VAR {
+    own = t.vn.name
+  } else if t.d != 0 as *ovid/parse.Decl {
+    own = t.d.name
+  }
+  if t.kind == T_VAR && t.vn.op == ovid/parse.OP_VAR2 {
+    if len(t.name) != 0 && !ovid/mem.Eq(t.name, t.vn.name) && !ovid/mem.Eq(t.name, t.vn.name2) {
+      return NameFail(io, t, own, t.vn.name2)
+    }
+    if len(t.name) == 0 {
+      var nb *ovid/mem.Buf = ovid/mem.New(io, 256)
+      WTarget(io, nb, t)
+      ovid/mem.WBytes(io, nb, " declares two locals, ")
+      ovid/mem.WBytes(io, nb, t.vn.name)
+      ovid/mem.WBytes(io, nb, " and ")
+      ovid/mem.WBytes(io, nb, t.vn.name2)
+      ovid/mem.WBytes(io, nb, "; say which with --name ")
+      ovid/mem.WBytes(io, nb, t.vn.name)
+      ovid/mem.WBytes(io, nb, " or --name ")
+      ovid/mem.WBytes(io, nb, t.vn.name2)
+      return Fail(io, "unsupported", ovid/mem.Bytes(nb))
+    }
+  } else if len(t.name) != 0 && !ovid/mem.Eq(t.name, own) {
+    return NameFail(io, t, own, "")
   }
   // The uses of t as (key, use) pairs, sorted by file and position.
   NumberFiles(m)

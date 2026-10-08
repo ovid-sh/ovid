@@ -78,7 +78,7 @@ func Outline(dir, pkg string, all, uses, ids, asJSON bool, page Page, w io.Write
 			}
 			d := declLine(m, l)
 			if res != nil && (l.Kind == "func" || l.Kind == "type" || l.Kind == "const") {
-				if rs, err := findRefs(m, res, l); err == nil {
+				if rs, err := findRefs(m, res, l, ""); err == nil {
 					d["used_by"] = usesByPkg(m, rs)
 				}
 			}
@@ -437,7 +437,7 @@ type ref struct {
 // Refs prints every use of the named declaration: as text, grouped under
 // the decl each use is in, one line per use with its line number and
 // source; as JSON (asJSON), one record per use.
-func Refs(dir, q string, asJSON bool, page Page, w io.Writer) int {
+func Refs(dir, q, name string, asJSON bool, page Page, w io.Writer) int {
 	m, err := load(dir)
 	if err != nil {
 		return fail(w, "load", err.Error(), "")
@@ -462,8 +462,11 @@ func Refs(dir, q string, asJSON bool, page Page, w io.Writer) int {
 		return fail(w, "ambiguous", q+" names several declarations", "use a full id: "+strings.Join(ids, ", "))
 	}
 	target := locs[0]
+	if _, err := pickName(target, name); err != nil {
+		return fail(w, "not_found", err.Error(), "")
+	}
 	res := check.Run(m.Prog)
-	rs, err := findRefs(m, res, target)
+	rs, err := findRefs(m, res, target, name)
 	if err != nil {
 		return fail(w, "unsupported", err.Error(), "")
 	}
@@ -527,12 +530,16 @@ func usesByPkg(m *module.Module, rs []ref) map[string]int {
 // findRefs lists the uses of target that the checker resolved to it, in
 // source order. A name the checker resolved elsewhere (a field spelled like
 // a type, a local shadowing a const) is not a use, whatever its spelling.
-func findRefs(m *module.Module, res *check.Result, target *module.Loc) ([]ref, error) {
+func findRefs(m *module.Module, res *check.Result, target *module.Loc, name string) ([]ref, error) {
+	two := false // a var2 statement: name picks which of its two locals
 	switch target.Kind {
 	case "func", "type", "field", "const", "param":
 	case "stmt":
 		if n := target.Node.(*ir.Node); n.Op == "var2" {
-			return nil, fmt.Errorf("%s declares two locals, %s and %s, and an id names only one; refs cannot reach either yet (ovid grep finds their uses)", target.ID, n.Name, n.Two.Name)
+			two = true
+			if name == "" {
+				return nil, fmt.Errorf("%s declares two locals, %s and %s; say which with --name %s or --name %s", target.ID, n.Name, n.Two.Name, n.Name, n.Two.Name)
+			}
 		} else if n.Op != "var" {
 			return nil, fmt.Errorf("refs works on funcs, types, fields, consts, params, and var statements; %s is a %s statement", target.ID, n.Op)
 		}
@@ -542,6 +549,10 @@ func findRefs(m *module.Module, res *check.Result, target *module.Loc) ([]ref, e
 	var out []ref
 	for _, u := range res.Uses {
 		if u.Target != target.ID {
+			continue
+		}
+		// The two locals of a var2 share its id: the token says which.
+		if two && string(m.Files[u.Span.File].Src[u.Span.Off:u.Span.End]) != name {
 			continue
 		}
 		r := ref{id: u.ID, kind: u.Kind, span: u.Span, tok: u.Span, decl: u.In}
@@ -567,6 +578,24 @@ func findRefs(m *module.Module, res *check.Result, target *module.Loc) ([]ref, e
 		return a.Off < b.Off
 	})
 	return out, nil
+}
+
+// pickName is the name refs or rename works on in t: name, which must be
+// one t declares, or t's own when name is empty. A var2 statement
+// declares two locals under one id, and name says which (findRefs
+// refuses it without one).
+func pickName(t *module.Loc, name string) (string, error) {
+	if n, ok := t.Node.(*ir.Node); ok && n.Op == "var2" {
+		if name == "" || name == n.Name || name == n.Two.Name {
+			return name, nil
+		}
+		return "", fmt.Errorf("%s declares %s and %s, not %s", t.ID, n.Name, n.Two.Name, name)
+	}
+	own := nameOf(t)
+	if name == "" || own == "" || name == own {
+		return own, nil
+	}
+	return "", fmt.Errorf("%s declares %s, not %s", t.ID, own, name)
 }
 
 func localNamed(fn *ir.Func, name string) bool {

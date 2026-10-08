@@ -185,11 +185,11 @@ func main() {
 		}
 		os.Exit(tool.Show(dirArg(a, 1<<30), a.pos, a.bools["ids"], a.bools["json"], a.bools["exprs"], w))
 	case "refs":
-		a := parse(cmd, argv, []string{"C", "offset", "limit"}, []string{"json"})
+		a := parse(cmd, argv, []string{"C", "name", "offset", "limit"}, []string{"json"})
 		if len(a.pos) != 1 {
-			usageErr(cmd, "usage: ovid refs <id|name> [--json] [--offset N] [--limit N]")
+			usageErr(cmd, "usage: ovid refs <id|name> [--name N] [--json] [--offset N] [--limit N]")
 		}
-		os.Exit(tool.Refs(dirArg(a, 1), a.pos[0], a.bools["json"], pageArg(cmd, a), w))
+		os.Exit(tool.Refs(dirArg(a, 1), a.pos[0], a.vals["name"], a.bools["json"], pageArg(cmd, a), w))
 	case "grep":
 		a := parse(cmd, argv, []string{"C", "pkg", "offset", "limit"}, []string{"std", "json"})
 		if len(a.pos) != 1 {
@@ -204,11 +204,11 @@ func main() {
 		}
 		os.Exit(tool.Edit(dirArg(a, 1), a.pos[0], tool.EditOpts{DryRun: a.bools["dry-run"], RequireClean: a.bools["require-clean"], AllowBroken: a.bools["allow-broken"], Show: a.bools["show"], Force: a.bools["force"], Revision: a.vals["rev"]}, w))
 	case "rename":
-		a := parse(cmd, argv, []string{"C"}, []string{"dry-run"})
+		a := parse(cmd, argv, []string{"C", "name"}, []string{"dry-run"})
 		if len(a.pos) != 2 {
-			usageErr(cmd, "usage: ovid rename <id|name> <new> [--dry-run]")
+			usageErr(cmd, "usage: ovid rename <id|name> <new> [--name N] [--dry-run]")
 		}
-		os.Exit(tool.Rename(dirArg(a, 2), a.pos[0], a.pos[1], a.bools["dry-run"], w))
+		os.Exit(tool.Rename(dirArg(a, 2), a.pos[0], a.pos[1], a.vals["name"], a.bools["dry-run"], w))
 	case "move":
 		a := parse(cmd, argv, []string{"C", "file"}, []string{"dry-run"})
 		if len(a.pos) < 2 {

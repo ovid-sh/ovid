@@ -108,7 +108,7 @@ func handle(io *ovid/io.Cap, req *ovid/http.Request, res *ovid/http.Response) i6
 		"other/x.ov": "package other\n",
 	})
 	var b bytes.Buffer
-	if code := Rename(dir, "fn:demo.handle", "serve", false, &b); code != ExitFail || !strings.Contains(b.String(), `"bad_name"`) {
+	if code := Rename(dir, "fn:demo.handle", "serve", "", false, &b); code != ExitFail || !strings.Contains(b.String(), `"bad_name"`) {
 		t.Errorf("rename: exit %d, %s", code, b.String())
 	}
 	b.Reset()

@@ -334,13 +334,15 @@ ovid show <id|name>... [--ids] [--json] [--exprs]
   line is the decl's own first line) for a decl with a doc comment, and
   "exprs":[{id,line,col,text,hash,type}]. Replace one by id to change part
   of a statement.
-ovid refs <id|name> [--json] [--offset N] [--limit N]
+ovid refs <id|name> [--name N] [--json] [--offset N] [--limit N]
   The uses in source order, grouped under "file  decl" headings, one
   "  line: source" each: the names the checker resolved to it, so a field
   or local spelled like a type, func, or const is not a use of it. --json:
   {id,kind,in,file,line,col,source} per use. Last:
   {"ok":true,target,files,by_pkg:{package: n},external} for all the uses,
-  and the paging fields for the ones printed.
+  and the paging fields for the ones printed. --name picks one of the two
+  locals of a var that receives two results (st: id), and must be given
+  for one; for any other target it must be the target's own name.
 ovid grep <regexp> [--pkg P] [--std] [--json] [--offset N] [--limit N]
   The matching lines (RE2 syntax) grouped under "file  decl" headings, one
   "  line: source" each, a line once however many matches it holds. --json:
@@ -363,12 +365,13 @@ ovid replace <id> | insert --after <id> | insert --before <id> | append <id>
   Same checks and result as ovid edit. Every op needs a guard: --expect
   (the hash of the node it names), --rev (the module revision), or --force;
   only append <pkg> goes without.
-ovid rename <id|name> <new> [--dry-run]
+ovid rename <id|name> <new> [--name N] [--dry-run]
   Rewrites the declaration's name, each use refs lists, and the first word
   of the declaration's doc comment when that is its name ("// Name ...");
   nothing else (a field, local, other comment, or string spelled the same
   is left alone; the receipt's "doc" says whether the comment changed). Refuses
-  collisions and changes that add check errors. Like move it takes no
+  collisions and changes that add check errors. --name picks one local of
+  a var that receives two results, as for refs. Like move it takes no
   --expect: it carries no code, is planned from the module as it is, and a
   replay is refused.
 ovid move <id|name>... <pkg> [--file pkg/x.ov] [--dry-run]
@@ -473,6 +476,9 @@ so get fresh ones after edits (edit returns the new ones).
   pa:P.Func.x       param
   st:P.Func:N       statement N in the func      ex:P.Func:N   expression
 
+A local is named by its var statement's st: id. A var that receives two
+results (var v i64, e i64 = f()) declares two locals under one id: refs
+and rename take --name v or --name e to say which.
 Commands that take an id also take a name: Sum, util.Sum (a trailing part of
 the package path), app/util.Sum, Pair.next (a field), Sum.n (a param).
 A hash is a short digest of a node's source text: edits use it to refuse

@@ -46,7 +46,7 @@ func TestLockTimeout(t *testing.T) {
 	}
 	// rename and move take the same lock.
 	b.Reset()
-	if code := Rename(dir, "main", "Main", false, &b); code != ExitFail || last(t, b.String())["error"] != "lock_timeout" {
+	if code := Rename(dir, "main", "Main", "", false, &b); code != ExitFail || last(t, b.String())["error"] != "lock_timeout" {
 		t.Fatalf("rename: %d %s", code, b.String())
 	}
 	// A bad override is a usage error, not a silent default.

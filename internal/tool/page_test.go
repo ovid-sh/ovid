@@ -30,7 +30,7 @@ func TestPagedCommands(t *testing.T) {
 	dir := pageMod(t)
 	cmds := map[string]func(Page, *bytes.Buffer) int{
 		"outline": func(p Page, b *bytes.Buffer) int { return Outline(dir, "demo", false, false, false, true, p, b) },
-		"refs":    func(p Page, b *bytes.Buffer) int { return Refs(dir, "One", true, p, b) },
+		"refs":    func(p Page, b *bytes.Buffer) int { return Refs(dir, "One", "", true, p, b) },
 		"grep":    func(p Page, b *bytes.Buffer) int { return Grep(dir, `return`, "", false, true, p.Offset, p.Limit, b) },
 	}
 	for name, run := range cmds {
@@ -71,7 +71,7 @@ func TestPagedCommands(t *testing.T) {
 	}
 	// An offset past the end is an empty page, not an error.
 	var b bytes.Buffer
-	if code := Refs(dir, "One", true, Page{Offset: 1000, Limit: 5}, &b); code != 0 {
+	if code := Refs(dir, "One", "", true, Page{Offset: 1000, Limit: 5}, &b); code != 0 {
 		t.Fatal(b.String())
 	}
 	if rs := lines(t, b.String()); len(rs) != 1 || rs[0]["count"] != float64(0) || rs[0]["total"] != float64(24) || rs[0]["has_more"] != false {
@@ -79,7 +79,7 @@ func TestPagedCommands(t *testing.T) {
 	}
 	// refs' summary of where the uses are covers all of them, not the page.
 	b.Reset()
-	Refs(dir, "One", true, Page{Limit: 2}, &b)
+	Refs(dir, "One", "", true, Page{Limit: 2}, &b)
 	if r := last(t, b.String()); r["by_pkg"].(map[string]any)["demo"] != float64(24) || r["count"] != float64(2) {
 		t.Fatalf("%v", r)
 	}

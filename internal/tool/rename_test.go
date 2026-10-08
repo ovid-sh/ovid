@@ -59,7 +59,7 @@ func renameText(t *testing.T, dir, q, to string, want, gone []string) []string {
 	t.Helper()
 	before := buildTo(t, dir, "before")
 	var b bytes.Buffer
-	if code := Rename(dir, q, to, false, &b); code != 0 {
+	if code := Rename(dir, q, to, "", false, &b); code != 0 {
 		t.Fatalf("rename %s %s: %s", q, to, b.String())
 	}
 	if r := last(t, b.String()); r["ok"] != true || r["check_ok"] != true {
@@ -131,7 +131,7 @@ func TestRenameTypeNotField(t *testing.T) {
 		[]string{"t.Item\n  return n.v"})
 	// And back: the module is what it was.
 	var b bytes.Buffer
-	if code := Rename(dir, "ty:demo.Item", "Node", false, &b); code != 0 {
+	if code := Rename(dir, "ty:demo.Item", "Node", "", false, &b); code != 0 {
 		t.Fatalf("rename back: %s", b.String())
 	}
 	if src := sources(t, dir); src != treeSrc {
@@ -145,7 +145,7 @@ func TestRenameTypeNotField(t *testing.T) {
 func TestRefsTypeNotField(t *testing.T) {
 	dir := mkmod(t, demo(treeSrc))
 	var b bytes.Buffer
-	if code := Refs(dir, "ty:demo.Node", true, Page{}, &b); code != 0 {
+	if code := Refs(dir, "ty:demo.Node", "", true, Page{}, &b); code != 0 {
 		t.Fatal(b.String())
 	}
 	rs := lines(t, b.String())
@@ -159,7 +159,7 @@ func TestRefsTypeNotField(t *testing.T) {
 		}
 	}
 	b.Reset()
-	if code := Refs(dir, "fld:demo.Tree.Node", true, Page{}, &b); code != 0 {
+	if code := Refs(dir, "fld:demo.Tree.Node", "", true, Page{}, &b); code != 0 {
 		t.Fatal(b.String())
 	}
 	rs = lines(t, b.String())
@@ -283,7 +283,7 @@ func main(io *ovid/io.Cap) i64 {
 }
 `))
 	var b bytes.Buffer
-	Refs(dir, "st:demo.main:3", true, Page{}, &b)
+	Refs(dir, "st:demo.main:3", "", true, Page{}, &b)
 	if s := last(t, b.String()); s["count"] != float64(1) {
 		t.Fatalf("refs of the first x: %s", b.String())
 	}
@@ -378,7 +378,7 @@ func main(io *ovid/io.Cap) i64 {
 }
 `))
 	var b bytes.Buffer
-	if code := Rename(dir, "Twice", "Double", false, &b); code != 0 {
+	if code := Rename(dir, "Twice", "Double", "", false, &b); code != 0 {
 		t.Fatal(b.String())
 	}
 	r := last(t, b.String())
@@ -392,7 +392,7 @@ func main(io *ovid/io.Cap) i64 {
 		}
 	}
 	b.Reset()
-	if code := Rename(dir, "Four", "Quad", false, &b); code != 0 {
+	if code := Rename(dir, "Four", "Quad", "", false, &b); code != 0 {
 		t.Fatal(b.String())
 	}
 	if r := last(t, b.String()); r["doc"] != false || r["edits"] != 2.0 {
@@ -404,7 +404,7 @@ func main(io *ovid/io.Cap) i64 {
 	// A tab after the slashes is leading space too.
 	dir = mkmod(t, demo("package demo\n\nimport ovid/io\n\n//\tOne is one.\nfunc One() i64 {\n  return 1\n}\n\nfunc main(io *ovid/io.Cap) i64 {\n  return One()\n}\n"))
 	b.Reset()
-	if code := Rename(dir, "One", "Uno", false, &b); code != 0 {
+	if code := Rename(dir, "One", "Uno", "", false, &b); code != 0 {
 		t.Fatal(b.String())
 	}
 	if r := last(t, b.String()); r["doc"] != true {

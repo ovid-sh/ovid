@@ -64,7 +64,7 @@ successful `show` prints a header and the source with no JSON line, and
 | `ovid test [--run substr] [--list]` | each `TestX(io *ovid/io.Cap) i64` in its own process; 0 passes; a failure names the `return` that produced it, a crash its signal (on Linux, the statement and call stack) |
 | `ovid outline [--pkg P] [--ids]` | packages, or a package's decls one line each: line and signature (a struct by its field count), with id and hash after `--ids` |
 | `ovid show <id\|name>... [--ids] [--exprs]` | source of a node (a decl with its doc comment) under a header with its id and hash; `--ids` tags each statement line with its id; a statement's expressions are listed with ids and hashes |
-| `ovid refs <id\|name>` | every use the checker resolves to a func, type, field, const, param, or local, grouped by the decl it is in |
+| `ovid refs <id\|name>` | every use the checker resolves to a func, type, field, const, param, or local, grouped by the decl it is in (`--name` picks one of the two locals a two-result `var` declares) |
 | `ovid grep <regexp>` | matching lines grouped by file and enclosing decl |
 | `--json` | on `outline`, `show`, `refs`, `grep`: one JSON record per line instead of text |
 | `--offset N`, `--limit N` | `outline`, `refs`, and `grep` print 200 records a page; the last line has `total`, `has_more`, and `next_offset` |

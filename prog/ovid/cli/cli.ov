@@ -14,6 +14,7 @@ type Args struct {
   out i64
   bad i64
   q i64
+  name i64
 }
 
 func ArgEq(io *ovid/io.Cap, i i64, lit bytes) bool {
@@ -83,17 +84,16 @@ func MkParent(io *ovid/io.Cap, path i64) i64 {
   return 0
 }
 
-// ParseArgs reads [dir] [-C dir] [--std dir] and, when allowOut, [-o out]
-// from argv[2:]. a.bad is set (and a message printed) on a usage error.
 // ParseArgs reads the command line after the command: the module dir, -C
 // DIR, --std DIR, -o OUT when allowOut, and when wantQ the first bare word
-// as the query (a.q) before the dir.
+// as the query (a.q) before the dir, and --name N (a.name). a.bad is set
+// (and a message printed) on a usage error.
 func ParseArgs(io *ovid/io.Cap, allowOut bool, wantQ bool) *Args {
   var a *Args = ovid/io.Alloc(io, sizeof(Args)) as *Args
   var i i64 = 2
   var n i64 = ovid/io.Argc(io)
   while i < n && a.bad == 0 {
-    var flag bool = ArgEq(io, i, "-C") || ArgEq(io, i, "--std") || (allowOut && ArgEq(io, i, "-o"))
+    var flag bool = ArgEq(io, i, "-C") || ArgEq(io, i, "--std") || (allowOut && ArgEq(io, i, "-o")) || (wantQ && ArgEq(io, i, "--name"))
     if flag {
       if i + 1 >= n {
         a.bad = Usage(io, "flag needs a value")
@@ -101,6 +101,8 @@ func ParseArgs(io *ovid/io.Cap, allowOut bool, wantQ bool) *Args {
         a.std = ovid/io.ArgC(io, i + 1)
       } else if ArgEq(io, i, "-o") {
         a.out = ovid/io.ArgC(io, i + 1)
+      } else if ArgEq(io, i, "--name") {
+        a.name = ovid/io.ArgC(io, i + 1)
       } else if a.dir != 0 {
         a.bad = Usage(io, "more than one module dir")
       } else {

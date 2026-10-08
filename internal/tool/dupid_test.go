@@ -215,8 +215,8 @@ func TestDuplicateIDIdentical(t *testing.T) {
 func TestDuplicateIDRefsRenameMove(t *testing.T) {
 	dir := dupMod(t, dupB)
 	for name, run := range map[string]func(*bytes.Buffer) int{
-		"refs":   func(b *bytes.Buffer) int { return Refs(dir, "F", true, Page{}, b) },
-		"rename": func(b *bytes.Buffer) int { return Rename(dir, "fn:app.F", "G", false, b) },
+		"refs":   func(b *bytes.Buffer) int { return Refs(dir, "F", "", true, Page{}, b) },
+		"rename": func(b *bytes.Buffer) int { return Rename(dir, "fn:app.F", "G", "", false, b) },
 		"move":   func(b *bytes.Buffer) int { return Move(dir, "F", "app/util", "", false, b) },
 	} {
 		var b bytes.Buffer

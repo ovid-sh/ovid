@@ -333,7 +333,11 @@ is a usage error.
 `ovid help ids` gives the id forms. Decl ids (`fn:`, `ty:`, `cn:`, `fld:`,
 `pa:`, `pkg:`, `im:`) are names and survive edits elsewhere. `st:` and `ex:`
 ids are positions, counted per function, and are renumbered by any insert or
-delete above them. `show` of a
+delete above them. A local is named by its `var` statement's `st:` id; a
+`var` that receives two results (`var v i64, e i64 = f()`) declares two
+locals under that one id, and `refs` and `rename` take `--name v` or
+`--name e` to pick one (without it they refuse with `unsupported`; a
+`--name` the target does not declare is `not_found`). `show` of a
 statement lists the `ex:` ids inside it with their hashes (`--exprs` does it
 for a whole decl), so one expression can be replaced on its own.
 
