@@ -321,7 +321,8 @@ func LenOf(l *L, n *ovid/parse.Node) bytes {
 // bounds in the condition and in the body's statements before the
 // first of those, which is the count returned (the body's length when
 // there is none), with b and i in l.fb and l.fi; -1 when s proves
-// nothing.
+// nothing. The names must be locals in scope here: a package constant
+// can spell the same, and the list is by name.
 func FreeLoop(l *L, s *ovid/parse.Node) i64 {
   var c *ovid/parse.Node = s.cond
   if c.op == ovid/parse.OP_LAND {
@@ -331,8 +332,11 @@ func FreeLoop(l *L, s *ovid/parse.Node) i64 {
     return -1
   }
   var i bytes = c.left.name
+  if !Lookup(l, i) {
+    return -1
+  }
   var b bytes = LenOf(l, c.right)
-  if len(b) == 0 && c.right.op == ovid/parse.OP_NAME && len(c.right.pkg) == 0 {
+  if len(b) == 0 && c.right.op == ovid/parse.OP_NAME && len(c.right.pkg) == 0 && Lookup(l, c.right.name) {
     var n *Loc = Local(l, c.right.name)
     if n.decls == 1 && !n.assigned && n.val != 0 as *ovid/parse.Node {
       b = LenOf(l, n.val)

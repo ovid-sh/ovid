@@ -212,7 +212,9 @@ func (l *lowerer) lenOf(n *ir.Node) string {
 // assigns i only in its own top-level statements. Then b[i] is in
 // bounds in the condition and in the body's statements before the
 // first of those, which is the k returned (len(body) when there is
-// none); ok is false when s proves nothing.
+// none); ok is false when s proves nothing. The names must be locals
+// in scope here: a package constant can spell the same, and the table
+// is by name.
 func (l *lowerer) freeLoop(s *ir.Node) (p freePair, k int, ok bool) {
 	c := s.Cond
 	if c.Op == "land" {
@@ -222,8 +224,11 @@ func (l *lowerer) freeLoop(s *ir.Node) (p freePair, k int, ok bool) {
 		return p, 0, false
 	}
 	i := c.Left.Name
+	if l.lookup(i) == "" {
+		return p, 0, false
+	}
 	b := l.lenOf(c.Right)
-	if b == "" && c.Right.Op == "name" && c.Right.Pkg == "" {
+	if b == "" && c.Right.Op == "name" && c.Right.Pkg == "" && l.lookup(c.Right.Name) != "" {
 		if n := l.locals[c.Right.Name]; n != nil && n.decls == 1 && !n.assigned && n.val != nil {
 			b = l.lenOf(n.val)
 		}
