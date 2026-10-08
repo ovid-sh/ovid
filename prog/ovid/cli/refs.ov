@@ -109,7 +109,8 @@ func HasExpr(s *ovid/parse.Node, num i64) bool {
 }
 
 // IdCopies counts the nodes the pkg:, im:, or ex: id q (colon at c)
-// names something in the module.
+// names in the module: 0 for an id that names nothing, more than 1 for
+// a duplicated one.
 func IdCopies(m *ovid/parse.Mod, q bytes, c i64) i64 {
   var rp i64 = (ptr(q) + c) + 1
   var rn i64 = (len(q) - c) - 1
