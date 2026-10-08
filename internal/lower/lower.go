@@ -212,9 +212,11 @@ func (l *lowerer) lenOf(n *ir.Node) string {
 // in its own top-level statements. Then b[i] is in bounds in the
 // condition and in the body's statements before the first of those,
 // which is the k returned (len(body) when there is none); ok is false
-// when s proves nothing. Growing by one cannot wrap, since i < len(b)
-// < 2^63 first; a larger step could, to a negative i the signed
-// condition lets through. The names must be locals in scope here: a
+// when s proves nothing. The step of one is what keeps i from wrapping
+// to a negative the signed condition would let through: one growth
+// from i < len(b) stays below 2^63; several in one iteration, or growth
+// outside the loop, could wrap only with a length within a few of 2^63,
+// which no memory has. The names must be locals in scope here: a
 // package constant can spell the same, and the table is by name.
 func (l *lowerer) freeLoop(s *ir.Node) (p freePair, k int, ok bool) {
 	c := s.Cond
