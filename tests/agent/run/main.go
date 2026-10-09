@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -253,11 +254,17 @@ func runTask(t agent.Task, i int, repo, bin, ovid, pre, model string, budget flo
 	return r
 }
 
-var ovidCmd = regexp.MustCompile(`(^|[\s;&|(])ovid\s`)
+// ovidWord is ovid as a shell word, run by its name or by a path to it
+// (/tmp/x/bin/ovid, ./bin/ovid, "$BIN/ovid"), quoted or not, followed by
+// an argument: not by an operator, as a path given to another command is
+// (ls bin/ovid && ...).
+const ovidWord = `(?:^|[\s;&|(` + "`" + `])(?:"(?:[^"]*/)?ovid"|'(?:[^']*/)?ovid'|(?:[^\s;&|()<>'"` + "`" + `]*/)?ovid)\s+`
+
+var ovidCmd = regexp.MustCompile(ovidWord + `[^\s;&|<>)]`)
 
 // ovidSub finds each ovid invocation's subcommand in a shell command,
 // past any leading -C DIR (ovid -C mod check), DIR quoted or not.
-var ovidSub = regexp.MustCompile(`(?:^|[\s;&|(])ovid\s+(?:-C\s+(?:"[^"]*"|'[^']*'|\S+)\s+)*([a-z]+)`)
+var ovidSub = regexp.MustCompile(ovidWord + `(?:-C\s+(?:"[^"]*"|'[^']*'|\S+)\s+)*([a-z]+)`)
 
 // ovidSubs counts the ovid subcommands in a shell command.
 func ovidSubs(command string, into map[string]int) {
@@ -380,7 +387,6 @@ func runAgent(ctx context.Context, work, bin, prompt, model string, budget float
 	if err != nil {
 		fatal(err)
 	}
-	ovidUse := map[string]bool{} // tool_use ids of the Bash calls that ran ovid
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	start := time.Now()
@@ -388,11 +394,24 @@ func runAgent(ctx context.Context, work, bin, prompt, model string, budget float
 		a.Stop = "start: " + err.Error()
 		return a
 	}
-	sc := bufio.NewScanner(stdout)
+	readStream(&a, stdout, tf, repo)
+	err = cmd.Wait()
+	a.Seconds = time.Since(start).Seconds()
+	if a.Stop == "" {
+		a.Stop = fmt.Sprintf("no result (%v): %s", err, cut(stderr.String(), 300))
+	}
+	return a
+}
+
+// readStream reads Claude Code's stream-json output into a, and copies
+// each line to transcript.
+func readStream(a *Agent, stream io.Reader, transcript io.Writer, repo string) {
+	ovidUse := map[string]bool{} // tool_use ids of the Bash calls that ran ovid
+	sc := bufio.NewScanner(stream)
 	sc.Buffer(make([]byte, 1<<20), 64<<20)
 	for sc.Scan() {
 		ln := sc.Bytes()
-		tf.Write(append(ln, '\n'))
+		transcript.Write(append(ln, '\n'))
 		var m struct {
 			Type    string
 			Subtype string
@@ -477,12 +496,6 @@ func runAgent(ctx context.Context, work, bin, prompt, model string, budget float
 			a.TokensOut = m.Usage.Out
 		}
 	}
-	err = cmd.Wait()
-	a.Seconds = time.Since(start).Seconds()
-	if a.Stop == "" {
-		a.Stop = fmt.Sprintf("no result (%v): %s", err, cut(stderr.String(), 300))
-	}
-	return a
 }
 
 // resultText is a tool result's text, which is a string or a list of
