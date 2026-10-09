@@ -1,0 +1,19 @@
+{
+  "check": true,
+  "tests": ["TestGoalParseValid", "TestGoalParseSyntax", "TestGoalParseRange"],
+  "runs": [
+    {"stdin": "1\n2\n3\n", "stdout": "6\n"},
+    {"stdin": "", "stdout": "0\n"},
+    {"stdin": "\n\n-5\n\n12", "stdout": "7\n"},
+    {"stdin": "9223372036854775807\n-1\n1\n", "stdout": "9223372036854775807\n"},
+    {"stdin": "-9223372036854775808\n", "stdout": "-9223372036854775808\n"},
+    {"stdin": "1\n\n2x\n", "stdout": "", "stderr": "^sum: line 3: not a number\\n$", "exit": 1},
+    {"stdin": "1\n 2\n", "stdout": "", "stderr": "^sum: line 2: not a number\\n$", "exit": 1},
+    {"stdin": "1\r\n", "stdout": "", "stderr": "^sum: line 1: not a number\\n$", "exit": 1},
+    {"stdin": "5\n-", "stdout": "", "stderr": "^sum: line 2: not a number\\n$", "exit": 1},
+    {"stdin": "1\n9223372036854775808\n", "stdout": "", "stderr": "^sum: line 2: out of range\\n$", "exit": 1},
+    {"stdin": "18446744073709551617\n", "stdout": "", "stderr": "^sum: line 1: out of range\\n$", "exit": 1},
+    {"stdin": "9223372036854775807\n1\n", "stdout": "", "stderr": "^sum: line 2: sum overflows\\n$", "exit": 1},
+    {"stdin": "-9223372036854775808\n0\n-1\n", "stdout": "", "stderr": "^sum: line 3: sum overflows\\n$", "exit": 1}
+  ]
+}
