@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -54,6 +55,39 @@ func TestOvidSubs(t *testing.T) {
 		if !reflect.DeepEqual(got, want) {
 			t.Errorf("ovidSubs(%q) = %v, want %v", cmd, got, want)
 		}
+	}
+}
+
+func TestBinDir(t *testing.T) {
+	out := t.TempDir()
+	if dir, tmp, err := binDir(out); err != nil || tmp || dir != filepath.Join(out, "bin") {
+		t.Errorf("binDir(%q) = %q, %v, %v; want out/bin", out, dir, tmp, err)
+	}
+	// A model id in the name holds the PATH list separator.
+	sep := string(os.PathListSeparator)
+	colon := filepath.Join(out, "claude-haiku-v1"+sep+"0")
+	dir, tmp, err := binDir(colon)
+	if err != nil || !tmp {
+		t.Fatalf("binDir(%q) = %q, %v, %v; want a temporary directory", colon, dir, tmp, err)
+	}
+	defer os.RemoveAll(dir)
+	if strings.Contains(dir, sep) {
+		t.Errorf("binDir(%q) = %q, which holds %q", colon, dir, sep)
+	}
+	for _, kv := range childEnv(dir) {
+		if p, ok := strings.CutPrefix(kv, "PATH="); ok && filepath.SplitList(p)[0] != dir {
+			t.Errorf("PATH = %q, want %q first", p, dir)
+		}
+	}
+	// Nowhere to put it: the temporary directory holds one too.
+	tmpdir := filepath.Join(out, "tmp"+sep+"dir")
+	if err := os.MkdirAll(tmpdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMPDIR", tmpdir)
+	if dir, _, err := binDir(colon); err == nil {
+		os.RemoveAll(dir)
+		t.Errorf("binDir(%q) with TMPDIR %q = %q, want an error", colon, tmpdir, dir)
 	}
 }
 

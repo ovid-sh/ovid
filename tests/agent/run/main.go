@@ -129,7 +129,17 @@ func main() {
 			fatal(err)
 		}
 	}
-	bin := filepath.Join(*out, "bin")
+	// go build made it, by making out/bin, when ovid was built there.
+	if err := os.MkdirAll(*out, 0o755); err != nil {
+		fatal(err)
+	}
+	bin, tmpBin, err := binDir(*out)
+	if err != nil {
+		fatal(err)
+	}
+	if tmpBin {
+		defer os.RemoveAll(bin)
+	}
 	ovid := filepath.Join(bin, "ovid")
 	if b, err := exec.Command("go", "build", "-o", ovid, "ovid/cmd/ovid").CombinedOutput(); err != nil {
 		fatal(fmt.Errorf("go build: %v\n%s", err, b))
@@ -510,6 +520,28 @@ func namesDir(s, dir string) bool {
 		}
 		from = i + 1
 	}
+}
+
+// binDir is the directory the runner builds ovid into and puts first on
+// the agents' PATH: out/bin, unless out holds the PATH list separator
+// (a model id such as ...-v1:0 does), which would split that entry in two
+// and leave ovid off PATH. Then it is a new temporary directory, which
+// the caller removes (tmp is true). A temporary directory that holds the
+// separator too is an error: there is nowhere to put ovid.
+func binDir(out string) (dir string, tmp bool, err error) {
+	sep := string(os.PathListSeparator)
+	if !strings.Contains(out, sep) {
+		return filepath.Join(out, "bin"), false, nil
+	}
+	dir, err = os.MkdirTemp("", "ovid-agent-bin-")
+	if err != nil {
+		return "", false, err
+	}
+	if strings.Contains(dir, sep) {
+		os.Remove(dir)
+		return "", false, fmt.Errorf("-out %q holds %q, the PATH list separator, and so does the temporary directory %q: there is no directory to put ovid in that PATH can name; pick another -out or TMPDIR", out, sep, dir)
+	}
+	return dir, true, nil
 }
 
 // childEnv is this process's environment with ovid first on PATH and

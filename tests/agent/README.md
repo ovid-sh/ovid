@@ -64,7 +64,9 @@ go run ./tests/agent/run -summary /tmp/ovid-agent-XXXX/results.jsonl
 Each run gets a fresh copy of `start/` in a temp directory and one Claude
 Code process per prompt (`claude -p --bare`, tools Bash, Read, Write, and
 Edit, no settings, hooks, or CLAUDE.md), with the prompt `preamble.md` +
-`task.md` and the ovid built from this checkout first on `PATH`. The two
+`task.md` and the ovid built from this checkout first on `PATH` (built
+into `-out`'s `bin/`, or into a temporary directory when `-out` holds
+`:`, `PATH`'s separator, as a Bedrock model id does). The two
 prompts of a two-writer task run at the same time in the same directory.
 The run records, per task and run: whether the goal passed and why not,
 the files changed, tool calls, ovid calls, failed calls (a tool error or a
