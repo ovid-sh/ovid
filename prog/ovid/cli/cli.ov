@@ -103,6 +103,10 @@ func ParseArgs(io *ovid/io.Cap, allowOut bool, wantQ bool) *Args {
         a.out = ovid/io.ArgC(io, i + 1)
       } else if ArgEq(io, i, "--name") {
         a.name = ovid/io.ArgC(io, i + 1)
+        if ovid/io.CLen(a.name) == 0 {
+          // An empty name would read as no --name at all.
+          a.bad = Usage(io, "--name needs a name")
+        }
       } else if a.dir != 0 {
         a.bad = Usage(io, "more than one module dir")
       } else {

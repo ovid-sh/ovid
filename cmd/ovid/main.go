@@ -23,6 +23,14 @@ import (
 var commit string
 
 // args is a parsed command line: positionals, flags with values, and bools.
+// nameArg refuses --name given empty: it picks a local by its name, and
+// an empty one would read as no --name at all.
+func nameArg(cmd string, a args) {
+	if v, ok := a.vals["name"]; ok && v == "" {
+		usageErr(cmd, "--name needs a name")
+	}
+}
+
 type args struct {
 	pos   []string
 	vals  map[string]string
@@ -189,6 +197,7 @@ func main() {
 		if len(a.pos) != 1 {
 			usageErr(cmd, "usage: ovid refs <id|name> [--name N] [--json] [--offset N] [--limit N]")
 		}
+		nameArg(cmd, a)
 		os.Exit(tool.Refs(dirArg(a, 1), a.pos[0], a.vals["name"], a.bools["json"], pageArg(cmd, a), w))
 	case "grep":
 		a := parse(cmd, argv, []string{"C", "pkg", "offset", "limit"}, []string{"std", "json"})
@@ -208,6 +217,7 @@ func main() {
 		if len(a.pos) != 2 {
 			usageErr(cmd, "usage: ovid rename <id|name> <new> [--name N] [--dry-run]")
 		}
+		nameArg(cmd, a)
 		os.Exit(tool.Rename(dirArg(a, 2), a.pos[0], a.pos[1], a.vals["name"], a.bools["dry-run"], w))
 	case "move":
 		a := parse(cmd, argv, []string{"C", "file"}, []string{"dry-run"})

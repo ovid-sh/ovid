@@ -2096,6 +2096,11 @@ func TestSelfHost(t *testing.T) {
 	// --name picks one local of a two-result var, and is refused the same
 	// way by both without one or with a name the target does not declare.
 	vmod := mkmod(t, demo("package demo\nimport ovid/io\nfunc Two(x i64) (i64, i64) {\n  return x, 0\n}\nfunc main(io *ovid/io.Cap) i64 {\n  var v i64, e i64 = Two(1)\n  v, e = Two(v + e)\n  if e != 0 {\n    return e\n  }\n  return v\n}\n"))
+	// --name given empty is a usage error for the self-hosted refs too.
+	if out, code := runIn(t, vmod, s1, "refs", "Two", ".", "--std", stdDir, "--name", ""); code != 64 || !strings.Contains(out, "--name needs a name") {
+		t.Fatalf("refs --name '': self-hosted exit %d: %s", code, out)
+	}
+
 	// _ discards a result and is no local.
 	dmod := mkmod(t, demo("package demo\nimport ovid/io\nfunc Two(x i64) (i64, i64) {\n  return x, 0\n}\nfunc main(io *ovid/io.Cap) i64 {\n  var _, e i64 = Two(1)\n  var v i64, _ = Two(e)\n  return v + e\n}\n"))
 	for _, c := range [][3]string{{"v", "st:demo.main:1", "e"}, {"v", "st:demo.main:1", "v"}, {"v", "st:demo.main:1", ""}, {"v", "st:demo.main:1", "z"}, {"v", "Two", "Three"}, {"v", "Two", "Two"},
