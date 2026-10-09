@@ -84,7 +84,11 @@ limit per agent (USD 2), `-timeout` the time limit per run (20 minutes).
 `-preamble FILE` uses another preamble in place of `preamble.md`, to
 compare two wordings on the same tasks; `preamble.guided.md` is one that
 tells the agent to navigate and edit through ovid. Each record's
-`ovid_cmds` counts its ovid calls by subcommand.
+`ovid_cmds` counts its ovid calls by subcommand, `diag_codes` the
+diagnostics their output showed the agent, by code, and `static` what the
+module's program text (its `_test.ov` files left out) spells when the
+agent is done: the `_` that discard a result, the lines that call
+`ErrText`, and the lines that write to standard error.
 
 ## Error handling
 
@@ -98,4 +102,5 @@ runs; `20-parse` asks for a func returning a value or an error. A
 prototype of another spelling swaps in its own `start/` and `solution.sh`
 for the tasks whose start spells errors, and its own
 `20-parse/inject/num/zz_goal_test.ov`, whose `GoalParse` is the only
-place that calls `ParseI64`.
+place that calls `ParseI64`. `diag_codes` and `static` are what to
+compare besides pass rate and cost.
