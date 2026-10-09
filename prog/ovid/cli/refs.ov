@@ -710,8 +710,27 @@ func CmdRefs(io *ovid/io.Cap) i64 {
     own = t.d.name
   }
   if t.kind == T_VAR && t.vn.op == ovid/parse.OP_VAR2 {
-    if len(t.name) != 0 && !ovid/mem.Eq(t.name, t.vn.name) && !ovid/mem.Eq(t.name, t.vn.name2) {
-      return NameFail(io, t, own, t.vn.name2)
+    // _ discards a result and is no local: a var2 with one declares one,
+    // which is the name when none is given.
+    var l1 bytes = t.vn.name
+    var l2 bytes = t.vn.name2
+    if ovid/mem.Eq(l1, "_") {
+      l1 = l2
+      l2 = ""
+    }
+    if ovid/mem.Eq(l2, "_") {
+      l2 = ""
+    }
+    if len(t.name) == 0 && len(l2) == 0 && len(l1) != 0 && !ovid/mem.Eq(l1, "_") {
+      t.name = l1
+    }
+    if ovid/mem.Eq(l1, "_") {
+      var db *ovid/mem.Buf = ovid/mem.New(io, 256)
+      WTarget(io, db, t)
+      ovid/mem.WBytes(io, db, " declares no local, only discards")
+      return Fail(io, "not_found", ovid/mem.Bytes(db))
+    } else if len(t.name) != 0 && !ovid/mem.Eq(t.name, l1) && (len(l2) == 0 || !ovid/mem.Eq(t.name, l2)) {
+      return NameFail(io, t, l1, l2)
     }
     if len(t.name) == 0 {
       var nb *ovid/mem.Buf = ovid/mem.New(io, 256)

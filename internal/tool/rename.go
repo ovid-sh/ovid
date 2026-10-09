@@ -77,9 +77,6 @@ func Rename(dir, q, to, name string, dryRun bool, w io.Writer) int {
 	var two *ir.Node // a var2 statement: name picks which of its locals
 	if t.Kind == "stmt" {
 		if n := t.Node.(*ir.Node); n.Op == "var2" {
-			if name == "" {
-				return fail(w, "unsupported", t.ID+" declares two locals, "+n.Name+" and "+n.Two.Name, "say which with --name "+n.Name+" or --name "+n.Two.Name)
-			}
 			two = n
 		} else if n.Op != "var" {
 			return fail(w, "unsupported", "rename works on funcs, types, fields, consts, params, and var statements; "+t.ID+" is a "+n.Op+" statement", "")
@@ -88,6 +85,9 @@ func Rename(dir, q, to, name string, dryRun bool, w io.Writer) int {
 	old, err := pickName(t, name)
 	if err != nil {
 		return fail(w, "not_found", err.Error(), "")
+	}
+	if two != nil && old == "" {
+		return fail(w, "unsupported", t.ID+" declares two locals, "+two.Name+" and "+two.Two.Name, "say which with --name "+two.Name+" or --name "+two.Two.Name)
 	}
 	if old == "" {
 		return fail(w, "unsupported", "rename works on funcs, types, fields, consts, params, and var statements, not "+t.Kind, "")

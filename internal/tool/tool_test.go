@@ -2096,14 +2096,22 @@ func TestSelfHost(t *testing.T) {
 	// --name picks one local of a two-result var, and is refused the same
 	// way by both without one or with a name the target does not declare.
 	vmod := mkmod(t, demo("package demo\nimport ovid/io\nfunc Two(x i64) (i64, i64) {\n  return x, 0\n}\nfunc main(io *ovid/io.Cap) i64 {\n  var v i64, e i64 = Two(1)\n  v, e = Two(v + e)\n  if e != 0 {\n    return e\n  }\n  return v\n}\n"))
-	for _, c := range [][2]string{{"st:demo.main:1", "e"}, {"st:demo.main:1", "v"}, {"st:demo.main:1", ""}, {"st:demo.main:1", "z"}, {"Two", "Three"}, {"Two", "Two"}} {
+	// _ discards a result and is no local.
+	dmod := mkmod(t, demo("package demo\nimport ovid/io\nfunc Two(x i64) (i64, i64) {\n  return x, 0\n}\nfunc main(io *ovid/io.Cap) i64 {\n  var _, e i64 = Two(1)\n  var v i64, _ = Two(e)\n  return v + e\n}\n"))
+	for _, c := range [][3]string{{"v", "st:demo.main:1", "e"}, {"v", "st:demo.main:1", "v"}, {"v", "st:demo.main:1", ""}, {"v", "st:demo.main:1", "z"}, {"v", "Two", "Three"}, {"v", "Two", "Two"},
+		{"d", "st:demo.main:1", ""}, {"d", "st:demo.main:1", "e"}, {"d", "st:demo.main:1", "_"}, {"d", "st:demo.main:2", ""}, {"d", "st:demo.main:2", "_"}, {"d", "st:demo.main:2", "x"}} {
+		dir := vmod
+		if c[0] == "d" {
+			dir = dmod
+		}
+		c := [2]string{c[1], c[2]}
 		b.Reset()
-		code := Refs(vmod, c[0], c[1], false, Page{}, &b)
+		code := Refs(dir, c[0], c[1], false, Page{}, &b)
 		args := []string{"refs", c[0], ".", "--std", stdDir}
 		if c[1] != "" {
 			args = append(args, "--name", c[1])
 		}
-		got, scode := runIn(t, vmod, s1, args...)
+		got, scode := runIn(t, dir, s1, args...)
 		// A refusal is compared as JSON: the self-hosted line orders its
 		// keys differently.
 		same := got == b.String()

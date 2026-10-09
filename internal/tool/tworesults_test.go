@@ -70,6 +70,47 @@ func TestTwoNameVarByName(t *testing.T) {
 	}
 }
 
+// TestTwoNameVarDiscard: _ in a var2 discards a result and is no local:
+// the statement declares one, which refs and rename reach without --name,
+// and --name _ is not_found.
+func TestTwoNameVarDiscard(t *testing.T) {
+	dir := mkmod(t, demo("package demo\nimport ovid/io\nfunc Two(x i64) (i64, i64) {\n  return x, 0\n}\nfunc main(io *ovid/io.Cap) i64 {\n  var _, e i64 = Two(1)\n  var v i64, _ = Two(e)\n  return v + e\n}\n"))
+	for _, c := range []struct {
+		id, local string
+		uses      int
+	}{{"st:demo.main:1", "e", 2}, {"st:demo.main:2", "v", 1}} {
+		var b bytes.Buffer
+		if code := Refs(dir, c.id, "", true, Page{}, &b); code != 0 || last(t, b.String())["total"] != float64(c.uses) {
+			t.Fatalf("refs %s: %d %s", c.id, code, b.String())
+		}
+		b.Reset()
+		if code := Refs(dir, c.id, c.local, true, Page{}, &b); code != 0 {
+			t.Fatalf("refs %s --name %s: %d %s", c.id, c.local, code, b.String())
+		}
+		for _, run := range []func() int{
+			func() int { return Refs(dir, c.id, "_", true, Page{}, &b) },
+			func() int { return Rename(dir, c.id, "z", "_", true, &b) },
+		} {
+			b.Reset()
+			if code := run(); code == 0 || last(t, b.String())["error"] != "not_found" {
+				t.Fatalf("--name _ on %s: %d %s", c.id, code, b.String())
+			}
+		}
+	}
+	var b bytes.Buffer
+	if code := Rename(dir, "st:demo.main:1", "err", "", false, &b); code != 0 || last(t, b.String())["edits"] != float64(3) {
+		t.Fatalf("rename the one local: %d %s", code, b.String())
+	}
+	src, _ := os.ReadFile(filepath.Join(dir, "demo/main.ov"))
+	if !strings.Contains(string(src), "  var _, err i64 = Two(1)\n  var v i64, _ = Two(err)\n  return v + err\n") {
+		t.Fatalf("after rename:\n%s", src)
+	}
+	b.Reset()
+	if code := Check(dir, false, &b); code != 0 {
+		t.Fatalf("after rename: %s", b.String())
+	}
+}
+
 // TestMoveTwoNameVarType: a func whose only use of a package is the type of
 // a var that receives two results brings that import along.
 func TestMoveTwoNameVarType(t *testing.T) {

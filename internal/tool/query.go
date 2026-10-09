@@ -462,7 +462,8 @@ func Refs(dir, q, name string, asJSON bool, page Page, w io.Writer) int {
 		return fail(w, "ambiguous", q+" names several declarations", "use a full id: "+strings.Join(ids, ", "))
 	}
 	target := locs[0]
-	if _, err := pickName(target, name); err != nil {
+	name, err = pickName(target, name)
+	if err != nil {
 		return fail(w, "not_found", err.Error(), "")
 	}
 	res := check.Run(m.Prog)
@@ -537,7 +538,9 @@ func findRefs(m *module.Module, res *check.Result, target *module.Loc, name stri
 	case "stmt":
 		if n := target.Node.(*ir.Node); n.Op == "var2" {
 			two = true
-			if name == "" {
+			if ls := var2Locals(n); name == "" && len(ls) == 1 {
+				name = ls[0]
+			} else if name == "" {
 				return nil, fmt.Errorf("%s declares two locals, %s and %s; say which with --name %s or --name %s", target.ID, n.Name, n.Two.Name, n.Name, n.Two.Name)
 			}
 		} else if n.Op != "var" {
@@ -582,20 +585,41 @@ func findRefs(m *module.Module, res *check.Result, target *module.Loc, name stri
 
 // pickName is the name refs or rename works on in t: name, which must be
 // one t declares, or t's own when name is empty. A var2 statement
-// declares two locals under one id, and name says which (findRefs
-// refuses it without one).
+// declares its locals under one id, and name says which; with two and no
+// name it is "" (findRefs refuses that). _ is a discard, not a local.
 func pickName(t *module.Loc, name string) (string, error) {
 	if n, ok := t.Node.(*ir.Node); ok && n.Op == "var2" {
-		if name == "" || name == n.Name || name == n.Two.Name {
-			return name, nil
+		ls := var2Locals(n)
+		if name == "" && len(ls) == 1 {
+			return ls[0], nil
 		}
-		return "", fmt.Errorf("%s declares %s and %s, not %s", t.ID, n.Name, n.Two.Name, name)
+		for _, l := range ls {
+			if name == "" || name == l {
+				return name, nil
+			}
+		}
+		if len(ls) == 0 {
+			return "", fmt.Errorf("%s declares no local, only discards", t.ID)
+		}
+		return "", fmt.Errorf("%s declares %s, not %s", t.ID, strings.Join(ls, " and "), name)
 	}
 	own := nameOf(t)
 	if name == "" || own == "" || name == own {
 		return own, nil
 	}
 	return "", fmt.Errorf("%s declares %s, not %s", t.ID, own, name)
+}
+
+// var2Locals are the locals a var2 statement declares: its two names but
+// _, which discards a result.
+func var2Locals(n *ir.Node) []string {
+	var ls []string
+	for _, nm := range []string{n.Name, n.Two.Name} {
+		if nm != "_" {
+			ls = append(ls, nm)
+		}
+	}
+	return ls
 }
 
 func localNamed(fn *ir.Func, name string) bool {
