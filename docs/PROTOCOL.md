@@ -189,7 +189,7 @@ below. Codes:
 | `load` | no `ovid.mod` above the directory, a module unreadable, or a bad `ovid.mod` (a `std` line is no longer accepted) | |
 | `read` | an edit file or a module file could not be read | |
 | `lock_timeout` | another command held the module lock (see Concurrency) for the whole wait; nothing was written | `file` (the locked `ovid.mod`), `waited_ms` |
-| `write` | writing failed | edit: `written_files`, the files already renamed into place |
+| `write` | writing failed after the edit was planned and checked: see When a write fails | edit, rename, move: `written_files` (the files with their new text) and `unwritten_files` (the files that kept their old text) |
 | `syntax` | the module does not parse; refs, rename, and move need a parsed module | edit: `op`, `file`, `line`, `col` of the op whose text broke it |
 | `check` | an edit would add check errors (or leave any, with `--require-clean`); nothing was written | `errors`, `errors_before`; the new diagnostics precede it |
 | `stale` | exit 2. An `expect` hash no longer matches, or the module `revision` moved, or a file changed on disk while the edit ran (or one it would create appeared) | `id`, `hash`, `text` (the current source), `decl`, `decl_hash`; `revision` for a revision guard; `id`, `copies` (as for `ambiguous_id`) when no copy of a duplicated id has the hash |
@@ -449,6 +449,30 @@ ones `ovid refs` lists; rename rewrites their name tokens, the declaration's own
 first word of its doc comment when that is the name (`doc` in the receipt),
 and `edits` counts all of them; a field, local, or declaration of the same
 spelling in another namespace is never touched.
+
+### When a write fails
+
+An edit, rename, or move is planned and checked as one, and anything that
+refuses it (a stale guard, new check errors, a file changed on disk while
+it ran) writes nothing. Writing is the last step and is not atomic across
+files: each file's new text goes to a temp file beside it and is synced,
+which changes nothing if it fails; then the files are renamed into place
+one by one, in path order, and their directories synced. So a `write`
+failure can come after some files, or all of them, have their new text:
+
+- `written_files` have the new text, `unwritten_files` the old. A rename
+  that failed leaves both lists as far as it got.
+- A directory sync that failed lists every file in `written_files` and
+  none in `unwritten_files`: the new text is in place, and the renames may
+  not survive a crash of the machine.
+- Temp files that were not renamed are removed. A process killed between
+  renames leaves its temp files (`.NAME.*.ovid-tmp`) and the partial
+  state, with no receipt.
+
+To recover, do not replay the edit: an `insert` or `append` that already
+reached its file would be applied twice. Read the module again — its
+`revision`, `outline`, or `show` of the decls the edit touched — then plan
+the rest from what is there, with fresh ids and hashes.
 
 ## Concurrency
 

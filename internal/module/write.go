@@ -7,10 +7,15 @@ import (
 )
 
 // WriteFiles replaces or creates several files as close to all-or-nothing
-// as a filesystem allows. Every new content goes to its own temp file in
-// the target's directory and is fsynced; only when all of them are written
-// are they renamed into place, and then each directory is fsynced. If a
-// rename fails, written lists the files that were already replaced. Mode 0
+// as a filesystem allows, which is not all-or-nothing. Every new content
+// goes to its own temp file in the target's directory and is fsynced; a
+// failure there changes no file. Only when all of them are written are
+// they renamed into place, one by one, in path order, and then each
+// directory is fsynced. If a rename fails, written lists the files already
+// replaced and the rest keep their old text; if a directory sync fails,
+// written lists every file, all with their new text, whose rename may not
+// yet be durable. Temp files not renamed are removed (a process killed
+// between renames leaves them, and the same partial state, behind). Mode 0
 // keeps an existing file's mode (0644 for a new one).
 func WriteFiles(files map[string][]byte, mode os.FileMode) (written []string, err error) {
 	var paths []string
@@ -36,7 +41,7 @@ func WriteFiles(files map[string][]byte, mode os.FileMode) (written []string, er
 	}
 	dirs := map[string]bool{}
 	for _, p := range paths {
-		if err := os.Rename(tmps[p], p); err != nil {
+		if err := renameFile(tmps[p], p); err != nil {
 			return written, err
 		}
 		delete(tmps, p)
@@ -44,12 +49,19 @@ func WriteFiles(files map[string][]byte, mode os.FileMode) (written []string, er
 		dirs[filepath.Dir(p)] = true
 	}
 	for d := range dirs {
-		if err := syncDir(d); err != nil {
+		if err := syncDirOf(d); err != nil {
 			return written, err
 		}
 	}
 	return written, nil
 }
+
+// renameFile and syncDirOf are WriteFiles's steps that can fail after a
+// file has changed; tests replace them to fail on purpose.
+var (
+	renameFile = os.Rename
+	syncDirOf  = syncDir
+)
 
 // ReplaceFile replaces or creates p in one step, through a temp file in its
 // directory and a rename, so a reader sees the old file or the new one and

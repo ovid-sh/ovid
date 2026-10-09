@@ -68,7 +68,7 @@ successful `show` prints a header and the source with no JSON line, and
 | `ovid grep <regexp>` | matching lines grouped by file and enclosing decl |
 | `--json` | on `outline`, `show`, `refs`, `grep`: one JSON record per line instead of text |
 | `--offset N`, `--limit N` | `outline`, `refs`, and `grep` print 200 records a page; the last line has `total`, `has_more`, and `next_offset` |
-| `ovid edit <file\|-> [--show]` | batch of replace/delete/insert/append ops, all or nothing; returns new ids and hashes |
+| `ovid edit <file\|-> [--show]` | batch of replace/delete/insert/append ops, planned and checked as one (a refused batch writes nothing); returns new ids and hashes |
 | `ovid replace <id>`, `insert --after <id>`, `append <id>`, `delete <id>` | one edit op with its code on stdin, so a heredoc needs no JSON escaping |
 | `ovid rename <id\|name> <new>` | rewrites the declaration and the uses the checker resolved to it, never a field or local spelled the same; refuses collisions and new errors |
 | `ovid move <id\|name>... <pkg>` | move decls to another (or a new) package, all or none; requalifies uses, adds imports |

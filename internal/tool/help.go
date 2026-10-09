@@ -51,7 +51,7 @@ Change code (or edit the .ov files directly; both are fine):
                                one edit, code from stdin (no JSON escaping);
                                also insert --after/--before <id>, append <id>,
                                delete <id>
-  ovid edit <file|->           id-addressed batch edit, all or nothing
+  ovid edit <file|->           id-addressed batch edit, planned and checked as one
   ovid rename <id|name> <new>  rename a decl and all its uses
   ovid move <id|name>... <pkg> move funcs/types/consts to another package
 
