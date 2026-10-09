@@ -199,7 +199,9 @@ func ResetHeap(io *Cap, m *HeapMark) i64 {
 }
 
 // Exit ends the program at once with code (the exit status is its low 8
-// bits): nothing after it runs. Ending the process is a power, so it
+// bits): nothing after it runs. ovid/io writes unbuffered, but output a
+// program holds in its own buffer (an ovid/mem.Buf not yet written) is
+// lost: write it out before. Ending the process is a power, so it
 // takes the capability, and a func that can end the program says so. It
 // never returns; its i64 result lets a fatal path read
 // return ovid/io.Exit(io, 1), with no unreachable return after it.
