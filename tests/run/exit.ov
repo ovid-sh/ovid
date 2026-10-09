@@ -1,0 +1,22 @@
+package demo
+import ovid/io
+// exit: 3
+// stdout: "before\n"
+
+// Deep finds a fatal error three calls down and ends the program there:
+// nothing after Exit runs, in it or in its callers.
+func Deep(io *ovid/io.Cap, n i64) i64 {
+  if n == 0 {
+    return ovid/io.Exit(io, 3)
+  }
+  var r i64 = Deep(io, n - 1)
+  ovid/io.Print("after\n")
+  return r
+}
+
+func main(io *ovid/io.Cap) i64 {
+  ovid/io.Print("before\n")
+  Deep(io, 3)
+  ovid/io.Print("not reached\n")
+  return 0
+}

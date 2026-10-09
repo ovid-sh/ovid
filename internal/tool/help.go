@@ -214,6 +214,8 @@ Control flow, all of it:
 
 Programs: the entry package (ovid.mod "entry") has
   func main(io *ovid/io.Cap) i64    // result is the exit code
+A fatal error deep in the calls can end the program at once instead of
+returning to main: return ovid/io.Exit(io, 1) (it never returns).
 io is the capability for argv, heap, and syscalls. syscall(...) is only
 allowed inside ovid/io; everyone else calls ovid/io funcs. ovid/io's types
 are handles: outside ovid/io a pointer to one cannot be made by a cast, cast
