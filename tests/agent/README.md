@@ -85,3 +85,17 @@ limit per agent (USD 2), `-timeout` the time limit per run (20 minutes).
 compare two wordings on the same tasks; `preamble.guided.md` is one that
 tells the agent to navigate and edit through ovid. Each record's
 `ovid_cmds` counts its ovid calls by subcommand.
+
+## Error handling
+
+`17-cp` to `20-parse` measure a way of handling errors rather than the
+toolchain: their goals only run the program (and, in `20-parse`, tests),
+so the same goal grades any spelling of errors. `17-cp` ignores failures,
+of which the user reports one; `18-calc` must carry a failure found three
+calls deep to `main`, with the line; `19-conf` does not check
+(`unused_result`), and silencing a result with `_` checks but fails the
+runs; `20-parse` asks for a func returning a value or an error. A
+prototype of another spelling swaps in its own `start/` and `solution.sh`
+for the tasks whose start spells errors, and its own
+`20-parse/inject/num/zz_goal_test.ov`, whose `GoalParse` is the only
+place that calls `ParseI64`.
