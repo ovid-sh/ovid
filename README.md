@@ -71,7 +71,7 @@ successful `show` prints a header and the source with no JSON line, and
 | `ovid edit <file\|-> [--show]` | batch of replace/delete/insert/append ops, planned and checked as one (a refused batch writes nothing); returns new ids and hashes |
 | `ovid replace <id>`, `insert --after <id>`, `append <id>`, `delete <id>` | one edit op with its code on stdin, so a heredoc needs no JSON escaping |
 | `ovid rename <id\|name> <new>` | rewrites the declaration and the uses the checker resolved to it, never a field or local spelled the same; refuses collisions and new errors |
-| `ovid move <id\|name>... <pkg>` | move decls to another (or a new) package, all or none; requalifies uses, adds imports |
+| `ovid move <id\|name>... <pkg>` | move decls to another (or a new) package, planned and checked as one (a refused move writes nothing); requalifies uses, adds imports |
 | `ovid dump [--pkg P] [-o file]` | the program tree as one JSON document (large, for tools); `--pkg` keeps one package, `-o` writes it to a file |
 
 All commands take `-C <dir>`; by default they use the module that contains
