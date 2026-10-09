@@ -14,6 +14,7 @@ NN-name/
   start_from    optional: a directory of this repository (e.g. prog) to start from, less its bin/
   start/        the starting directory (absent: start empty), copied over start_from's
   goal.json     what must hold afterwards
+  inject/       optional: more inject files (below), by module-relative path
   solution.sh   a reference solution, run with ovid on PATH
 ```
 
@@ -24,8 +25,8 @@ NN-name/
 | `root` | the module, relative to the work directory (default: the work directory) |
 | `check` | `ovid check` reports no errors |
 | `tests` | `ovid test` passes and these tests ran and passed |
-| `inject` | test files the grader adds to a copy of the module before `ovid test`, so behaviour is checked independently of the agent's own tests |
-| `runs` | the built program run with `args`, `stdin`, and `files` in its working directory, compared on `stdout` and `exit` (`files` paths may name subdirectories); `stderr`, when set, is a regexp standard error must match |
+| `inject` | test files the grader adds to a copy of the module before `ovid test`, so behaviour is checked independently of the agent's own tests; the files under the task's `inject/` are added too |
+| `runs` | the built program run with `args`, `stdin`, and `files` in its working directory, compared on `stdout` and `exit` (`files` paths may name subdirectories); `stderr`, when set, is a regexp standard error must match; `after` maps paths to the content the run must leave there, `null` for none |
 | `contains`, `lacks` | regexps over the module's `.ov` files (`file` narrows to one, `count` wants an exact number) |
 | `start_passes` | the start already meets the goal and the task is to leave it so |
 | `xfail` | `issue`, the bug that makes the reference solution fail today, and `problems`, exactly what the grader reports because of it |
