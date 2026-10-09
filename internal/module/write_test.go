@@ -46,8 +46,8 @@ func noTemps(t *testing.T, dir string) {
 // no file changes and nothing is reported written.
 func TestWriteFilesFailsBeforePublishing(t *testing.T) {
 	a, b, files := writeFixture(t)
-	// A directory where the second file's parent should be: its temp file
-	// cannot be made, after the first one was.
+	// A file where the third file's parent directory should be: making
+	// that directory fails after the first two temp files were made.
 	c := filepath.Join(filepath.Dir(a), "c")
 	if err := os.WriteFile(c, nil, 0o644); err != nil {
 		t.Fatal(err)
