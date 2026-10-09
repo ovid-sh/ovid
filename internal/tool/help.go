@@ -214,6 +214,8 @@ Control flow, all of it:
 
 Programs: the entry package (ovid.mod "entry") has
   func main(io *ovid/io.Cap) i64    // result is the exit code
+A fatal error deep in the calls can end the program at once instead of
+returning to main: return ovid/io.Exit(io, 1) (it never returns).
 io is the capability for argv, heap, and syscalls. syscall(...) is only
 allowed inside ovid/io; everyone else calls ovid/io funcs. ovid/io's types
 are handles: outside ovid/io a pointer to one cannot be made by a cast, cast
@@ -309,6 +311,8 @@ ovid test [--run substr] [--list] [--no-confine]
   each call leading to it, innermost first), and for a bad load or store
   "fault_addr"; a hung test reads "signal":"timeout".
   A test the kernel refused memory reads "error":"out_of_memory", exit 71.
+  A test that ends the program (ovid/io.Exit) instead of returning reads
+  "error":"exited" and is not ok, whatever its code.
   --list prints the tests without running them.
 ovid outline [--pkg P] [--all] [--uses] [--ids] [--json] [--offset N] [--limit N]
   Packages: "path  funcs=N types=N consts=N  imports ...  files", one a
