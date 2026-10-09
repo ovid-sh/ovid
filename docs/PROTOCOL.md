@@ -119,7 +119,14 @@ exits 71. `run` passes that through, and `test` reports the test with
 `"error":"out_of_memory"` and no `returned_by`. A test that ends the
 program itself (`ovid/io.Exit`) instead of returning is not ok whatever
 its code, since what came after the call did not run: it reads
-`"error":"exited"`, its `exit`, and no `returned_by`.
+`"error":"exited"`, its `exit`, and no `returned_by`. `test` tells the two
+apart by what the program left: no return, exit 71, and output ending with
+the runtime's `out of memory` line is out of memory; any other exit
+without a return is the test's own. A test that prints that line itself
+and then calls `ovid/io.Exit(io, 71)` therefore reads as out of memory —
+either way it is not ok. The harness reports what an honest test did; it
+does not guard against a test that imitates the runtime (a test can also
+write to the descriptor that marks its return).
 
 ## What `run` and `test` need
 
