@@ -1,0 +1,110 @@
+package conf
+
+import ovid/io
+import ovid/mem
+
+// The error codes of this package, beside ovid/io's.
+const E_NOKEY i64 = 1001
+const E_NOTNUM i64 = 1002
+const E_SYNTAX i64 = 1003
+
+// Index is the position of the first byte c in s, or -1.
+func Index(s bytes, c i64) i64 {
+  var i i64 = 0
+  while i < len(s) && s[i] != c {
+    i = i + 1
+  }
+  if i == len(s) {
+    return -1
+  }
+  return i
+}
+
+// Find returns the value of key in data, the text of a config file: one
+// NAME=VALUE a line (the last may end without a newline), blank lines
+// skipped. It returns the value of the first line whose NAME is key and
+// 0; or an empty bytes and E_SYNTAX if a line before it has no "=" or an
+// empty NAME, else E_NOKEY if no line has key.
+func Find(data bytes, key bytes) (bytes, i64) {
+  var none bytes = ""
+  var start i64 = 0
+  var i i64 = 0
+  while i <= len(data) {
+    if i == len(data) || data[i] == 10 {
+      if i > start {
+        var line bytes = data[start:i]
+        var eq i64 = Index(line, 61)
+        if eq <= 0 {
+          return none, E_SYNTAX
+        }
+        if ovid/mem.Eq(line[0:eq], key) {
+          return line[eq + 1:len(line)], 0
+        }
+      }
+      start = i + 1
+    }
+    i = i + 1
+  }
+  return none, E_NOKEY
+}
+
+// Num returns the value of s, one or more decimal digits, and 0; or 0
+// and E_NOTNUM if s is anything else or its value is over
+// 9223372036854775807.
+func Num(s bytes) (i64, i64) {
+  if len(s) == 0 {
+    return 0, E_NOTNUM
+  }
+  var v i64 = 0
+  var i i64 = 0
+  while i < len(s) {
+    var d i64 = s[i] - 48
+    if d < 0 || d > 9 || v > (9223372036854775807 - d) / 10 {
+      return 0, E_NOTNUM
+    }
+    v = v * 10 + d
+    i = i + 1
+  }
+  return v, 0
+}
+
+// Get returns the number that key is set to in the config file at path,
+// and 0; or 0 and the first error met: ovid/io's code if the file cannot
+// be read, else Find's, else Num's.
+func Get(io *ovid/io.Cap, path bytes, key bytes) (i64, i64) {
+  var data bytes = ovid/io.ReadFile(io, path)
+  var text bytes = Find(data, key)
+  return Num(text), 0
+}
+
+// Say prints "conf: WHAT: WHY" and a newline to standard error.
+func Say(what bytes, why bytes) i64 {
+  ovid/io.Eprint("conf: ")
+  ovid/io.Eprint(what)
+  ovid/io.Eprint(": ")
+  ovid/io.Eprint(why)
+  return ovid/io.Eprint("\n")
+}
+
+// main prints the number KEY is set to in the config file FILE (conf FILE
+// KEY) and a newline, and exits 0. If it cannot, it prints nothing to
+// standard output, and one line to standard error:
+//
+//   - FILE cannot be read: "conf: FILE: " and ovid/io's text for the
+//     error code (ovid/io.ErrText), exit 2;
+//   - a line before KEY's is not NAME=VALUE: "conf: FILE: bad line", exit 3;
+//   - no line sets KEY: "conf: KEY: not set", exit 4;
+//   - KEY's value is not a number: "conf: KEY: not a number", exit 5;
+//   - not two arguments: "usage: conf FILE KEY", exit 64.
+func main(io *ovid/io.Cap) i64 {
+  if ovid/io.Argc(io) != 3 {
+    ovid/io.Eprint("usage: conf FILE KEY\n")
+    return 64
+  }
+  var file bytes = ovid/io.Arg(io, 1)
+  var key bytes = ovid/io.Arg(io, 2)
+  var v i64 = Get(io, file, key)
+  ovid/io.PrintInt(io, v)
+  ovid/io.Print("\n")
+  return 0
+}

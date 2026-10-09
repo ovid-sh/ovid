@@ -1,0 +1,15 @@
+{
+  "check": true,
+  "runs": [
+    {"args": ["a.txt", "b.txt"], "files": {"a.txt": "hello\nworld\n"}, "stdout": "", "after": {"a.txt": "hello\nworld\n", "b.txt": "hello\nworld\n"}},
+    {"args": ["a.txt", "b.txt"], "files": {"a.txt": "new\n", "b.txt": "old contents\n"}, "stdout": "", "after": {"b.txt": "new\n"}},
+    {"args": ["empty", "copy"], "files": {"empty": ""}, "stdout": "", "after": {"copy": ""}},
+    {"args": ["a.txt", "sub/b.txt"], "files": {"a.txt": "x", "sub/keep": ""}, "stdout": "", "after": {"sub/b.txt": "x"}},
+    {"args": ["missing.txt", "out.txt"], "stdout": "", "stderr": "missing\\.txt", "exit": 1, "after": {"out.txt": null}},
+    {"args": ["a.txt", "nodir/out.txt"], "files": {"a.txt": "x\n"}, "stdout": "", "stderr": "nodir/out\\.txt", "exit": 1, "after": {"nodir": null}},
+    {"args": ["a.txt", "d"], "files": {"a.txt": "x\n", "d/keep": "k"}, "stdout": "", "stderr": "\\bd\\b", "exit": 1, "after": {"d/keep": "k"}},
+    {"args": ["srcdir", "out.txt"], "files": {"srcdir/inside.txt": "some text\n"}, "stdout": "", "stderr": "srcdir", "exit": 1, "after": {"out.txt": null}},
+    {"args": ["a.txt"], "files": {"a.txt": "x\n"}, "stdout": "", "stderr": "\\S", "exit": 1},
+    {"stdout": "", "stderr": "\\S", "exit": 1}
+  ]
+}

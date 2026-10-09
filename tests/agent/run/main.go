@@ -38,14 +38,19 @@ type Result struct {
 	Calls     int      `json:"calls"`
 	OvidCalls int      `json:"ovid_calls"`
 	// OvidCmds counts those calls by subcommand (check, show, edit, ...).
-	OvidCmds  map[string]int `json:"ovid_cmds,omitempty"`
-	Failed    int            `json:"failed"`
-	ReadB     int            `json:"bytes_read"`
-	WriteB    int            `json:"bytes_written"`
-	TokensIn  int            `json:"tokens_in"`
-	TokensOut int            `json:"tokens_out"`
-	CostUSD   float64        `json:"cost_usd"`
-	Seconds   float64        `json:"seconds"`
+	OvidCmds map[string]int `json:"ovid_cmds,omitempty"`
+	// DiagCodes counts the diagnostics, by code, that the ovid calls'
+	// output showed the agents (unused_result, type_mismatch, ...).
+	DiagCodes map[string]int `json:"diag_codes,omitempty"`
+	// Static is a scan of the module's program text the run left.
+	Static    Static  `json:"static"`
+	Failed    int     `json:"failed"`
+	ReadB     int     `json:"bytes_read"`
+	WriteB    int     `json:"bytes_written"`
+	TokensIn  int     `json:"tokens_in"`
+	TokensOut int     `json:"tokens_out"`
+	CostUSD   float64 `json:"cost_usd"`
+	Seconds   float64 `json:"seconds"`
 	// Outside lists tool inputs that named the repository or the exercise:
 	// a run that looked there is not a fair one.
 	Outside []string `json:"outside,omitempty"`
@@ -61,6 +66,7 @@ type Agent struct {
 	Calls     int            `json:"calls"`
 	OvidCalls int            `json:"ovid_calls"`
 	OvidCmds  map[string]int `json:"ovid_cmds,omitempty"`
+	DiagCodes map[string]int `json:"diag_codes,omitempty"`
 	Failed    int            `json:"failed"`
 	ReadB     int            `json:"bytes_read"`
 	WriteB    int            `json:"bytes_written"`
@@ -69,6 +75,17 @@ type Agent struct {
 	CostUSD   float64        `json:"cost_usd"`
 	Seconds   float64        `json:"seconds"`
 	Outside   []string       `json:"outside,omitempty"`
+}
+
+// Static counts what error handling the module's .ov files (less its
+// _test.ov files) spell, comments and string literals left out: each _
+// that discards a result, the lines that call ErrText, and the lines that
+// write to standard error (Eprint, Stderr, or a Write, WriteN, or WriteInt
+// to fd 2).
+type Static struct {
+	Discards int `json:"discards"`
+	ErrText  int `json:"errtext_lines"`
+	Stderr   int `json:"stderr_lines"`
 }
 
 // Env is what the run depends on besides the task.
@@ -139,7 +156,9 @@ func main() {
 		env.Ovid = strings.TrimSpace(string(b))
 	}
 	if b, err := exec.Command("claude", "--version").Output(); err == nil {
-		env.Claude = strings.TrimSpace(string(b))
+		// The last line: a version manager's shim may print its own first.
+		v := strings.TrimSpace(string(b))
+		env.Claude = v[strings.LastIndexByte(v, '\n')+1:]
 	}
 
 	rf, err := os.OpenFile(filepath.Join(*out, "results.jsonl"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
@@ -196,6 +215,7 @@ func runTask(t agent.Task, i int, repo, bin, ovid, pre, model string, budget flo
 	r.Seconds = time.Since(start).Seconds()
 	r.Changed = agent.Changed(before, agent.Snapshot(work))
 	r.Problems = agent.Grade(ovid, work, t.Goal)
+	r.Static = scan(filepath.Join(work, t.Goal.Root))
 	r.Pass = len(r.Problems) == 0
 	for _, a := range r.Agents {
 		r.Calls += a.Calls
@@ -205,6 +225,12 @@ func runTask(t agent.Task, i int, repo, bin, ovid, pre, model string, budget flo
 				r.OvidCmds = map[string]int{}
 			}
 			r.OvidCmds[k] += n
+		}
+		for k, n := range a.DiagCodes {
+			if r.DiagCodes == nil {
+				r.DiagCodes = map[string]int{}
+			}
+			r.DiagCodes[k] += n
 		}
 		r.Failed += a.Failed
 		r.ReadB += a.ReadB
@@ -230,6 +256,97 @@ func ovidSubs(command string, into map[string]int) {
 	}
 }
 
+// diagCodes counts the diagnostics in an ovid command's output, one JSON
+// record a line, {"fact":"error","code":...}; other lines are skipped, so
+// output an agent filtered or cut short counts what is left of it.
+func diagCodes(out string, into map[string]int) {
+	for _, ln := range strings.Split(out, "\n") {
+		ln = strings.TrimSpace(ln)
+		if !strings.HasPrefix(ln, "{") {
+			continue
+		}
+		var d struct{ Fact, Code string }
+		if json.Unmarshal([]byte(ln), &d) == nil && d.Fact == "error" && d.Code != "" {
+			into[d.Code]++
+		}
+	}
+}
+
+var (
+	errText = regexp.MustCompile(`\bErrText\s*\(`)
+	stderr  = regexp.MustCompile(`\b(Eprint|Stderr)\s*\(|\b(Write|WriteN)\s*\(\s*2\s*,|\bWriteInt\s*\([^,()]*,\s*2\s*,`)
+)
+
+// scan counts Static over the .ov files under dir.
+func scan(dir string) Static {
+	var s Static
+	filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(p, ".ov") || strings.HasSuffix(p, "_test.ov") {
+			return nil
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return nil
+		}
+		for _, ln := range strings.Split(string(b), "\n") {
+			ln = code(ln)
+			s.Discards += discards(ln)
+			if errText.MatchString(ln) {
+				s.ErrText++
+			}
+			if stderr.MatchString(ln) {
+				s.Stderr++
+			}
+		}
+		return nil
+	})
+	return s
+}
+
+// discards counts the _ that stand alone in ln, as a name, not in one.
+func discards(ln string) int {
+	word := func(i int) bool {
+		if i < 0 || i >= len(ln) {
+			return false
+		}
+		c := ln[i]
+		return c == '_' || '0' <= c && c <= '9' || 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z'
+	}
+	n := 0
+	for i := range len(ln) {
+		if ln[i] == '_' && !word(i-1) && !word(i+1) {
+			n++
+		}
+	}
+	return n
+}
+
+// code is a line of Ovid without its comment and with each string
+// literal's contents blanked.
+func code(ln string) string {
+	var b strings.Builder
+	in := false
+	for i := 0; i < len(ln); i++ {
+		c := ln[i]
+		switch {
+		case in && c == '\\':
+			i++
+		case in && c == '"':
+			in = false
+			b.WriteByte(c)
+		case in:
+		case c == '"':
+			in = true
+			b.WriteByte(c)
+		case c == '/' && i+1 < len(ln) && ln[i+1] == '/':
+			return b.String()
+		default:
+			b.WriteByte(c)
+		}
+	}
+	return b.String()
+}
+
 // runAgent runs one Claude Code process in work and reads its stream.
 func runAgent(ctx context.Context, work, bin, prompt, model string, budget float64, transcript, repo string) Agent {
 	var a Agent
@@ -253,6 +370,7 @@ func runAgent(ctx context.Context, work, bin, prompt, model string, budget float
 	if err != nil {
 		fatal(err)
 	}
+	ovidUse := map[string]bool{} // tool_use ids of the Bash calls that ran ovid
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	start := time.Now()
@@ -271,11 +389,13 @@ func runAgent(ctx context.Context, work, bin, prompt, model string, budget float
 			Model   string
 			Message struct {
 				Content []struct {
-					Type    string
-					Name    string
-					Input   json.RawMessage
-					Content json.RawMessage
-					IsError bool `json:"is_error"`
+					Type      string
+					ID        string
+					ToolUseID string `json:"tool_use_id"`
+					Name      string
+					Input     json.RawMessage
+					Content   json.RawMessage
+					IsError   bool `json:"is_error"`
 				}
 			}
 			NumTurns int     `json:"num_turns"`
@@ -312,6 +432,7 @@ func runAgent(ctx context.Context, work, bin, prompt, model string, budget float
 						a.OvidCmds = map[string]int{}
 					}
 					ovidSubs(in.Command, a.OvidCmds)
+					ovidUse[c.ID] = true
 				}
 				s := string(c.Input)
 				if namesDir(s, repo) || strings.Contains(s, "tests/agent") || strings.Contains(s, "ovid-sh") {
@@ -323,7 +444,17 @@ func runAgent(ctx context.Context, work, bin, prompt, model string, budget float
 				if c.Type != "tool_result" {
 					continue
 				}
-				a.ReadB += len(resultText(c.Content))
+				text := resultText(c.Content)
+				a.ReadB += len(text)
+				if ovidUse[c.ToolUseID] {
+					if a.DiagCodes == nil {
+						a.DiagCodes = map[string]int{}
+					}
+					diagCodes(text, a.DiagCodes)
+					if len(a.DiagCodes) == 0 {
+						a.DiagCodes = nil
+					}
+				}
 				if c.IsError {
 					a.Failed++
 				}
@@ -433,8 +564,10 @@ func summarize(path string) error {
 	sort.Strings(ms)
 	fmt.Printf("Commit %s, %s, model %s, tools %s, budget $%g per agent, run %s.\n\n",
 		env.Commit, env.Claude, strings.Join(ms, ", "), env.Tools, env.Budget, env.Date[:10])
-	fmt.Println("| task | passed | calls | ovid calls | failed calls | bytes read | bytes written | tokens in | tokens out | cost | seconds |")
-	fmt.Println("|---|---|---|---|---|---|---|---|---|---|---|")
+	fmt.Println("Medians of the passing runs, except diag codes: the diagnostics the agents' ovid calls showed, summed over all runs.")
+	fmt.Println()
+	fmt.Println("| task | passed | calls | ovid calls | failed calls | bytes read | bytes written | tokens in | tokens out | cost | seconds | diag codes | `_` | ErrText | stderr writes |")
+	fmt.Println("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
 	for _, k := range names {
 		rs := by[k]
 		var ok []Result
@@ -461,7 +594,7 @@ func summarize(path string) error {
 			}
 			return fmt.Sprint(int64(x))
 		}
-		fmt.Printf("| %s | %d/%d | %s | %s | %s | %s | %s | %s | %s | $%s | %s |\n", k, len(ok), len(rs),
+		fmt.Printf("| %s | %d/%d | %s | %s | %s | %s | %s | %s | %s | $%s | %s | %s | %s | %s | %s |\n", k, len(ok), len(rs),
 			med(func(r Result) float64 { return float64(r.Calls) }),
 			med(func(r Result) float64 { return float64(r.OvidCalls) }),
 			med(func(r Result) float64 { return float64(r.Failed) }),
@@ -470,7 +603,11 @@ func summarize(path string) error {
 			med(func(r Result) float64 { return float64(r.TokensIn) }),
 			med(func(r Result) float64 { return float64(r.TokensOut) }),
 			med(func(r Result) float64 { return r.CostUSD }),
-			med(func(r Result) float64 { return float64(int64(r.Seconds)) }))
+			med(func(r Result) float64 { return float64(int64(r.Seconds)) }),
+			codes(rs),
+			med(func(r Result) float64 { return float64(r.Static.Discards) }),
+			med(func(r Result) float64 { return float64(r.Static.ErrText) }),
+			med(func(r Result) float64 { return float64(r.Static.Stderr) }))
 	}
 	fmt.Println()
 	for _, k := range names {
@@ -484,6 +621,33 @@ func summarize(path string) error {
 		}
 	}
 	return nil
+}
+
+// codes sums the runs' diag codes as "code n" pairs, most hit first.
+func codes(rs []Result) string {
+	sum := map[string]int{}
+	for _, r := range rs {
+		for k, n := range r.DiagCodes {
+			sum[k] += n
+		}
+	}
+	if len(sum) == 0 {
+		return "–"
+	}
+	var ks []string
+	for k := range sum {
+		ks = append(ks, k)
+	}
+	sort.Slice(ks, func(i, j int) bool {
+		if sum[ks[i]] != sum[ks[j]] {
+			return sum[ks[i]] > sum[ks[j]]
+		}
+		return ks[i] < ks[j]
+	})
+	for i, k := range ks {
+		ks[i] = fmt.Sprintf("%s %d", k, sum[k])
+	}
+	return strings.Join(ks, ", ")
 }
 
 func gitOut(args ...string) (string, error) {

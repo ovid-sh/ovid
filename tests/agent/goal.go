@@ -63,6 +63,9 @@ type Run struct {
 	// Stderr, when set, is a regexp standard error must match.
 	Stderr string `json:"stderr"`
 	Exit   int    `json:"exit"`
+	// After is what the run must leave in its directory: each path's
+	// content, or null for a path that must not exist.
+	After map[string]*string `json:"after"`
 }
 
 // Match is a regexp over the module's .ov files (or one, by module-relative
@@ -110,12 +113,43 @@ func Load(dir string) ([]Task, error) {
 				return nil, fmt.Errorf("%s: %v", e.Name(), err)
 			}
 		}
+		if err := loadInject(filepath.Join(d, "inject"), &t.Goal); err != nil {
+			return nil, fmt.Errorf("%s: %v", e.Name(), err)
+		}
 		if _, err := os.Stat(filepath.Join(d, "solution.sh")); err == nil {
 			t.Solution = filepath.Join(d, "solution.sh")
 		}
 		ts = append(ts, t)
 	}
 	return ts, nil
+}
+
+// loadInject adds the files under dir, a task's inject/, to the goal's
+// Inject by module-relative path. Kept as files, a test is easy to read
+// and to swap for another spelling of the same checks.
+func loadInject(dir string, g *Goal) error {
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		return nil
+	}
+	return filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(dir, p)
+		rel = filepath.ToSlash(rel)
+		if _, dup := g.Inject[rel]; dup {
+			return fmt.Errorf("inject/%s is also in goal.json", rel)
+		}
+		if g.Inject == nil {
+			g.Inject = map[string]string{}
+		}
+		g.Inject[rel] = string(b)
+		return nil
+	})
 }
 
 // Setup fills work, which must exist: first with the directory of this
@@ -306,6 +340,28 @@ func run(exe, dir string, r Run) string {
 			msgs = append(msgs, fmt.Sprintf("bad regexp %q: %v", r.Stderr, err))
 		} else if !re.MatchString(errb.String()) {
 			msgs = append(msgs, fmt.Sprintf("stderr %q does not match %q", cut(errb.String()), r.Stderr))
+		}
+	}
+	var after []string
+	for f := range r.After {
+		after = append(after, f)
+	}
+	sort.Strings(after)
+	for _, f := range after {
+		p := filepath.Join(dir, filepath.FromSlash(f))
+		want := r.After[f]
+		if want == nil {
+			if _, err := os.Lstat(p); err == nil {
+				msgs = append(msgs, fmt.Sprintf("%s exists, want none", f))
+			}
+			continue
+		}
+		b, err := os.ReadFile(p)
+		switch {
+		case err != nil:
+			msgs = append(msgs, fmt.Sprintf("%s: %v", f, err))
+		case string(b) != *want:
+			msgs = append(msgs, fmt.Sprintf("%s holds %q, want %q", f, cut(string(b)), *want))
 		}
 	}
 	return strings.Join(msgs, "; ")
