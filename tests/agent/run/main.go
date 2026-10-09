@@ -52,8 +52,10 @@ type Result struct {
 	TokensOut int     `json:"tokens_out"`
 	CostUSD   float64 `json:"cost_usd"`
 	Seconds   float64 `json:"seconds"`
-	// Outside lists tool inputs that named the repository or the exercise:
-	// a run that looked there is not a fair one.
+	// Outside lists tool inputs that looked outside the work directory
+	// (see scope.outside): named the repository or the exercise, or
+	// listed, read, or ran something elsewhere. A run that did is not a
+	// fair one.
 	Outside []string `json:"outside,omitempty"`
 	Env     Env      `json:"env"`
 }
@@ -187,8 +189,11 @@ func main() {
 			r.Env = env
 			b, _ := json.Marshal(r)
 			rf.Write(append(b, '\n'))
-			fmt.Fprintf(os.Stderr, "%s #%d pass=%v calls=%d failed=%d cost=$%.2f %.0fs %s\n",
-				t.Name, i, r.Pass, r.Calls, r.Failed, r.CostUSD, r.Seconds, strings.Join(r.Problems, "; "))
+			fmt.Fprintf(os.Stderr, "%s #%d pass=%v calls=%d failed=%d outside=%d cost=$%.2f %.0fs %s\n",
+				t.Name, i, r.Pass, r.Calls, r.Failed, len(r.Outside), r.CostUSD, r.Seconds, strings.Join(r.Problems, "; "))
+			for _, o := range r.Outside {
+				fmt.Fprintf(os.Stderr, "  looked outside: %s\n", o)
+			}
 		}
 	}
 }
@@ -207,6 +212,7 @@ func runTask(t agent.Task, i int, repo, bin, ovid, pre, model string, budget flo
 		fatal(err)
 	}
 	before := agent.Snapshot(work)
+	home, _ := os.UserHomeDir()
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	start := time.Now()
@@ -218,7 +224,12 @@ func runTask(t agent.Task, i int, repo, bin, ovid, pre, model string, budget flo
 			defer wg.Done()
 			prompt := strings.ReplaceAll(pre, "{{dir}}", work) + p
 			tr := filepath.Join(out, "transcripts", fmt.Sprintf("%s-%c.jsonl", name, 'a'+k))
-			r.Agents[k] = runAgent(ctx, work, bin, prompt, model, budget, tr, repo)
+			// Claude Code keeps a large tool result in its config
+			// directory and has the agent Read it there.
+			results := filepath.Join(claudeConfigDir(home), "projects")
+			sc := &scope{repo: repo, work: work, home: home, allow: []string{bin, results},
+				scratch: scratchDirs(), deny: []string{out}, gitUp: gitAbove(work)}
+			r.Agents[k] = runAgent(ctx, work, bin, prompt, model, budget, tr, sc)
 			r.Agents[k].Prompt = sha(pre + p)
 		}(k, p)
 	}
@@ -365,7 +376,7 @@ func code(ln string) string {
 }
 
 // runAgent runs one Claude Code process in work and reads its stream.
-func runAgent(ctx context.Context, work, bin, prompt, model string, budget float64, transcript, repo string) Agent {
+func runAgent(ctx context.Context, work, bin, prompt, model string, budget float64, transcript string, sc *scope) Agent {
 	var a Agent
 	args := []string{"-p", "--bare", "--output-format", "stream-json", "--verbose",
 		"--tools", "Bash,Read,Write,Edit", "--permission-mode", "bypassPermissions",
@@ -394,7 +405,7 @@ func runAgent(ctx context.Context, work, bin, prompt, model string, budget float
 		a.Stop = "start: " + err.Error()
 		return a
 	}
-	readStream(&a, stdout, tf, repo)
+	readStream(&a, stdout, tf, sc)
 	err = cmd.Wait()
 	a.Seconds = time.Since(start).Seconds()
 	if a.Stop == "" {
@@ -405,12 +416,12 @@ func runAgent(ctx context.Context, work, bin, prompt, model string, budget float
 
 // readStream reads Claude Code's stream-json output into a, and copies
 // each line to transcript.
-func readStream(a *Agent, stream io.Reader, transcript io.Writer, repo string) {
+func readStream(a *Agent, stream io.Reader, transcript io.Writer, sc *scope) {
 	ovidUse := map[string]bool{} // tool_use ids of the Bash calls that ran ovid
-	sc := bufio.NewScanner(stream)
-	sc.Buffer(make([]byte, 1<<20), 64<<20)
-	for sc.Scan() {
-		ln := sc.Bytes()
+	lines := bufio.NewScanner(stream)
+	lines.Buffer(make([]byte, 1<<20), 64<<20)
+	for lines.Scan() {
+		ln := lines.Bytes()
 		transcript.Write(append(ln, '\n'))
 		var m struct {
 			Type    string
@@ -463,9 +474,8 @@ func readStream(a *Agent, stream io.Reader, transcript io.Writer, repo string) {
 					ovidSubs(in.Command, a.OvidCmds)
 					ovidUse[c.ID] = true
 				}
-				s := string(c.Input)
-				if namesDir(s, repo) || strings.Contains(s, "tests/agent") || strings.Contains(s, "ovid-sh") {
-					a.Outside = append(a.Outside, cut(s, 200))
+				if sc.outside(c.Name, c.Input) {
+					a.Outside = append(a.Outside, cut(string(c.Input), 200))
 				}
 			}
 		case "user":

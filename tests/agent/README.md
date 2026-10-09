@@ -76,9 +76,18 @@ records the commit, `ovid version`, the Claude Code version, the tools, the
 budget, and hashes of the prompts. Transcripts stay in the output
 directory; they are too large to commit.
 
-A run whose tool inputs name the repository is listed as looking outside
-its directory and left out of the medians: the agent could have read the
-goals. The summary reports each task's pass rate and the medians of its
+A run that looked outside its directory is listed as such, in the line
+printed for it and in the summary, and left out of the medians: the agent
+could have read the goals, or another run's work. A tool input looks
+outside when it names the repository or `tests/agent`; when a Read,
+Write, or Edit names a file elsewhere; when a Bash command lists, reads,
+or `cd`s elsewhere (`find`, `ls`, `cat`, `grep`, `git -C`, `ovid -C`, a
+`<` redirection, ... on an absolute path, `~`, or `..` out of the
+directory, the shell's directory followed from call to call); when it
+runs an ovid other than the one it was given; and when it runs `git` in a
+work directory that sits in a checkout. Files in `/tmp` are the agent's
+own scratch, but not `/tmp` itself, `-out`, or another run's
+`ovid-agent-*`. The summary reports each task's pass rate and the medians of its
 passing runs only, so a cheap failure does not count as progress.
 
 `-model` picks the model (default: Claude Code's), `-budget` the spending

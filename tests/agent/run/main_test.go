@@ -114,7 +114,7 @@ func TestReadStreamOvidByPath(t *testing.T) {
 			[2]string{ovid + " check", diag},
 			[2]string{"cd m && " + ovid + " -C . test", diag},
 			[2]string{"ls bin/ovid && echo " + `'{"fact":"error","code":"x"}'`, `{"fact":"error","code":"x"}`},
-		)), io.Discard, "/repo")
+		)), io.Discard, &scope{repo: "/repo", work: "/tmp/w", allow: []string{"/tmp/x:0/bin", "/tmp/my dir/bin"}})
 		want := Agent{Calls: 3, OvidCalls: 2, OvidCmds: map[string]int{"check": 1, "test": 1},
 			DiagCodes: map[string]int{"unused_result": 2}, ReadB: a.ReadB, WriteB: a.WriteB}
 		if !reflect.DeepEqual(a, want) {
