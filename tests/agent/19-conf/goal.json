@@ -1,0 +1,19 @@
+{
+  "check": true,
+  "runs": [
+    {"args": ["c.conf", "port"], "files": {"c.conf": "host=example\nport=8080\n"}, "stdout": "8080\n"},
+    {"args": ["c.conf", "port"], "files": {"c.conf": "\nport=1\nport=2"}, "stdout": "1\n"},
+    {"args": ["c.conf", "n"], "files": {"c.conf": "n=9223372036854775807"}, "stdout": "9223372036854775807\n"},
+    {"args": ["c.conf", "n"], "files": {"c.conf": "n=0\nbroken\n"}, "stdout": "0\n"},
+    {"args": ["missing.conf", "port"], "stdout": "", "stderr": "^conf: missing\\.conf: no such file or directory\\n$", "exit": 2},
+    {"args": ["dir", "port"], "files": {"dir/x": "port=1\n"}, "stdout": "", "stderr": "^conf: dir: is a directory\\n$", "exit": 2},
+    {"args": ["c.conf", "port"], "files": {"c.conf": "host=a\nbroken\nport=1\n"}, "stdout": "", "stderr": "^conf: c\\.conf: bad line\\n$", "exit": 3},
+    {"args": ["c.conf", "port"], "files": {"c.conf": "=1\nport=1\n"}, "stdout": "", "stderr": "^conf: c\\.conf: bad line\\n$", "exit": 3},
+    {"args": ["c.conf", "port"], "files": {"c.conf": "host=a\nports=1\nport="}, "stdout": "", "stderr": "^conf: port: not a number\\n$", "exit": 5},
+    {"args": ["c.conf", "port"], "files": {"c.conf": "host=a\n"}, "stdout": "", "stderr": "^conf: port: not set\\n$", "exit": 4},
+    {"args": ["c.conf", "port"], "files": {"c.conf": ""}, "stdout": "", "stderr": "^conf: port: not set\\n$", "exit": 4},
+    {"args": ["c.conf", "port"], "files": {"c.conf": "port=80x\n"}, "stdout": "", "stderr": "^conf: port: not a number\\n$", "exit": 5},
+    {"args": ["c.conf", "port"], "files": {"c.conf": "port=9223372036854775808\n"}, "stdout": "", "stderr": "^conf: port: not a number\\n$", "exit": 5},
+    {"args": ["c.conf"], "stdout": "", "stderr": "^usage: conf FILE KEY\\n$", "exit": 64}
+  ]
+}
