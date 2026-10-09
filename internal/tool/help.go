@@ -342,7 +342,8 @@ ovid refs <id|name> [--name N] [--json] [--offset N] [--limit N]
   {"ok":true,target,files,by_pkg:{package: n},external} for all the uses,
   and the paging fields for the ones printed. --name picks one of the two
   locals of a var that receives two results (st: id), and must be given
-  for one; for any other target it must be the target's own name.
+  when both names are locals (_ is a discard, not one); for any other
+  target it must be the target's own name.
 ovid grep <regexp> [--pkg P] [--std] [--json] [--offset N] [--limit N]
   The matching lines (RE2 syntax) grouped under "file  decl" headings, one
   "  line: source" each, a line once however many matches it holds. --json:
@@ -478,7 +479,8 @@ so get fresh ones after edits (edit returns the new ones).
 
 A local is named by its var statement's st: id. A var that receives two
 results (var v i64, e i64 = f()) declares two locals under one id: refs
-and rename take --name v or --name e to say which.
+and rename take --name v or --name e to say which. _ discards a result
+and is no local, so var _, e i64 = f() declares only e.
 Commands that take an id also take a name: Sum, util.Sum (a trailing part of
 the package path), app/util.Sum, Pair.next (a field), Sum.n (a param).
 A hash is a short digest of a node's source text: edits use it to refuse
