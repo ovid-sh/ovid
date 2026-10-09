@@ -10,7 +10,7 @@ import (
 )
 
 // TestWriteFailureReceipt: a write that failed partway says which files
-// have their new text and which kept the old, by module path, so an agent
+// have their new text and which were not replaced, by module path, so an agent
 // knows what to read again.
 func TestWriteFailureReceipt(t *testing.T) {
 	t.Setenv(module.PathsEnv, "module")

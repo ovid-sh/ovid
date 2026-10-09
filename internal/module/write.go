@@ -12,11 +12,12 @@ import (
 // failure there changes no file. Only when all of them are written are
 // they renamed into place, one by one, in path order, and then each
 // directory is fsynced. If a rename fails, written lists the files already
-// replaced and the rest keep their old text; if a directory sync fails,
-// written lists every file, all with their new text, whose rename may not
-// yet be durable. Temp files not renamed are removed (a process killed
-// between renames leaves them, and the same partial state, behind). Mode 0
-// keeps an existing file's mode (0644 for a new one).
+// replaced, and the rest are as they were: an existing file with its old
+// text, a new one still absent. If a directory sync fails, written lists
+// every file, all with their new text, whose rename may not yet be
+// durable. Temp files not renamed are removed (a process killed between
+// renames leaves them, and the same partial state, behind). Mode 0 keeps
+// an existing file's mode (0644 for a new one).
 func WriteFiles(files map[string][]byte, mode os.FileMode) (written []string, err error) {
 	var paths []string
 	for p := range files {

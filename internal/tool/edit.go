@@ -380,7 +380,8 @@ func commitFiles(w io.Writer, m *module.Module, loaded, files map[string][]byte)
 
 // writeFailure is the receipt of a write that failed after the plan was
 // checked: the write is not all-or-nothing, so it says which of paths
-// (sorted) were renamed into place (done) and which kept their old text.
+// (sorted) were renamed into place (done) and which were not: those keep
+// their old text, or are still absent if the edit would create them.
 func writeFailure(m *module.Module, paths, done []string, err error) map[string]any {
 	renamed := map[string]bool{}
 	written := []string{}
@@ -395,7 +396,7 @@ func writeFailure(m *module.Module, paths, done []string, err error) map[string]
 		}
 	}
 	return map[string]any{"ok": false, "error": "write", "message": err.Error(), "written_files": written, "unwritten_files": unwritten,
-		"hint": "written_files have the new text and unwritten_files the old; read the module again (its revision, outline, show) before planning anything: replaying the edit could apply it twice"}
+		"hint": "written_files have the new text; unwritten_files were not replaced (an existing file keeps its old text, a new one is still absent); read the module again (its revision, outline, show) before planning anything: replaying the edit could apply it twice"}
 }
 
 // planSplices applies splices to m's sources in memory, reparses, and
