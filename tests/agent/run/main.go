@@ -100,6 +100,14 @@ type Env struct {
 	Tools    string  `json:"tools"`
 	Budget   float64 `json:"budget_usd"`
 	Preamble string  `json:"preamble_sha256"`
+	// Confine is how the agents were confined: "bwrap", or "none".
+	Confine string `json:"confine"`
+}
+
+// launcher starts Claude Code: as the -claude command, or in a jail.
+type launcher struct {
+	claude string
+	jail   *jail // nil: not confined
 }
 
 func main() {
@@ -111,6 +119,8 @@ func main() {
 	timeout := flag.Duration("timeout", 20*time.Minute, "time limit per run")
 	summary := flag.String("summary", "", "print a Markdown table of a results.jsonl and exit")
 	preamble := flag.String("preamble", "", "the preamble file (default: tests/agent/preamble.md), to compare wordings")
+	confine := flag.Bool("confine", true, "run each agent in a bubblewrap jail that holds only its work directory, ovid, and what claude needs (Linux; elsewhere off, with a warning)")
+	claude := flag.String("claude", "claude", "the claude command; in a jail, the executable itself, not a version manager's shim")
 	flag.Parse()
 	if *summary != "" {
 		if err := summarize(*summary); err != nil {
@@ -136,6 +146,11 @@ func main() {
 	if err := os.MkdirAll(*out, 0o755); err != nil {
 		fatal(err)
 	}
+	// The jail mounts the run's directories by absolute path, and the
+	// look outside is judged against them.
+	if *out, err = filepath.Abs(*out); err != nil {
+		fatal(err)
+	}
 	bin, tmpBin, err := binDir(*out)
 	if err != nil {
 		fatal(err)
@@ -154,12 +169,32 @@ func main() {
 	if err != nil {
 		fatal(err)
 	}
+	l := launcher{claude: *claude}
+	if *confine {
+		home, _ := os.UserHomeDir()
+		if l.jail, err = newJail(*claude, home); err != nil {
+			explicit := false
+			flag.Visit(func(f *flag.Flag) { explicit = explicit || f.Name == "confine" })
+			if explicit {
+				fatal(fmt.Errorf("-confine: %v", err))
+			}
+			fmt.Fprintf(os.Stderr, "run: warning: the agents are not confined, and can read anything this user can: %v (-confine=false to run so without this warning)\n", err)
+		} else {
+			for _, w := range l.jail.warn {
+				fmt.Fprintf(os.Stderr, "run: warning: %s\n", w)
+			}
+		}
+	}
 	const tools = "Bash,Read,Write,Edit"
 	env := Env{
 		Date:     time.Now().UTC().Format(time.RFC3339),
 		Tools:    tools,
 		Budget:   *budget,
 		Preamble: sha(string(pre)),
+		Confine:  "none",
+	}
+	if l.jail != nil {
+		env.Confine = "bwrap"
 	}
 	env.Commit, _ = gitOut("rev-parse", "HEAD")
 	if s, _ := gitOut("status", "--porcelain"); s != "" {
@@ -168,7 +203,7 @@ func main() {
 	if b, err := exec.Command(ovid, "version").Output(); err == nil {
 		env.Ovid = strings.TrimSpace(string(b))
 	}
-	if b, err := exec.Command("claude", "--version").Output(); err == nil {
+	if b, err := exec.Command(*claude, "--version").Output(); err == nil {
 		// The last line: a version manager's shim may print its own first.
 		v := strings.TrimSpace(string(b))
 		env.Claude = v[strings.LastIndexByte(v, '\n')+1:]
@@ -185,7 +220,7 @@ func main() {
 			continue
 		}
 		for i := 1; i <= *n; i++ {
-			r := runTask(t, i, repo, bin, ovid, string(pre), *model, *budget, *timeout, *out)
+			r := runTask(l, t, i, repo, bin, ovid, string(pre), *model, *budget, *timeout, *out)
 			r.Env = env
 			b, _ := json.Marshal(r)
 			rf.Write(append(b, '\n'))
@@ -198,7 +233,7 @@ func main() {
 	}
 }
 
-func runTask(t agent.Task, i int, repo, bin, ovid, pre, model string, budget float64, timeout time.Duration, out string) Result {
+func runTask(l launcher, t agent.Task, i int, repo, bin, ovid, pre, model string, budget float64, timeout time.Duration, out string) Result {
 	r := Result{Task: t.Name, Run: i}
 	name := fmt.Sprintf("%s-%d", t.Name, i)
 	work := filepath.Join(out, "work", name)
@@ -229,7 +264,7 @@ func runTask(t agent.Task, i int, repo, bin, ovid, pre, model string, budget flo
 			results := filepath.Join(claudeConfigDir(home), "projects")
 			sc := &scope{repo: repo, work: work, home: home, allow: []string{bin, results},
 				scratch: scratchDirs(), deny: []string{out}, gitUp: gitAbove(work)}
-			r.Agents[k] = runAgent(ctx, work, bin, prompt, model, budget, tr, sc)
+			r.Agents[k] = runAgent(ctx, l, work, bin, prompt, model, budget, tr, sc)
 			r.Agents[k].Prompt = sha(pre + p)
 		}(k, p)
 	}
@@ -376,7 +411,7 @@ func code(ln string) string {
 }
 
 // runAgent runs one Claude Code process in work and reads its stream.
-func runAgent(ctx context.Context, work, bin, prompt, model string, budget float64, transcript string, sc *scope) Agent {
+func runAgent(ctx context.Context, l launcher, work, bin, prompt, model string, budget float64, transcript string, sc *scope) Agent {
 	var a Agent
 	args := []string{"-p", "--bare", "--output-format", "stream-json", "--verbose",
 		"--tools", "Bash,Read,Write,Edit", "--permission-mode", "bypassPermissions",
@@ -385,9 +420,13 @@ func runAgent(ctx context.Context, work, bin, prompt, model string, budget float
 		args = append(args, "--model", model)
 	}
 	args = append(args, prompt)
-	cmd := exec.CommandContext(ctx, "claude", args...)
+	cmd := exec.CommandContext(ctx, l.claude, args...)
 	cmd.Dir = work
 	cmd.Env = childEnv(bin)
+	if l.jail != nil {
+		cmd = l.jail.command(ctx, work, bin, append([]string{l.jail.exe}, args...))
+		cmd.Env = jailEnv(childEnv(bin), l.jail.pathEnv(bin), work)
+	}
 	os.MkdirAll(filepath.Dir(transcript), 0o755)
 	tf, err := os.Create(transcript)
 	if err != nil {

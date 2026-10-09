@@ -76,6 +76,21 @@ records the commit, `ovid version`, the Claude Code version, the tools, the
 budget, and hashes of the prompts. Transcripts stay in the output
 directory; they are too large to commit.
 
+On Linux each Claude Code process runs in a jail (`-confine`, on by
+default): a bubblewrap mount namespace, made without root, that holds the
+system read-only, a private `/proc`, `/dev`, and `/tmp`, an empty home
+directory, and of the rest only the work directory (read-write), ovid's
+bin directory, the claude executable, Claude Code's configuration
+directory (read-write), and for Bedrock `~/.aws` (read-only); the
+network is the host's. The output directory, other runs, the repository,
+and the rest of the home directory are not there to find. bwrap must be
+installed and unprivileged user namespaces allowed; claude must be the
+executable itself (`-claude`; a mise shim is resolved with `mise which`).
+Set `CLAUDE_CONFIG_DIR` to a directory of the exercise's own: without it
+the jail holds `~/.claude`. Elsewhere (macOS) the agents run unconfined,
+with a warning, and `-confine` given explicitly is an error. Each
+record's `env.confine` says which.
+
 A run that looked outside its directory is listed as such, in the line
 printed for it and in the summary, and left out of the medians: the agent
 could have read the goals, or another run's work. A tool input looks
