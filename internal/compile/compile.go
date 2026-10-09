@@ -144,7 +144,12 @@ type sig struct {
 	result string
 }
 
+// loopLabels are a while's: its test, where continue goes, and the end
+// past it, where break goes.
+type loopLabels struct{ test, end int }
+
 type cg struct {
+	loops      []loopLabels // the whiles being emitted, innermost last
 	prog       *ir.Program
 	b          asm.Buf
 	ro         []byte
@@ -1034,11 +1039,21 @@ func (c *cg) emitStmt(s *ir.Node) error {
 		}
 		c.b.Mark(end)
 		return nil
+	case "break", "continue":
+		// The innermost while's: continue goes to its test, break past it.
+		l := c.loops[len(c.loops)-1]
+		if s.Op == "break" {
+			c.b.Jmp(l.end)
+		} else {
+			c.b.Jmp(l.test)
+		}
+		return nil
 	case "while":
 		// The condition sits below the body, so each turn of the loop
 		// takes one jump: jmp test; body: ...; test: if cond goto body.
 		body := c.b.NewLabel()
 		test := c.b.NewLabel()
+		end := c.b.NewLabel()
 		c.b.Jmp(test)
 		// The body starts on a 32-byte boundary, so where the loop falls
 		// does not decide how fast it runs. The padding follows a jmp and
@@ -1047,14 +1062,21 @@ func (c *cg) emitStmt(s *ir.Node) error {
 			c.b.Int3()
 		}
 		c.b.Mark(body)
-		if err := c.emitStmts(s.Body); err != nil {
+		c.loops = append(c.loops, loopLabels{test: test, end: end})
+		err := c.emitStmts(s.Body)
+		c.loops = c.loops[:len(c.loops)-1]
+		if err != nil {
 			return err
 		}
 		// The test is the while statement's code, not its body's last
 		// statement's: a fault in the condition is reported at the while.
 		c.mark(s.ID)
 		c.b.Mark(test)
-		return c.emitJump(s.Cond, 0, body, true)
+		if err := c.emitJump(s.Cond, 0, body, true); err != nil {
+			return err
+		}
+		c.b.Mark(end)
+		return nil
 	default:
 		return fmt.Errorf("stmt %s", s.Op)
 	}

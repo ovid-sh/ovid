@@ -1,0 +1,100 @@
+package demo
+import ovid/io
+// exit: 0
+// stdout: "ok\n"
+
+// break ends the innermost while, continue starts its next turn.
+
+// Sum adds 1..9 but 3, stopping before 8: continue skips, break ends.
+func Sum() i64 {
+  var s i64 = 0
+  var i i64 = 0
+  while i < 10 {
+    i = i + 1
+    if i == 3 {
+      continue
+    }
+    if i == 8 {
+      break
+    }
+    s = s + i
+  }
+  return s
+}
+
+// Nested: the inner break leaves only the inner loop, and the inner
+// continue restarts only it.
+func Nested() i64 {
+  var n i64 = 0
+  var i i64 = 0
+  while i < 4 {
+    i = i + 1
+    var j i64 = 0
+    while true {
+      j = j + 1
+      if j == 2 {
+        continue
+      }
+      if j > i {
+        break
+      }
+      n = n + 1
+    }
+  }
+  return n
+}
+
+func Word(io *ovid/io.Cap) bytes {
+  var b bytes = ovid/io.AllocBytes(io, 5)
+  b[0] = 104
+  b[1] = 101
+  b[2] = 108
+  b[3] = 108
+  b[4] = 111
+  return b
+}
+
+// Called: the condition calls a func that returns bytes, so the lowering
+// rewrites the loop; continue must still run the condition's calls again.
+func Called(io *ovid/io.Cap) i64 {
+  var i i64 = 0
+  var k i64 = 0
+  while i < len(Word(io)) {
+    i = i + 1
+    if i % 2 == 0 {
+      continue
+    }
+    k = k + 1
+  }
+  return k
+}
+
+// Find stops at the first l: a loop whose index needs no bounds check.
+func Find(b bytes) i64 {
+  var i i64 = 0
+  while i < len(b) {
+    if b[i] == 108 {
+      break
+    }
+    i = i + 1
+  }
+  return i
+}
+
+func main(io *ovid/io.Cap) i64 {
+  if Sum() != 1 + 2 + 4 + 5 + 6 + 7 {
+    return 1
+  }
+  // i = 1: j = 1 counts; i = 2: j = 1; i = 3: j = 1, 3; i = 4: j = 1, 3, 4.
+  if Nested() != 1 + 1 + 2 + 3 {
+    return 2
+  }
+  if Called(io) != 3 {
+    return 3
+  }
+  if Find("hello") != 2 || Find("xyz") != 3 {
+    return 4
+  }
+  ovid/io.Print("ok\n")
+  return 0
+}

@@ -2442,14 +2442,8 @@ func TestHints(t *testing.T) {
 	if ds := lines(t, b0.String()); ds[0]["message"] != "sizeof(i64) is always 8" || !strings.Contains(ds[1]["message"].(string), "unknown type demo.Nope") {
 		t.Fatalf("sizeof %v", ds)
 	}
-	dir := mkmod(t, demo("package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  while true {\n    break\n  }\n  return 0\n}\n"))
+	dir := mkmod(t, demo("package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  var x i64 = 1\n  F(&x)\n  return 0\n}\n"))
 	var b bytes.Buffer
-	Check(dir, false, &b)
-	if d := lines(t, b.String())[0]; d["message"] != "there is no break" || !strings.Contains(d["hint"].(string), "flag") {
-		t.Fatalf("break %v", d)
-	}
-	dir = mkmod(t, demo("package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  var x i64 = 1\n  F(&x)\n  return 0\n}\n"))
-	b.Reset()
 	Check(dir, false, &b)
 	if d := lines(t, b.String())[0]; !strings.Contains(d["message"].(string), "no address-of") {
 		t.Fatalf("& %v", d)

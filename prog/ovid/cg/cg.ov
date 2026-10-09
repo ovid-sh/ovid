@@ -23,6 +23,8 @@ const LOC_REG i64 = 48
 // failure, and msg says what it was. tregs holds the ntregs registers
 // for temps at levels 0, 1, ...; mshift is the shift Magic computed.
 type C struct {
+  ltest i64
+  lend i64
   io *ovid/io.Cap
   code *ovid/asm.Code
   mod *ovid/parse.Mod
@@ -2247,11 +2249,20 @@ func EmitStmt(c *C, s *ovid/parse.Node) i64 {
     ovid/asm.Mark(c.code, end)
     return 0
   }
+  if op == ovid/parse.OP_BREAK {
+    // The innermost while's end, past its test.
+    return ovid/asm.Jmp(c.code, c.lend)
+  }
+  if op == ovid/parse.OP_CONTINUE {
+    // The innermost while's test.
+    return ovid/asm.Jmp(c.code, c.ltest)
+  }
   if op == ovid/parse.OP_WHILE {
     // The condition sits below the body, so each turn of the loop takes
     // one jump: jmp test; body: ...; test: if cond goto body.
     var top i64 = ovid/asm.NewLabel(c.code)
     var test i64 = ovid/asm.NewLabel(c.code)
+    var end i64 = ovid/asm.NewLabel(c.code)
     ovid/asm.Jmp(c.code, test)
     // The body starts on a 32-byte boundary, so where the loop falls does
     // not decide how fast it runs. The padding follows a jmp and never
@@ -2260,11 +2271,24 @@ func EmitStmt(c *C, s *ovid/parse.Node) i64 {
       ovid/asm.Int3(c.code)
     }
     ovid/asm.Mark(c.code, top)
-    if EmitStmts(c, s.body) != 0 {
+    // break and continue in the body go to this loop's labels; an outer
+    // loop's come back after it.
+    var otest i64 = c.ltest
+    var oend i64 = c.lend
+    c.ltest = test
+    c.lend = end
+    var berr i64 = EmitStmts(c, s.body)
+    c.ltest = otest
+    c.lend = oend
+    if berr != 0 {
       return c.err
     }
     ovid/asm.Mark(c.code, test)
-    return EmitJump(c, s.cond, 0, top, true)
+    if EmitJump(c, s.cond, 0, top, true) != 0 {
+      return c.err
+    }
+    ovid/asm.Mark(c.code, end)
+    return 0
   }
   return FailIn(c, "bad stmt op in ")
 }

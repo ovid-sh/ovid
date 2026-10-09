@@ -3,9 +3,10 @@ package ovid/parse
 import ovid/io
 import ovid/mem
 
-// Op codes. Statements are 1..OP_CHK (IsStmt); everything else is an
-// expression, and the binary operators (OP_LOR and up) come after every
-// other expression, so EvalConst can tell them apart by number.
+// Op codes. Statements are 1..OP_CHK and OP_BREAK, OP_CONTINUE (IsStmt);
+// everything else is an expression, and the binary operators (OP_LOR to
+// OP_SHR) come after every other expression, so EvalConst can tell them
+// apart by number.
 const OP_VAR i64 = 1
 const OP_VAR2 i64 = 2
 const OP_ASSIGN i64 = 3
@@ -73,6 +74,8 @@ const OP_MOD i64 = 64
 const OP_AND i64 = 65
 const OP_SHL i64 = 66
 const OP_SHR i64 = 67
+const OP_BREAK i64 = 68
+const OP_CONTINUE i64 = 69
 
 // LoadOp, StoreOp, and BswapOp group the memory and byte-order builtins;
 // OpWidth is the width in bits of one of them.
@@ -82,7 +85,7 @@ func LoadOp(op i64) bool {
 
 // IsStmt says whether op names a statement.
 func IsStmt(op i64) bool {
-  return op >= OP_VAR && op <= OP_CHK
+  return (op >= OP_VAR && op <= OP_CHK) || op == OP_BREAK || op == OP_CONTINUE
 }
 
 func StoreOp(op i64) bool {
@@ -872,6 +875,12 @@ func Stmt(p *P, s i64, id i64) *Node {
   if Kw(p, "return") {
     return ParseReturn(p)
   }
+  if Kw(p, "break") {
+    return NewNode(p, OP_BREAK)
+  }
+  if Kw(p, "continue") {
+    return NewNode(p, OP_CONTINUE)
+  }
   if PeekKw(p, "store8") || PeekKw(p, "store16") || PeekKw(p, "store32") || PeekKw(p, "store64") {
     Ident(p)
     var op i64 = OP_STORE8
@@ -1008,7 +1017,7 @@ func ParseReturn(p *P) *Node {
   if p.i >= len(p.src) || p.nl || At(p, p.i) == 125 {
     return n
   }
-  if PeekKw(p, "var") || PeekKw(p, "if") || PeekKw(p, "while") || PeekKw(p, "return") || PeekKw(p, "store8") || PeekKw(p, "store16") || PeekKw(p, "store32") || PeekKw(p, "store64") {
+  if PeekKw(p, "var") || PeekKw(p, "if") || PeekKw(p, "while") || PeekKw(p, "return") || PeekKw(p, "break") || PeekKw(p, "continue") || PeekKw(p, "store8") || PeekKw(p, "store16") || PeekKw(p, "store32") || PeekKw(p, "store64") {
     return n
   }
   n.val = ParseExpr(p)

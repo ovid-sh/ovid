@@ -1,0 +1,15 @@
+package demo
+import ovid/io
+func Stray(x i64) i64 {
+  if x > 0 {
+    break // error: outside_loop 5
+  }
+  continue // error: outside_loop 3
+  return x
+}
+func main(io *ovid/io.Cap) i64 {
+  while true {
+    break
+  }
+  return Stray(1)
+}
