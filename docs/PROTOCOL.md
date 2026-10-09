@@ -456,8 +456,10 @@ An edit, rename, or move is planned and checked as one, and anything that
 refuses it (a stale guard, new check errors, a file changed on disk while
 it ran) writes nothing. Writing is the last step and is not atomic across
 files: each file's new text goes to a temp file beside it and is synced,
-which changes nothing if it fails; then the files are renamed into place
-one by one, in path order, and their directories synced. So a `write`
+which changes no file if it fails (a new package's directory may already
+have been made, and stays, empty: not a package until it holds a `.ov`
+file); then the files are renamed into place one by one, in path order,
+and their directories synced. So a `write`
 failure can come after some files, or all of them, have their new text:
 
 - `written_files` have the new text. `unwritten_files` were not replaced:
