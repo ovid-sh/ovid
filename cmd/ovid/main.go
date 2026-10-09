@@ -23,19 +23,19 @@ import (
 var commit string
 
 // args is a parsed command line: positionals, flags with values, and bools.
+type args struct {
+	pos   []string
+	vals  map[string]string
+	bools map[string]bool
+	rest  []string // after --
+}
+
 // nameArg refuses --name given empty: it picks a local by its name, and
 // an empty one would read as no --name at all.
 func nameArg(cmd string, a args) {
 	if v, ok := a.vals["name"]; ok && v == "" {
 		usageErr(cmd, "--name needs a name")
 	}
-}
-
-type args struct {
-	pos   []string
-	vals  map[string]string
-	bools map[string]bool
-	rest  []string // after --
 }
 
 func usageErr(cmd, msg string) {
