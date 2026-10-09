@@ -37,7 +37,7 @@ func Usage(io *ovid/io.Cap, msg bytes) i64 {
   var b *ovid/mem.Buf = ovid/mem.New(io, 1024)
   ovid/mem.WBytes(io, b, "{\"ok\":false,\"error\":\"usage\",\"message\":")
   ovid/parse.WStr(io, b, msg)
-  ovid/mem.WBytes(io, b, ",\"usage\":\"ovid check [dir] [--std dir] | ovid build [dir] [-o out] [--std dir] | ovid dump [dir] [--std dir] | ovid refs <id|name> [dir] [--std dir]; dir defaults to . and may also be given as -C dir; out defaults to <dir>/bin/<module name>; --std names the directory holding the shipped packages (ovid/io, ovid/mem)\"}\n")
+  ovid/mem.WBytes(io, b, ",\"usage\":\"ovid check [dir] [--std dir] | ovid build [dir] [-o out] [--std dir] | ovid dump [dir] [--std dir] | ovid refs <id|name> [dir] [--name N] [--std dir]; dir defaults to . and may also be given as -C dir; out defaults to <dir>/bin/<module name>; --std names the directory holding the shipped packages (ovid/io, ovid/mem)\"}\n")
   ovid/io.Stdout(bytes(b.data, b.len))
   return 64
 }
