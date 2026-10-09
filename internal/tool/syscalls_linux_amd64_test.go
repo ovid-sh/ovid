@@ -435,3 +435,44 @@ func main(io *ovid/io.Cap) i64 {
 		t.Fatalf("TestReturns71: %v", plain)
 	}
 }
+
+// TestTestReportsExit: a test that ends the program with ovid/io.Exit
+// instead of returning is not ok, even with 0, and is not blamed on a
+// return statement; with 71 and no out-of-memory message it is not taken
+// for one either.
+func TestTestReportsExit(t *testing.T) {
+	dir := mkmod(t, demo(`package demo
+import ovid/io
+func Stop(io *ovid/io.Cap, code i64) i64 {
+  return ovid/io.Exit(io, code)
+}
+func TestExitZero(io *ovid/io.Cap) i64 {
+  Stop(io, 0)
+  return 1
+}
+func TestExit71(io *ovid/io.Cap) i64 {
+  Stop(io, 71)
+  return 0
+}
+func main(io *ovid/io.Cap) i64 {
+  return 0
+}
+`))
+	var b bytes.Buffer
+	if code := Test(dir, "", false, &b); code != ExitFail {
+		t.Fatalf("exit %d:\n%s", code, b.String())
+	}
+	rs := lines(t, b.String())
+	if len(rs) != 3 {
+		t.Fatalf("want two tests and a summary:\n%s", b.String())
+	}
+	for i, want := range []float64{71, 0} { // in name order
+		r := rs[i]
+		if r["ok"] != false || r["error"] != "exited" || r["exit"] != want || r["returned_by"] != nil {
+			t.Fatalf("test %d: %v", i, r)
+		}
+	}
+	if s := rs[2]; s["passed"] != float64(0) || s["failed"] != float64(2) {
+		t.Fatalf("summary: %v", s)
+	}
+}

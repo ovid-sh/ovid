@@ -116,7 +116,10 @@ number if a signal killed it, so any value is possible there.
 An Ovid program that the kernel refuses memory, for its heap's first region
 at startup or for a later `Alloc`, writes `out of memory` to stderr and
 exits 71. `run` passes that through, and `test` reports the test with
-`"error":"out_of_memory"` and no `returned_by`.
+`"error":"out_of_memory"` and no `returned_by`. A test that ends the
+program itself (`ovid/io.Exit`) instead of returning is not ok whatever
+its code, since what came after the call did not run: it reads
+`"error":"exited"`, its `exit`, and no `returned_by`.
 
 ## What `run` and `test` need
 

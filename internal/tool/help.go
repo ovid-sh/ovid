@@ -311,6 +311,8 @@ ovid test [--run substr] [--list] [--no-confine]
   each call leading to it, innermost first), and for a bad load or store
   "fault_addr"; a hung test reads "signal":"timeout".
   A test the kernel refused memory reads "error":"out_of_memory", exit 71.
+  A test that ends the program (ovid/io.Exit) instead of returning reads
+  "error":"exited" and is not ok, whatever its code.
   --list prints the tests without running them.
 ovid outline [--pkg P] [--all] [--uses] [--ids] [--json] [--offset N] [--limit N]
   Packages: "path  funcs=N types=N consts=N  imports ...  files", one a

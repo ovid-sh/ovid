@@ -171,7 +171,10 @@ func TestWith(dir string, o TestOpts, w io.Writer) int {
 		file, a, _, _ := m.Where(t.span)
 		r["file"], r["line"] = file, a.Line
 		code := pr.code
-		ok := pr.exited && code == 0
+		// A test passes by returning 0: one that ended the program
+		// (ovid/io.Exit) skipped what came after the call, whatever code
+		// it gave.
+		ok := pr.exited && code == 0 && returned
 		switch {
 		case pr.timedOut:
 			r["signal"] = "timeout"
@@ -181,16 +184,23 @@ func TestWith(dir string, o TestOpts, w io.Writer) int {
 			describeCrash(m, exe, marks, pr, confine != nil, r)
 		}
 		// The runtime ends a program it could not get memory for with this
-		// code. The test did not return it: the wrapper marks every return.
-		oom := pr.exited && code == compile.ExitOOM && !returned
+		// code, and says so. The test did not return it: the wrapper marks
+		// every return. Any other exit without the mark is the test's own
+		// ovid/io.Exit.
+		// (When the output was cut, the message may be past the cut.)
+		oom := pr.exited && code == compile.ExitOOM && !returned && (strings.Contains(string(out), "out of memory\n") || outBytes > int64(len(out)))
+		exited := pr.exited && !returned && !oom
 		if oom {
 			r["error"] = "out_of_memory"
 			r["hint"] = "the kernel refused the program memory: an Alloc too large to map, or a host or limit too small for the heap's first 128 MiB region"
+		} else if exited {
+			r["error"] = "exited"
+			r["hint"] = "the test ended the program (ovid/io.Exit) instead of returning; a test passes only by returning 0"
 		}
 		r["ok"] = ok
 		if !ok {
 			r["exit"] = code
-			if r["signal"] == nil && !oom {
+			if r["signal"] == nil && !oom && !exited {
 				if rs := returnsOf(m, t.id, code); len(rs) > 0 {
 					r["returned_by"] = rs
 				}
