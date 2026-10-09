@@ -161,7 +161,7 @@ func planMove(dir, q, to, file string, base map[string][]byte, w io.Writer) (*pl
 	}
 
 	// Uses of the moved decl now point at its new package.
-	rs, err := findRefs(m, res, t)
+	rs, err := findRefs(m, res, t, "")
 	if err != nil {
 		return nil, fail(w, "unsupported", err.Error(), "")
 	}
@@ -178,7 +178,7 @@ func planMove(dir, q, to, file string, base map[string][]byte, w io.Writer) (*pl
 			if l.Pkg != pk || l.ID == t.ID || (l.Kind != "func" && l.Kind != "type" && l.Kind != "const") {
 				continue
 			}
-			lrs, err := findRefs(m, res, l)
+			lrs, err := findRefs(m, res, l, "")
 			if err != nil {
 				continue
 			}

@@ -40,7 +40,7 @@ func TestModuleRelativePaths(t *testing.T) {
 		Check(dir, false, &b)
 		Outline(dir, "demo", false, false, false, true, Page{}, &b)
 		Grep(dir, "func Alloc", "", true, true, 0, GrepLimit, &b)
-		Rename(dir, "Two", "Deux", true, &b)
+		Rename(dir, "Two", "Deux", "", true, &b)
 		var keep []string
 		for _, ln := range strings.Split(b.String(), "\n") {
 			if !strings.Contains(ln, `"ms":`) {

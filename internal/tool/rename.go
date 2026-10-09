@@ -39,7 +39,7 @@ func identByte(c byte) bool {
 // with its name, that word too: a field, local, or other declaration
 // spelled the same, or any other mention in a comment or string, is left
 // alone. It refuses names that collide and changes that add check errors.
-func Rename(dir, q, to string, dryRun bool, w io.Writer) int {
+func Rename(dir, q, to, name string, dryRun bool, w io.Writer) int {
 	unlock, code := lockModule(dir, w)
 	if unlock == nil {
 		return code
@@ -74,14 +74,21 @@ func Rename(dir, q, to string, dryRun bool, w io.Writer) int {
 	if m.IsStd(t.Span.File) {
 		return fail(w, "std", t.ID+" is in a shipped package", "")
 	}
+	var two *ir.Node // a var2 statement: name picks which of its locals
 	if t.Kind == "stmt" {
 		if n := t.Node.(*ir.Node); n.Op == "var2" {
-			return fail(w, "unsupported", t.ID+" declares two locals, "+n.Name+" and "+n.Two.Name+", and an id names only one; rename cannot reach either yet", "edit the statement and the uses instead: ovid grep finds them")
+			two = n
 		} else if n.Op != "var" {
 			return fail(w, "unsupported", "rename works on funcs, types, fields, consts, params, and var statements; "+t.ID+" is a "+n.Op+" statement", "")
 		}
 	}
-	old := nameOf(t)
+	old, err := pickName(t, name)
+	if err != nil {
+		return fail(w, "not_found", err.Error(), "")
+	}
+	if two != nil && old == "" {
+		return fail(w, "unsupported", t.ID+" declares two locals, "+two.Name+" and "+two.Two.Name, "say which with --name "+two.Name+" or --name "+two.Two.Name)
+	}
 	if old == "" {
 		return fail(w, "unsupported", "rename works on funcs, types, fields, consts, params, and var statements, not "+t.Kind, "")
 	}
@@ -98,7 +105,7 @@ func Rename(dir, q, to string, dryRun bool, w io.Writer) int {
 		return fail(w, "bad_name", "handle is the entry point (the package has no main) and cannot be renamed", "")
 	}
 	res := check.Run(m.Prog)
-	rs, err := findRefs(m, res, t)
+	rs, err := findRefs(m, res, t, name)
 	if err != nil {
 		return fail(w, "unsupported", err.Error(), "")
 	}
@@ -113,8 +120,12 @@ func Rename(dir, q, to string, dryRun bool, w io.Writer) int {
 		seen[k] = true
 		sps = append(sps, &splice{abs: m.Files[sp.File].Abs, off: sp.Off, end: sp.End, text: to})
 	}
-	// The declaration's own name token.
-	add(declSpan(t))
+	// The declaration's own name token (of a var2, the one name picks).
+	if two != nil && old == two.Two.Name {
+		add(two.Two.NameSpan)
+	} else {
+		add(declSpan(t))
+	}
 	for _, r := range rs {
 		add(r.tok)
 	}

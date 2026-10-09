@@ -929,7 +929,7 @@ func Four() i64 {
 	})
 	for _, rn := range [][2]string{{"Make", "NewPoint"}, {"Point", "Pt"}, {"fld:demo/pt.Pt.x", "xx"}, {"Size", "Width"}, {"pa:demo/pt.NewPoint.x", "x0"}} {
 		var b bytes.Buffer
-		if code := Rename(dir, rn[0], rn[1], false, &b); code != 0 {
+		if code := Rename(dir, rn[0], rn[1], "", false, &b); code != 0 {
 			t.Fatalf("rename %v: %s", rn, b.String())
 		}
 	}
@@ -944,7 +944,7 @@ func Four() i64 {
 		t.Fatalf("exit %d", code)
 	}
 	var b bytes.Buffer
-	if code := Rename(dir, "Width", "NewPoint", false, &b); code == 0 {
+	if code := Rename(dir, "Width", "NewPoint", "", false, &b); code == 0 {
 		t.Fatalf("expected conflict: %s", b.String())
 	}
 }
@@ -1488,7 +1488,7 @@ func TestNil(io *ovid/io.Cap) i64 {
 func TestRefsAndOutline(t *testing.T) {
 	dir := mkmod(t, demo(addSrc))
 	var b bytes.Buffer
-	Refs(dir, "Add", true, Page{}, &b)
+	Refs(dir, "Add", "", true, Page{}, &b)
 	rs := lines(t, b.String())
 	if len(rs) != 2 || rs[0]["kind"] != "call" || rs[0]["line"] != float64(10) {
 		t.Fatalf("refs %v", rs)
@@ -1656,15 +1656,15 @@ const constUses = "package demo\nimport ovid/io\nconst One i64 = 1\nconst Two i6
 func TestConstUses(t *testing.T) {
 	dir := mkmod(t, demo(constUses))
 	var b bytes.Buffer
-	if code := Refs(dir, "One", true, Page{}, &b); code != ExitOK || last(t, b.String())["total"] != float64(3) {
+	if code := Refs(dir, "One", "", true, Page{}, &b); code != ExitOK || last(t, b.String())["total"] != float64(3) {
 		t.Fatalf("refs One: %d %s", code, b.String())
 	}
 	b.Reset()
-	if code := Refs(dir, "T", true, Page{}, &b); code != ExitOK || last(t, b.String())["total"] != float64(2) {
+	if code := Refs(dir, "T", "", true, Page{}, &b); code != ExitOK || last(t, b.String())["total"] != float64(2) {
 		t.Fatalf("refs T: %d %s", code, b.String())
 	}
 	b.Reset()
-	if code := Rename(dir, "cn:demo.One", "Uno", false, &b); code != ExitOK {
+	if code := Rename(dir, "cn:demo.One", "Uno", "", false, &b); code != ExitOK {
 		t.Fatalf("rename: %d %s", code, b.String())
 	}
 	src := readFile(t, dir, "demo/main.ov")
@@ -2045,7 +2045,7 @@ func TestSelfHost(t *testing.T) {
 		// OVID_PATHS=module, the self-hosted one when run in the module on ".".
 		t.Setenv("OVID_PATHS", "module")
 		b.Reset()
-		if code := Refs(prog, q, false, Page{}, &b); code != 0 {
+		if code := Refs(prog, q, "", false, Page{}, &b); code != 0 {
 			t.Fatalf("refs %s: %s", q, b.String())
 		}
 		want := b.String()
@@ -2084,7 +2084,7 @@ func TestSelfHost(t *testing.T) {
 	for q, want := range map[string]string{"fld:app.T.f": "", "fld:app.T.a": "ambiguous_id", "st:app.F:1": "ambiguous_id", "ex:app.F:1": "ambiguous_id", "fld:app.T.g": "not_found",
 		"T.f": "", "T.a": "ambiguous_id", "F.io": "ambiguous_id", "im:app:ovid/mem": "ambiguous_id", "im:app:ovid/io": "unsupported"} {
 		b.Reset()
-		Refs(dup, q, true, Page{}, &b)
+		Refs(dup, q, "", true, Page{}, &b)
 		gr := last(t, b.String())
 		out, _ := runIn(t, dup, s1, "refs", q, ".", "--std", stdDir)
 		sr := last(t, out)
@@ -2093,12 +2093,48 @@ func TestSelfHost(t *testing.T) {
 		}
 	}
 
+	// --name picks one local of a two-result var, and is refused the same
+	// way by both without one or with a name the target does not declare.
+	vmod := mkmod(t, demo("package demo\nimport ovid/io\nfunc Two(x i64) (i64, i64) {\n  return x, 0\n}\nfunc main(io *ovid/io.Cap) i64 {\n  var v i64, e i64 = Two(1)\n  v, e = Two(v + e)\n  if e != 0 {\n    return e\n  }\n  return v\n}\n"))
+	// --name given empty is a usage error for the self-hosted refs too.
+	if out, code := runIn(t, vmod, s1, "refs", "Two", ".", "--std", stdDir, "--name", ""); code != 64 || !strings.Contains(out, "--name needs a name") {
+		t.Fatalf("refs --name '': self-hosted exit %d: %s", code, out)
+	}
+
+	// _ discards a result and is no local.
+	dmod := mkmod(t, demo("package demo\nimport ovid/io\nfunc Two(x i64) (i64, i64) {\n  return x, 0\n}\nfunc main(io *ovid/io.Cap) i64 {\n  var _, e i64 = Two(1)\n  var v i64, _ = Two(e)\n  return v + e\n}\n"))
+	for _, c := range [][3]string{{"v", "st:demo.main:1", "e"}, {"v", "st:demo.main:1", "v"}, {"v", "st:demo.main:1", ""}, {"v", "st:demo.main:1", "z"}, {"v", "Two", "Three"}, {"v", "Two", "Two"},
+		{"d", "st:demo.main:1", ""}, {"d", "st:demo.main:1", "e"}, {"d", "st:demo.main:1", "_"}, {"d", "st:demo.main:2", ""}, {"d", "st:demo.main:2", "_"}, {"d", "st:demo.main:2", "x"}} {
+		dir := vmod
+		if c[0] == "d" {
+			dir = dmod
+		}
+		c := [2]string{c[1], c[2]}
+		b.Reset()
+		code := Refs(dir, c[0], c[1], false, Page{}, &b)
+		args := []string{"refs", c[0], ".", "--std", stdDir}
+		if c[1] != "" {
+			args = append(args, "--name", c[1])
+		}
+		got, scode := runIn(t, dir, s1, args...)
+		// A refusal is compared as JSON: the self-hosted line orders its
+		// keys differently.
+		same := got == b.String()
+		if code != 0 {
+			sr, gr := last(t, got), last(t, b.String())
+			same = sr["error"] == gr["error"] && sr["message"] == gr["message"]
+		}
+		if scode != code || !same {
+			t.Fatalf("refs %s --name %q: self-hosted (exit %d) differs from go (exit %d):\n--- self\n%s\n--- go\n%s", c[0], c[1], scode, code, got, b.String())
+		}
+	}
+
 	// A const named in another const's value or a table's elements is a
 	// use for both, which the parser folded away.
 	cmod := mkmod(t, demo(constUses))
 	for _, q := range []string{"One", "T", "Two"} {
 		b.Reset()
-		if code := Refs(cmod, q, false, Page{}, &b); code != 0 {
+		if code := Refs(cmod, q, "", false, Page{}, &b); code != 0 {
 			t.Fatalf("refs %s: %s", q, b.String())
 		}
 		got, code := runIn(t, cmod, s1, "refs", q, ".", "--std", stdDir)

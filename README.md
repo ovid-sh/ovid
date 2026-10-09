@@ -64,7 +64,7 @@ successful `show` prints a header and the source with no JSON line, and
 | `ovid test [--run substr] [--list]` | each `TestX(io *ovid/io.Cap) i64` in its own process; 0 passes; a failure names the `return` that produced it, a crash its signal (on Linux, the statement and call stack) |
 | `ovid outline [--pkg P] [--ids]` | packages, or a package's decls one line each: line and signature (a struct by its field count), with id and hash after `--ids` |
 | `ovid show <id\|name>... [--ids] [--exprs]` | source of a node (a decl with its doc comment) under a header with its id and hash; `--ids` tags each statement line with its id; a statement's expressions are listed with ids and hashes |
-| `ovid refs <id\|name>` | every use the checker resolves to a func, type, field, const, param, or local, grouped by the decl it is in |
+| `ovid refs <id\|name>` | every use the checker resolves to a func, type, field, const, param, or local, grouped by the decl it is in (`--name` picks one of the two locals a two-result `var` declares) |
 | `ovid grep <regexp>` | matching lines grouped by file and enclosing decl |
 | `--json` | on `outline`, `show`, `refs`, `grep`: one JSON record per line instead of text |
 | `--offset N`, `--limit N` | `outline`, `refs`, and `grep` print 200 records a page; the last line has `total`, `has_more`, and `next_offset` |
@@ -134,7 +134,7 @@ cmp /tmp/s1 /tmp/s2                        # byte-identical
 
 The two compilers emit byte-identical binaries for the same source, and
 `go test ./internal/tool -run TestSelfHost` checks it. The self-hosted
-compiler is about 155 KB (the `bytes` lowering added 15 KB, 2026-10-07), and `TestSelfHostSize` fails if it outgrows its
+compiler is about 170 KB (2026-10-09; the `bytes` lowering added 15 KB on 2026-10-07), and `TestSelfHostSize` fails if it outgrows its
 budget. On starship (Ryzen 7 8745HS, 2026-10-04) it built `prog/` in 9 ms,
 against 27 ms for the Go one, and a generated program of 100,000 funcs
 (300,000 lines) in 0.57 s against 2.25 s. One command measures all of it:

@@ -59,7 +59,7 @@ func main(io *ovid/io.Cap) i64 {
 	}
 
 	b.Reset()
-	if code := Refs(dir, "Twice", false, Page{}, &b); code != 0 {
+	if code := Refs(dir, "Twice", "", false, Page{}, &b); code != 0 {
 		t.Fatal(b.String())
 	}
 	want = "demo/main.ov  fn:demo.Thrice\n   8: return Twice(x) + x\ndemo/main.ov  fn:demo.main\n  11: return Twice(Thrice(1)) + Twice(2)\n"
