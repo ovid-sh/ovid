@@ -5,7 +5,13 @@ Results of the agent exercise in `tests/agent/` (how to run it:
 command's output or defaults change, and add the run here, newest first.
 Each run's raw records are in `docs/agent-runs/`.
 
-## Current state (verified 2026-10-06)
+## Current state (verified 2026-10-09)
+
+The error-handling tasks (17–20, added 2026-10-09) are a measuring stick
+for the follow-ups to #7, not yet a comparison: at 1fb91d4 (design B)
+sonnet passes 7 of 8 at $0.04–$0.12 a run (below). Two runs a task will
+not separate two designs by pass rate; calls, cost, `diag_codes`, and the
+static counts may, and haiku is not yet run on them.
 
 The four harder tasks (12–15) separate the models where the first eleven
 did not. `claude-haiku-4-5` passes 9 of 20: it accepts integers that do
@@ -67,6 +73,46 @@ told to retry a lost `ovid edit` first, every agent in `07-replay` got
 `stale`, confirmed the change was already in, and made it no second time
 (d8c0be0, below). The two problems the b4c231f run found are fixed by #100
 (#98, #99), not yet re-run with a model.
+
+## 2026-10-09, 1fb91d4: the error-handling tasks, sonnet
+
+Two runs each of `17-cp`, `18-calc`, `19-conf`, and `20-parse` with
+`us.anthropic.claude-sonnet-5-5`, Claude Code 2.1.293, $2 budget per
+agent, on starship, the four tasks at the same time: $0.55 in all.
+Records: `agent-runs/2026-10-09-1fb91d4-errors-sonnet.jsonl`. Medians
+over passing runs; diag codes summed over all runs.
+
+| task | passed | calls | ovid calls | failed calls | bytes read | tokens in | cost | seconds | diag codes | `_` | ErrText | stderr writes |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 17-cp | 2/2 | 6 | 4.5 | 1.5 | 19990 | 53534 | $0.06 | 20 | – | 0 | 0.5 | 5 |
+| 18-calc | 1/2 | 10 | 7 | 1 | 22124 | 119151 | $0.12 | 54 | syntax 11, duplicate_name 6 | 0 | 0 | 3 |
+| 19-conf | 2/2 | 5 | 4 | 2 | 14594 | 36542 | $0.04 | 19 | unused_result 8 | 0 | 1 | 8.5 |
+| 20-parse | 2/2 | 5.5 | 5.5 | 0 | 27973 | 65882 | $0.08 | 26.5 | unknown_name 9 | 0 | 0 | 3 |
+
+No run left a `_` discard. In `19-conf` both agents met the four
+`unused_result` sites in their first `ovid check` and handled each
+failure as the doc comments say rather than silencing it. In `17-cp`
+both found the failures the report did not name (a missing destination
+directory, a directory as either argument). `18-calc` run 2 missed one
+overflow, negating the most negative i64 (`-(-9223372036854775807 - 1)`
+printed `-9223372036854775808`); run 1 passed after declaring helper
+funcs with no result type (`func Fail(p *P, code i64) {`, a `syntax`
+error, "expected identifier, found "{"") and redeclaring the error code
+`e` in a nested block (`duplicate_name`: a func has one scope), both
+repeated over several checks. In `20-parse` one agent called an
+`ovid/io.EprintInt` that does not exist.
+
+Two earlier rounds (1780b63 and 7154cd6, $0.85, 12 of 12 passed) told
+the agent to try `ovid run -- FILE`. Since `run` confines the program
+(#139) its working directory is a fresh one, so a relative FILE is not
+found and a write outside it is refused; agents in `17-cp` worked around
+it with `ovid build` or `/tmp`. The tasks now name the program, not
+`ovid run`.
+
+What this says about B, before any other design is run: on small
+programs sonnet handles errors with it cheaply and does not reach for `_`
+to make `unused_result` go away. The tasks are a baseline to compare a
+prototype against, by cost and calls more than by pass rate.
 
 ## 2026-10-06, 6c0010e / 729dbbd: unprompted, and with the help reworded
 
