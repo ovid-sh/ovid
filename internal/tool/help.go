@@ -51,7 +51,7 @@ Change code (or edit the .ov files directly; both are fine):
                                one edit, code from stdin (no JSON escaping);
                                also insert --after/--before <id>, append <id>,
                                delete <id>
-  ovid edit <file|->           id-addressed batch edit, all or nothing
+  ovid edit <file|->           id-addressed batch edit, planned and checked as one
   ovid rename <id|name> <new>  rename a decl and all its uses
   ovid move <id|name>... <pkg> move funcs/types/consts to another package
 
@@ -398,7 +398,7 @@ ovid version                 {commit, dirty, binary (hash of the executable), pa
 ovid help [topic|command]    a topic, or the entry above for one command
 `
 
-const helpEdit = `ovid edit: id-addressed edits, applied all or none.
+const helpEdit = `ovid edit: id-addressed edits, planned and checked as one.
 
 For a single op, ovid replace/insert/append/delete read the text from
 stdin and need no JSON; see ovid help commands.
@@ -472,6 +472,12 @@ Writers (edit, rename, move) take a lock on ovid.mod. If another holds it,
 one {"fact":"waiting","for":"lock"} line is printed, and after 10s
 (OVID_LOCK_TIMEOUT=30s, 500ms, 0 changes it) the command fails with
 lock_timeout, writing nothing.
+Writing the files is the last step and is not atomic across files: they
+are renamed into place one by one. A "write" failure lists written_files
+(new text) and unwritten_files (an existing file's old text, or a new
+file still absent). Do not replay the edit: read the module again (its
+revision, outline, show) and plan the rest from what is there, since an
+insert or append that reached its file would land twice.
 `
 
 const helpIDs = `Ids name every declaration and node. They are derived from source order,
