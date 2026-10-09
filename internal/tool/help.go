@@ -60,7 +60,7 @@ Also: ovid build [-o out], ovid dump (program as JSON), ovid version
 All commands take -C <dir> (default: the module containing the cwd).
 
 The language at a glance (all of it: ovid help language):
-  i64, bool, bytes, *T; var x i64 = 0; if/else if/else; while; no for/break
+  i64, bool, bytes, *T; var x i64 = 0; if/else if/else; while, break, continue
   var p *T = ovid/io.Alloc(io, sizeof(T)) as *T     structs live on the heap
   ovid/io.Print("hi\n"); ovid/io.PrintInt(io, n)   output
   var sp bool = c == 32 || c == 9                   && || ! work anywhere
@@ -210,7 +210,9 @@ Control flow, all of it:
   } else {
     return -1
   }
-  while i < n { i = i + 1 }   // no for, break, or continue: use the condition
+  while i < n { i = i + 1 }   // no for
+  break and continue end or restart the innermost while (no labels);
+  outside one they are outside_loop.
 
 Programs: the entry package (ovid.mod "entry") has
   func main(io *ovid/io.Cap) i64    // result is the exit code

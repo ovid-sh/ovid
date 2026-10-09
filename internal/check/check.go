@@ -61,6 +61,7 @@ type sig struct {
 }
 
 type checker struct {
+	loops    int // the whiles the statement being checked is in
 	r        *Result
 	pkgs     map[string]*ir.Package
 	sigs     map[string]sig
@@ -917,7 +918,14 @@ func (c *checker) stmt(e *env, s *ir.Node) {
 		if ct := c.expr(e, s.Cond); ct != "bool" && ct != "invalid" {
 			c.mismatch(s.Cond.ID, "while condition", ct, "bool")
 		}
+		c.loops++
 		c.stmts(newEnv(e), s.Body)
+		c.loops--
+	case "break", "continue":
+		// They end or restart the innermost while, so there must be one.
+		if c.loops == 0 {
+			c.err(s.ID, "outside_loop", s.Op+" is not inside a while")
+		}
 	default:
 		c.err(s.ID, "bad_op", "unknown statement op "+s.Op)
 	}
@@ -930,9 +938,6 @@ func (c *checker) unknownName(id, name string, e *env) {
 	}
 	is := Issue{Code: "unknown_name", ID: id, Message: "undefined: " + name}
 	switch name {
-	case "break", "continue":
-		is.Message = "there is no " + name
-		is.Hint = "loop on a flag instead: var more bool = true; while more { ... more = false }"
 	case "nil", "null":
 		is.Hint = "a null pointer is 0 as *T: var z i64 = 0, then z as *T"
 	default:

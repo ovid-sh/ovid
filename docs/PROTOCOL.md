@@ -228,7 +228,8 @@ does not match its directory, or a file sits in the module root),
 `reserved_path` (the module has a package with the path of one the toolchain
 ships, such as `ovid/io`). From the checker: `type_mismatch`,
 `unknown_name`, `unknown_field`, `unknown_package`, `missing_import`, `unused_result`,
-`missing_return`, `missing_expr`, `arity`, `bad_type`, `bad_op`,
+`missing_return`, `missing_expr`, `outside_loop` (a `break` or `continue`
+not inside a `while`), `arity`, `bad_type`, `bad_op`,
 `struct_value`, `duplicate_name`, `duplicate_id`, `duplicate_package`,
 `import_self`, `import_cycle`, `syscall_forbidden`, `opaque_type`, `bad_main`,
 `bad_handler` (an entry package with no main has a handle of the wrong

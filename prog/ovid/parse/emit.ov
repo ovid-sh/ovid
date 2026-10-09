@@ -134,6 +134,12 @@ func WOp(e *E, op i64) i64 {
   if op == OP_WHILE {
     return WL(e, "while")
   }
+  if op == OP_BREAK {
+    return WL(e, "break")
+  }
+  if op == OP_CONTINUE {
+    return WL(e, "continue")
+  }
   if op == OP_EXPR {
     return WL(e, "expr")
   }

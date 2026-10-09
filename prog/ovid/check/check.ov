@@ -20,6 +20,7 @@ const H_PARAM i64 = 8
 // error is about: hd is the decl (ho its type or func, for a field or
 // param), hn the statement or expression (ho its func).
 type Ch struct {
+  loops i64
   io *ovid/io.Cap
   mod *ovid/parse.Mod
   two bool
@@ -1315,8 +1316,21 @@ func CheckStmt(c *Ch, s *ovid/parse.Node) i64 {
     CheckExpr(c, s.cond)
     NeedBool(c, "while needs bool")
     Push(c)
+    c.loops = c.loops + 1
     CheckStmts(c, s.body)
+    c.loops = c.loops - 1
     Pop(c)
+    return 0
+  }
+  if op == ovid/parse.OP_BREAK || op == ovid/parse.OP_CONTINUE {
+    // They end or restart the innermost while, so there must be one.
+    if c.loops == 0 {
+      if op == ovid/parse.OP_BREAK {
+        Err(c, "outside_loop", "break is not inside a while")
+      } else {
+        Err(c, "outside_loop", "continue is not inside a while")
+      }
+    }
     return 0
   }
   Err(c, "bad_op", "stmt")
@@ -1737,13 +1751,14 @@ func Sccs(c *Ch, npkg i64) i64 {
         if v.low == v.ord {
           ncomp = ncomp + 1
           var cnt i64 = 0
-          var more bool = true
-          while more {
+          while true {
             sn = sn - 1
             var x *ovid/parse.Pkg = load64(stack + (sn * 8)) as *ovid/parse.Pkg
             x.scc = ncomp
             cnt = cnt + 1
-            more = x != v
+            if x == v {
+              break
+            }
           }
           store64(c.csize + (ncomp * 8), cnt)
         }

@@ -3,9 +3,10 @@ package ovid/parse
 import ovid/io
 import ovid/mem
 
-// Op codes. Statements are 1..OP_CHK (IsStmt); everything else is an
-// expression, and the binary operators (OP_LOR and up) come after every
-// other expression, so EvalConst can tell them apart by number.
+// Op codes. Statements are 1..OP_CHK and OP_BREAK, OP_CONTINUE (IsStmt);
+// everything else is an expression, and the binary operators (OP_LOR to
+// OP_SHR) come after every other expression, so EvalConst can tell them
+// apart by number.
 const OP_VAR i64 = 1
 const OP_VAR2 i64 = 2
 const OP_ASSIGN i64 = 3
@@ -73,6 +74,8 @@ const OP_MOD i64 = 64
 const OP_AND i64 = 65
 const OP_SHL i64 = 66
 const OP_SHR i64 = 67
+const OP_BREAK i64 = 68
+const OP_CONTINUE i64 = 69
 
 // LoadOp, StoreOp, and BswapOp group the memory and byte-order builtins;
 // OpWidth is the width in bits of one of them.
@@ -82,7 +85,7 @@ func LoadOp(op i64) bool {
 
 // IsStmt says whether op names a statement.
 func IsStmt(op i64) bool {
-  return op >= OP_VAR && op <= OP_CHK
+  return (op >= OP_VAR && op <= OP_CHK) || op == OP_BREAK || op == OP_CONTINUE
 }
 
 func StoreOp(op i64) bool {
@@ -462,16 +465,14 @@ func ParseFile(p *P) *Pkg {
   k.off = s
   ExpectEnd(p)
   p.pkg = k
-  var more bool = true
-  while more && p.err == 0 {
+  while p.err == 0 {
     var is i64 = Start(p)
-    if Kw(p, "import") {
-      ParsePath(p)
-      AddImport(k, NewDecl(p, p.tok, is))
-      ExpectEnd(p)
-    } else {
-      more = false
+    if !Kw(p, "import") {
+      break
     }
+    ParsePath(p)
+    AddImport(k, NewDecl(p, p.tok, is))
+    ExpectEnd(p)
   }
   while p.err == 0 && !Eof(p) {
     var ds i64 = Start(p)
@@ -779,8 +780,7 @@ func ParseFunc(p *P, s i64) i64 {
   p.sc = 0
   Expect(p, 40)
   if !PeekByte(p, 41) {
-    var more bool = true
-    while more && p.err == 0 {
+    while p.err == 0 {
       var ps i64 = Start(p)
       Ident(p)
       var pa *Decl = NewDecl(p, p.tok, ps)
@@ -789,10 +789,9 @@ func ParseFunc(p *P, s i64) i64 {
       pa.tytok = p.ttok
       AddSub(d, pa)
       if PeekByte(p, 41) {
-        more = false
-      } else {
-        Expect(p, 44)
+        break
       }
+      Expect(p, 44)
     }
   }
   Expect(p, 41)
@@ -871,6 +870,12 @@ func Stmt(p *P, s i64, id i64) *Node {
   }
   if Kw(p, "return") {
     return ParseReturn(p)
+  }
+  if Kw(p, "break") {
+    return NewNode(p, OP_BREAK)
+  }
+  if Kw(p, "continue") {
+    return NewNode(p, OP_CONTINUE)
   }
   if PeekKw(p, "store8") || PeekKw(p, "store16") || PeekKw(p, "store32") || PeekKw(p, "store64") {
     Ident(p)
@@ -1008,7 +1013,7 @@ func ParseReturn(p *P) *Node {
   if p.i >= len(p.src) || p.nl || At(p, p.i) == 125 {
     return n
   }
-  if PeekKw(p, "var") || PeekKw(p, "if") || PeekKw(p, "while") || PeekKw(p, "return") || PeekKw(p, "store8") || PeekKw(p, "store16") || PeekKw(p, "store32") || PeekKw(p, "store64") {
+  if PeekKw(p, "var") || PeekKw(p, "if") || PeekKw(p, "while") || PeekKw(p, "return") || PeekKw(p, "break") || PeekKw(p, "continue") || PeekKw(p, "store8") || PeekKw(p, "store16") || PeekKw(p, "store32") || PeekKw(p, "store64") {
     return n
   }
   n.val = ParseExpr(p)
@@ -1552,8 +1557,7 @@ func ArgList(p *P) *Node {
   var head *Node = 0 as *Node
   var tail *Node = 0 as *Node
   if !PeekByte(p, 41) {
-    var more bool = true
-    while more && p.err == 0 {
+    while p.err == 0 {
       var a *Node = ParseExpr(p)
       if tail == 0 as *Node {
         head = a
@@ -1562,10 +1566,9 @@ func ArgList(p *P) *Node {
       }
       tail = a
       if PeekByte(p, 41) {
-        more = false
-      } else {
-        Expect(p, 44)
+        break
       }
+      Expect(p, 44)
     }
   }
   Expect(p, 41)

@@ -589,8 +589,7 @@ func Revision(m *Mod) i64 {
   // The std files in path order: each round takes the smallest path after
   // the one taken last. There are only a handful.
   var last *File = 0 as *File
-  var more bool = true
-  while more {
+  while true {
     var best *File = 0 as *File
     f = m.files
     while f != 0 as *File {
@@ -610,11 +609,10 @@ func Revision(m *Mod) i64 {
       f = f.mnext
     }
     if best == 0 as *File {
-      more = false
-    } else {
-      RevAdd(m, b, best.rel, best.src)
-      last = best
+      break
     }
+    RevAdd(m, b, best.rel, best.src)
+    last = best
   }
   var raw i64 = ovid/io.Alloc(m.io, 32)
   ovid/sha.Sum(m.io, bytes(b.data, b.len), raw)
