@@ -825,6 +825,27 @@ func TestEditStrayFields(t *testing.T) {
 
 // TestHelpCommand: ovid help <command> prints that command's entry, since
 // agents ask for it by name; the edit ops share one entry.
+// TestHelpAgent: one call gives the language, the shipped packages, the
+// edit commands, and the id forms, each as its own topic prints it.
+func TestHelpAgent(t *testing.T) {
+	var all bytes.Buffer
+	if code := Help("agent", &all); code != ExitOK {
+		t.Fatalf("help agent: %d", code)
+	}
+	for _, topic := range []string{"language", "std", "edit", "ids"} {
+		var one bytes.Buffer
+		Help(topic, &one)
+		if !strings.Contains(all.String(), "==== ovid help "+topic+" ====\n\n"+one.String()) {
+			t.Errorf("help agent lacks %s", topic)
+		}
+	}
+	var ov bytes.Buffer
+	Help("", &ov)
+	if !strings.Contains(strings.Join(strings.SplitN(ov.String(), "\n", 4)[:3], "\n"), "ovid help agent") {
+		t.Errorf("the overview's first lines do not point to help agent:\n%s", ov.String())
+	}
+}
+
 func TestHelpCommand(t *testing.T) {
 	for _, c := range []string{"init", "check", "build", "run", "test", "outline", "show", "refs", "grep",
 		"replace", "insert", "append", "delete", "rename", "move", "dump", "version", "help"} {

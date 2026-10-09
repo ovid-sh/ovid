@@ -17,6 +17,8 @@ import (
 )
 
 const helpOverview = `ovid: a small compiled language and its toolchain, built for agents.
+Before a first edit: ovid help agent prints the language, the shipped
+packages, the edit commands, and the id forms in one call.
 
 Source is plain .ov text. A module is a directory with ovid.mod; each
 subdirectory holding .ov files is one package, and its path is the package
@@ -65,7 +67,7 @@ The language at a glance (all of it: ovid help language):
   ovid/io.Print("hi\n"); ovid/io.PrintInt(io, n)   output
   var sp bool = c == 32 || c == 9                   && || ! work anywhere
 
-Topics: ovid help language | commands | edit | std | ids
+Topics: ovid help agent (language, std, edit, ids together) | language | commands | edit | std | ids
 `
 
 const helpLanguage = `Ovid language reference (v0).
@@ -524,13 +526,21 @@ func Help(topic string, w io.Writer) int {
 		fmt.Fprint(w, helpIDs)
 	case "std":
 		helpStd(w)
+	case "agent", "all":
+		// What an agent needs before its first edit, in one call: each
+		// round trip to help costs a slow model more than the bytes do.
+		for _, t := range []string{"language", "std", "edit", "ids"} {
+			fmt.Fprintf(w, "==== ovid help %s ====\n\n", t)
+			Help(t, w)
+			fmt.Fprintln(w)
+		}
 	default:
 		if e := commandHelp(topic); e != "" {
 			fmt.Fprint(w, e)
-			fmt.Fprintln(w, "\nAll commands: ovid help commands. Topics: language commands edit std ids.")
+			fmt.Fprintln(w, "\nAll commands: ovid help commands. Topics: agent language commands edit std ids.")
 			return ExitOK
 		}
-		fmt.Fprintf(w, "no help topic %q; topics: language commands edit std ids, or a command name\n", topic)
+		fmt.Fprintf(w, "no help topic %q; topics: agent language commands edit std ids, or a command name\n", topic)
 		return ExitUsage
 	}
 	return ExitOK
