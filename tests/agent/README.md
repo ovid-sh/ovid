@@ -64,7 +64,9 @@ go run ./tests/agent/run -summary /tmp/ovid-agent-XXXX/results.jsonl
 Each run gets a fresh copy of `start/` in a temp directory and one Claude
 Code process per prompt (`claude -p --bare`, tools Bash, Read, Write, and
 Edit, no settings, hooks, or CLAUDE.md), with the prompt `preamble.md` +
-`task.md` and the ovid built from this checkout first on `PATH`. The two
+`task.md` and the ovid built from this checkout first on `PATH` (built
+into `-out`'s `bin/`, or into a temporary directory when `-out` holds
+`:`, `PATH`'s separator, as a Bedrock model id does). The two
 prompts of a two-writer task run at the same time in the same directory.
 The run records, per task and run: whether the goal passed and why not,
 the files changed, tool calls, ovid calls, failed calls (a tool error or a
@@ -74,16 +76,42 @@ records the commit, `ovid version`, the Claude Code version, the tools, the
 budget, and hashes of the prompts. Transcripts stay in the output
 directory; they are too large to commit.
 
-A run whose tool inputs name the repository is listed as looking outside
-its directory and left out of the medians: the agent could have read the
-goals. The summary reports each task's pass rate and the medians of its
+On Linux each Claude Code process runs in a jail (`-confine`, on by
+default): a bubblewrap mount namespace, made without root, that holds the
+system read-only, a private `/proc`, `/dev`, and `/tmp`, an empty home
+directory, and of the rest only the work directory (read-write), ovid's
+bin directory, the claude executable, Claude Code's configuration
+directory (read-write), and for Bedrock `~/.aws` (read-only); the
+network is the host's. The output directory, other runs, the repository,
+and the rest of the home directory are not there to find. bwrap must be
+installed and unprivileged user namespaces allowed; claude must be the
+executable itself (`-claude`; a mise shim is resolved with `mise which`).
+Set `CLAUDE_CONFIG_DIR` to a directory of the exercise's own: without it
+the jail holds `~/.claude`. Elsewhere (macOS) the agents run unconfined,
+with a warning, and `-confine` given explicitly is an error. Each
+record's `env.confine` says which.
+
+A run that looked outside its directory is listed as such, in the line
+printed for it and in the summary, and left out of the medians: the agent
+could have read the goals, or another run's work. A tool input looks
+outside when it names the repository or `tests/agent`; when a Read,
+Write, or Edit names a file elsewhere; when a Bash command lists, reads,
+or `cd`s elsewhere (`find`, `ls`, `cat`, `grep`, `git -C`, `ovid -C`, a
+`<` redirection, ... on an absolute path, `~`, or `..` out of the
+directory, the shell's directory followed from call to call); when it
+runs an ovid other than the one it was given; and when it runs `git` in a
+work directory that sits in a checkout. Files in `/tmp` are the agent's
+own scratch, but not `/tmp` itself, `-out`, or another run's
+`ovid-agent-*`. The summary reports each task's pass rate and the medians of its
 passing runs only, so a cheap failure does not count as progress.
 
 `-model` picks the model (default: Claude Code's), `-budget` the spending
 limit per agent (USD 2), `-timeout` the time limit per run (20 minutes).
 `-preamble FILE` uses another preamble in place of `preamble.md`, to
 compare two wordings on the same tasks; `preamble.guided.md` is one that
-tells the agent to navigate and edit through ovid. Each record's
+tells the agent to navigate and edit through ovid. An ovid call is one
+whether the agent ran `ovid` by its name or by a path (`./bin/ovid`,
+`/tmp/x/bin/ovid`). Each record's
 `ovid_cmds` counts its ovid calls by subcommand, `diag_codes` the
 diagnostics their output showed the agent, by code, and `static` what the
 module's program text (its `_test.ov` files left out) spells when the
