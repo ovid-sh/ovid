@@ -156,7 +156,9 @@ func main() {
 		env.Ovid = strings.TrimSpace(string(b))
 	}
 	if b, err := exec.Command("claude", "--version").Output(); err == nil {
-		env.Claude = strings.TrimSpace(string(b))
+		// The last line: a version manager's shim may print its own first.
+		v := strings.TrimSpace(string(b))
+		env.Claude = v[strings.LastIndexByte(v, '\n')+1:]
 	}
 
 	rf, err := os.OpenFile(filepath.Join(*out, "results.jsonl"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
