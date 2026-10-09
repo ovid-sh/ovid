@@ -159,6 +159,7 @@ func TestWith(dir string, o TestOpts, w io.Writer) int {
 		pr := runProc(st.path, args, pio, testTimeout)
 		ms := time.Since(t0).Milliseconds()
 		out, outBytes := oc.finish()
+		outTail := oc.tail
 		_, retBytes := rc.finish()
 		if pr.err != nil {
 			// The program could not be started: that is the environment's
@@ -187,8 +188,9 @@ func TestWith(dir string, o TestOpts, w io.Writer) int {
 		// code, and says so. The test did not return it: the wrapper marks
 		// every return. Any other exit without the mark is the test's own
 		// ovid/io.Exit.
-		// (When the output was cut, the message may be past the cut.)
-		oom := pr.exited && code == compile.ExitOOM && !returned && (strings.Contains(string(out), "out of memory\n") || outBytes > int64(len(out)))
+		// The message is the last thing the program wrote, so it is in the
+		// output's tail even when the output was cut.
+		oom := pr.exited && code == compile.ExitOOM && !returned && strings.HasSuffix(string(outTail), "out of memory\n")
 		exited := pr.exited && !returned && !oom
 		if oom {
 			r["error"] = "out_of_memory"

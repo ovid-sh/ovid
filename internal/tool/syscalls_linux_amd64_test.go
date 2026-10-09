@@ -454,6 +454,15 @@ func TestExit71(io *ovid/io.Cap) i64 {
   Stop(io, 71)
   return 0
 }
+func TestExit71Loud(io *ovid/io.Cap) i64 {
+  var i i64 = 0
+  while i < 100 {
+    ovid/io.Print("past the cut, past the cut, past the cut, past the cut, past\n")
+    i = i + 1
+  }
+  Stop(io, 71)
+  return 0
+}
 func main(io *ovid/io.Cap) i64 {
   return 0
 }
@@ -463,16 +472,18 @@ func main(io *ovid/io.Cap) i64 {
 		t.Fatalf("exit %d:\n%s", code, b.String())
 	}
 	rs := lines(t, b.String())
-	if len(rs) != 3 {
-		t.Fatalf("want two tests and a summary:\n%s", b.String())
+	if len(rs) != 4 {
+		t.Fatalf("want three tests and a summary:\n%s", b.String())
 	}
-	for i, want := range []float64{71, 0} { // in name order
+	// In name order; the loud one's output is cut, and it is still not
+	// taken for out of memory.
+	for i, want := range []float64{71, 71, 0} {
 		r := rs[i]
 		if r["ok"] != false || r["error"] != "exited" || r["exit"] != want || r["returned_by"] != nil {
 			t.Fatalf("test %d: %v", i, r)
 		}
 	}
-	if s := rs[2]; s["passed"] != float64(0) || s["failed"] != float64(2) {
+	if s := rs[3]; s["passed"] != float64(0) || s["failed"] != float64(3) {
 		t.Fatalf("summary: %v", s)
 	}
 }
