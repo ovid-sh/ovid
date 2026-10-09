@@ -465,16 +465,14 @@ func ParseFile(p *P) *Pkg {
   k.off = s
   ExpectEnd(p)
   p.pkg = k
-  var more bool = true
-  while more && p.err == 0 {
+  while p.err == 0 {
     var is i64 = Start(p)
-    if Kw(p, "import") {
-      ParsePath(p)
-      AddImport(k, NewDecl(p, p.tok, is))
-      ExpectEnd(p)
-    } else {
-      more = false
+    if !Kw(p, "import") {
+      break
     }
+    ParsePath(p)
+    AddImport(k, NewDecl(p, p.tok, is))
+    ExpectEnd(p)
   }
   while p.err == 0 && !Eof(p) {
     var ds i64 = Start(p)
@@ -782,8 +780,7 @@ func ParseFunc(p *P, s i64) i64 {
   p.sc = 0
   Expect(p, 40)
   if !PeekByte(p, 41) {
-    var more bool = true
-    while more && p.err == 0 {
+    while p.err == 0 {
       var ps i64 = Start(p)
       Ident(p)
       var pa *Decl = NewDecl(p, p.tok, ps)
@@ -792,10 +789,9 @@ func ParseFunc(p *P, s i64) i64 {
       pa.tytok = p.ttok
       AddSub(d, pa)
       if PeekByte(p, 41) {
-        more = false
-      } else {
-        Expect(p, 44)
+        break
       }
+      Expect(p, 44)
     }
   }
   Expect(p, 41)
@@ -1561,8 +1557,7 @@ func ArgList(p *P) *Node {
   var head *Node = 0 as *Node
   var tail *Node = 0 as *Node
   if !PeekByte(p, 41) {
-    var more bool = true
-    while more && p.err == 0 {
+    while p.err == 0 {
       var a *Node = ParseExpr(p)
       if tail == 0 as *Node {
         head = a
@@ -1571,10 +1566,9 @@ func ArgList(p *P) *Node {
       }
       tail = a
       if PeekByte(p, 41) {
-        more = false
-      } else {
-        Expect(p, 44)
+        break
       }
+      Expect(p, 44)
     }
   }
   Expect(p, 41)

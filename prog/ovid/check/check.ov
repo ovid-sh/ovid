@@ -1751,13 +1751,14 @@ func Sccs(c *Ch, npkg i64) i64 {
         if v.low == v.ord {
           ncomp = ncomp + 1
           var cnt i64 = 0
-          var more bool = true
-          while more {
+          while true {
             sn = sn - 1
             var x *ovid/parse.Pkg = load64(stack + (sn * 8)) as *ovid/parse.Pkg
             x.scc = ncomp
             cnt = cnt + 1
-            more = x != v
+            if x == v {
+              break
+            }
           }
           store64(c.csize + (ncomp * 8), cnt)
         }

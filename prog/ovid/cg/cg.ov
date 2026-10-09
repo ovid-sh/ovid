@@ -785,8 +785,7 @@ func AllocRegs(c *C, body *ovid/parse.Node, nparams i64) i64 {
     store64((c.free + (nfree * 8)) + 8, 11)
     nfree = nfree + 2
   }
-  var more bool = true
-  while more {
+  while true {
     // The heaviest local without a register; the first of equals.
     var best i64 = 0
     var bestw i64 = 0
@@ -800,7 +799,7 @@ func AllocRegs(c *C, body *ovid/parse.Node, nparams i64) i64 {
       i = i + 1
     }
     if bestw == 0 {
-      more = false
+      break
     } else if head < nfree {
       store64(best + LOC_REG, load64(c.free + (head * 8)))
       head = head + 1
@@ -809,7 +808,7 @@ func AllocRegs(c *C, body *ovid/parse.Node, nparams i64) i64 {
       store64(c.saved + (c.nsaved * 8), CalleeReg(c.nsaved))
       c.nsaved = c.nsaved + 1
     } else {
-      more = false
+      break
     }
   }
   return 0
@@ -1500,22 +1499,20 @@ func EmitJump(c *C, n *ovid/parse.Node, lv i64, lab i64, when bool) i64 {
 // as a displacement. Read c.addrd before emitting anything else.
 func SplitAddr(c *C, n *ovid/parse.Node) *ovid/parse.Node {
   var d i64 = 0
-  var more bool = true
   n = Uncast(n)
-  while more && n != 0 as *ovid/parse.Node && (n.op == ovid/parse.OP_ADD || n.op == ovid/parse.OP_SUB) {
-    more = Operand(c, n.right) == KIMM
-    if more {
-      var v i64 = c.opv
-      if n.op == ovid/parse.OP_SUB {
-        v = 0 - v
-      }
-      if (d + v) < (0 - 0x80000000) || (d + v) > 0x7fffffff {
-        more = false
-      } else {
-        d = d + v
-        n = Uncast(n.left)
-      }
+  while n != 0 as *ovid/parse.Node && (n.op == ovid/parse.OP_ADD || n.op == ovid/parse.OP_SUB) {
+    if Operand(c, n.right) != KIMM {
+      break
     }
+    var v i64 = c.opv
+    if n.op == ovid/parse.OP_SUB {
+      v = 0 - v
+    }
+    if (d + v) < (0 - 0x80000000) || (d + v) > 0x7fffffff {
+      break
+    }
+    d = d + v
+    n = Uncast(n.left)
   }
   c.addrd = d
   return n
