@@ -312,7 +312,8 @@ func WriteN(f *File, p i64, n i64) i64 {
 }
 
 // Stdin, Stdout, and Stderr are the program's standard streams, as files.
-// Each call makes a new handle; Print and Eprint write without one.
+// Each call makes a new handle on the same descriptor; Close invalidates
+// only the handle (see Close). Print and Eprint write without one.
 func Stdin(io *Cap) *File {
   return stream(io, 0)
 }
@@ -369,10 +370,16 @@ func openC(io *Cap, path i64, flags i64, mode i64) (*File, i64) {
 
 // Close closes f. It returns 0, or an error code. f forgets its descriptor
 // first, so a later Read, Write, or Close of f fails (EBADF) instead of
-// reaching a file that reused the number.
+// reaching a file that reused the number. A standard stream stays open:
+// closing its handle only invalidates that handle, since every other
+// handle to the stream shares its descriptor, and a freed 0, 1, or 2 would
+// go to the next Open.
 func Close(f *File) i64 {
   var fd i64 = f.fd
   f.fd = -1
+  if fd >= 0 && fd < 3 {
+    return 0
+  }
   return Code(syscall(SYS_CLOSE, fd, 0, 0, 0, 0, 0))
 }
 
