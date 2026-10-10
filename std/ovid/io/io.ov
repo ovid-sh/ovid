@@ -30,6 +30,7 @@ const SYS_FSTATAT i64 = 262
 const AT_FDCWD i64 = -100
 const O_RDONLY i64 = 0
 const O_WRONLY i64 = 1
+const O_RDWR i64 = 2
 const O_CREAT i64 = 64
 const O_EXCL i64 = 128
 const O_TRUNC i64 = 512
@@ -48,6 +49,7 @@ const E_NOTDIR i64 = 20
 const E_ISDIR i64 = 21
 const E_INVAL i64 = 22
 const E_NOSPC i64 = 28
+const E_DEADLK i64 = 35
 const O_DIRECTORY i64 = 65536
 const SYS_GETDENTS64 i64 = 217
 const SYS_GETPID i64 = 39
@@ -56,6 +58,18 @@ const SYS_RENAME i64 = 82
 const SYS_UNLINK i64 = 87
 const SYS_FCHMOD i64 = 91
 const SYS_MKDIRAT i64 = 258
+const SYS_PREAD64 i64 = 17
+const SYS_PWRITE64 i64 = 18
+const SYS_FCNTL i64 = 72
+const SYS_FDATASYNC i64 = 75
+const SYS_FTRUNCATE i64 = 77
+const F_SETLK i64 = 6
+const F_SETLKW i64 = 7
+
+// Lock kinds, for Lock: the fcntl record lock types.
+const LOCK_READ i64 = 0
+const LOCK_WRITE i64 = 1
+const UNLOCK i64 = 2
 
 // Argc is the number of command-line arguments, the program name included.
 func Argc(io *Cap) i64 {
@@ -277,6 +291,8 @@ func ErrText(e i64) bytes {
     return "invalid argument"
   } else if e == E_NOSPC {
     return "no space left on device"
+  } else if e == E_DEADLK {
+    return "deadlock avoided"
   }
   return "error"
 }
@@ -466,6 +482,103 @@ func WriteFile(io *Cap, path bytes, data bytes, mode i64) i64 {
 // durable. It returns 0, or an error code.
 func Fsync(f *File) i64 {
   return Code(syscall(SYS_FSYNC, f.fd, 0, 0, 0, 0, 0))
+}
+
+// Fdatasync is Fsync without the metadata a later read does not need
+// (such as the modification time); a change of size is still synced.
+func Fdatasync(f *File) i64 {
+  return Code(syscall(SYS_FDATASYNC, f.fd, 0, 0, 0, 0, 0))
+}
+
+// Pread reads from f at byte offset off into b, up to len(b) bytes,
+// without moving f's position: the count (0 at or past the end) and 0, or
+// 0 and an error code. The count can be short of len(b) before the end
+// (a read over 2 GiB, some file systems): read again at off plus the count.
+func Pread(f *File, b bytes, off i64) (i64, i64) {
+  var r i64 = syscall(SYS_PREAD64, f.fd, ptr(b), len(b), off, 0, 0)
+  if r < 0 {
+    return 0, Code(r)
+  }
+  return r, 0
+}
+
+// Pwrite writes all of b to f at byte offset off, without moving f's
+// position; past the end, the file grows. A file opened with O_APPEND
+// (1024) ignores off: Linux appends every write. It returns 0, or an error
+// code.
+func Pwrite(f *File, b bytes, off i64) i64 {
+  var p i64 = ptr(b)
+  var n i64 = len(b)
+  var done i64 = 0
+  while done < n {
+    var w i64 = syscall(SYS_PWRITE64, f.fd, p + done, n - done, off + done, 0, 0)
+    if w < 0 {
+      return Code(w)
+    }
+    if w == 0 {
+      return E_IO
+    }
+    done = done + w
+  }
+  return 0
+}
+
+// Ftruncate sets f's size to n bytes: past n the data is gone, and a file
+// that grows reads as zeros there. It returns 0, or an error code.
+func Ftruncate(f *File, n i64) i64 {
+  return Code(syscall(SYS_FTRUNCATE, f.fd, n, 0, 0, 0, 0))
+}
+
+// MapFile maps the first n bytes of f read-only (mmap, private): the
+// bytes and 0, or an empty bytes and an error code. Nothing is copied;
+// pages are read as they are touched, so a program can look at a few
+// pages of a large file. f must be open for reading, and n should not pass
+// its size (Fstat): past the end, the rest of the last page reads as zeros
+// and a read of a page wholly past it traps (SIGBUS), as it does when the
+// file shrinks under the mapping. The mapping lasts until the
+// program ends, after f is closed too, and writing to it traps.
+func MapFile(f *File, n i64) (bytes, i64) {
+  if n == 0 {
+    return bytes(0, 0), 0
+  }
+  var p i64 = syscall(SYS_MMAP, 0, n, 1, 2, f.fd, 0)
+  if p < 0 && p > -4096 {
+    return bytes(0, 0), Code(p)
+  }
+  return bytes(p, n), 0
+}
+
+// Lock takes, or with UNLOCK gives back, a POSIX record lock (fcntl) on
+// bytes start to start+n of f; n 0 means to the end of the file, however
+// far it grows. kind is LOCK_READ (shared: f must be open for reading),
+// LOCK_WRITE (exclusive: open for writing), or UNLOCK. When another
+// process holds a lock in the way, Lock waits if wait is true, and else
+// returns E_AGAIN or E_ACCES at once; a wait that would deadlock returns
+// E_DEADLK. It returns 0, or an error code. These are the locks SQLite's
+// file format uses. They belong to the process, not to f: a second lock
+// over the same bytes replaces the first, and closing any handle to the
+// file gives back every lock the process holds on it.
+func Lock(io *Cap, f *File, kind i64, start i64, n i64, wait bool) i64 {
+  var mark i64 = io.used
+  var region i64 = io.heap
+  // struct flock: l_type and l_whence (SEEK_SET, 0) are 16 bits, then
+  // l_start and l_len at 8 and 16, and l_pid at 24.
+  var fl i64 = Alloc(io, 32)
+  store16(fl, kind)
+  store64(fl + 8, start)
+  store64(fl + 16, n)
+  var cmd i64 = F_SETLK
+  if wait {
+    cmd = F_SETLKW
+  }
+  var r i64 = syscall(SYS_FCNTL, f.fd, cmd, fl, 0, 0, 0)
+  store16(fl, 0)
+  store64(fl + 8, 0)
+  store64(fl + 16, 0)
+  if io.heap == region {
+    io.used = mark
+  }
+  return Code(r)
 }
 
 // Rename moves the file at path from to path to, replacing what is there
