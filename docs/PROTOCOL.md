@@ -128,6 +128,19 @@ either way it is not ok. The harness reports what an honest test did; it
 does not guard against a test that imitates the runtime (a test can also
 write to the descriptor that marks its return).
 
+An Ovid program whose write to its standard output or standard error
+fails in `ovid/io.Print`, `Eprint`, `PrintInt`, or `EprintInt` (a full
+disk, a closed descriptor) writes `ovid/io: write to standard output
+failed` (or `standard error`) to stderr, best effort, and exits 74
+(`ovid/io.EXIT_IO`, sysexits' `EX_IOERR`). Those calls have no error to
+check, so this is how a lost write is told from success. A reader that
+went away (`prog | head -1`) ends the program by `SIGPIPE` before that,
+with nothing on stderr when it runs on its own, as `cat` does; under `run`
+it is a signal like any other, so `run` writes its `"signal":"broken pipe"`
+line and exits 141. A program's own `ovid/io.Write`
+calls, on `Stdout(io)` and `Stderr(io)` too, return the error and exit
+however the program decides.
+
 ## What `run` and `test` need
 
 Both compile the program and execute it. They write it to a temporary

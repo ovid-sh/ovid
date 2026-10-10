@@ -315,7 +315,9 @@ func WriteN(f *File, p i64, n i64) error {
 
 // Stdin, Stdout, and Stderr are the program's standard streams, as files.
 // Each call makes a new handle on the same descriptor; Close invalidates
-// only the handle (see Close). Print and Eprint write without one.
+// only the handle (see Close). Write on one returns an error as on any
+// file; Print, Eprint, PrintInt, and EprintInt write without one and
+// cannot fail (see EXIT_IO).
 func Stdin(io *Cap) *File {
   return stream(io, 0)
 }
@@ -694,9 +696,20 @@ func IsDir(io *Cap, path bytes) (bool, error) {
   return (m & 0xF000) == 0x4000, 0
 }
 
+// EXIT_IO is the exit code of a program whose write to standard output
+// or standard error failed (a full disk, a closed descriptor): Print,
+// Eprint, PrintInt, and EprintInt do not return an error, they end the
+// program, after one try at saying so on standard error. 74 is sysexits'
+// EX_IOERR, beside EXIT_OOM's 71. A pipe whose reader has gone (prog |
+// head -1) ends the program by SIGPIPE first, as it does cat (141 under
+// run). Write on Stdout(io) or Stderr(io) returns the
+// error instead, as on any file.
+const EXIT_IO i64 = 74
+
 // Print writes b to standard output: ovid/io.Print(io, "hi\n"). It uses
 // heap scratch for the handle and gives it back, so it may be called in a
-// loop. It returns 0, or the error's code as an i64.
+// loop. It cannot fail: it returns 0, and if the write fails the program
+// ends with exit code 74 (EXIT_IO).
 func Print(io *Cap, b bytes) i64 {
   return printTo(io, 1, b)
 }
@@ -712,32 +725,63 @@ func printTo(io *Cap, n i64, b bytes) i64 {
   var mark i64 = io.used
   var region i64 = io.heap
   var f *File = stream(io, n)
-  var r i64 = Write(f, b) as i64
+  var r error = Write(f, b)
   f.fd = 0
   f.std = false
   if io.heap == region {
     io.used = mark
   }
-  return r
+  return stdDone(n, r)
 }
 
-// PrintInt writes v in decimal to standard output. It uses heap scratch
-// and gives it back, so it may be called in a loop.
+// PrintInt writes v in decimal to standard output, as Print does: it
+// cannot fail. It uses heap scratch and gives it back, so it may be called
+// in a loop.
 func PrintInt(io *Cap, v i64) i64 {
+  return intTo(io, 1, v)
+}
+
+// EprintInt is PrintInt to standard error, for a number in a message:
+// ovid/io.Eprint(io, "line "), ovid/io.EprintInt(io, n).
+func EprintInt(io *Cap, v i64) i64 {
+  return intTo(io, 2, v)
+}
+
+// intTo writes v in decimal to standard stream n (1, or else 2), as
+// printTo does.
+func intTo(io *Cap, n i64, v i64) i64 {
   var mark i64 = io.used
   var region i64 = io.heap
-  var f *File = stream(io, 1)
+  var f *File = stream(io, n)
   var r i64 = WriteInt(io, f, v)
   f.fd = 0
   f.std = false
   if io.heap == region {
     io.used = mark
   }
-  return r
+  return stdDone(n, r as error)
+}
+
+// stdDone is 0 when the write to standard stream n succeeded (r is 0);
+// otherwise it ends the program with EXIT_IO, after one try at saying so
+// on standard error. It does not name r: ErrText would grow every program
+// that prints.
+func stdDone(n i64, r error) i64 {
+  if r == 0 {
+    return 0
+  }
+  var msg bytes = "ovid/io: write to standard error failed\n"
+  if n == 1 {
+    msg = "ovid/io: write to standard output failed\n"
+  }
+  syscall(SYS_WRITE, 2, ptr(msg), len(msg), 0, 0, 0)
+  syscall(SYS_EXIT, EXIT_IO, 0, 0, 0, 0, 0)
+  return EXIT_IO
 }
 
 // WriteInt writes v in decimal to f. It uses heap scratch and gives it
-// back. It returns 0, or the error's code as an i64.
+// back. Unlike PrintInt it can fail, as Write can: it returns 0, or the
+// error's code as an i64.
 func WriteInt(io *Cap, f *File, v i64) i64 {
   var mark i64 = io.used
   var region i64 = io.heap
