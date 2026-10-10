@@ -503,7 +503,9 @@ func Pread(f *File, b bytes, off i64) (i64, i64) {
 }
 
 // Pwrite writes all of b to f at byte offset off, without moving f's
-// position; past the end, the file grows. It returns 0, or an error code.
+// position; past the end, the file grows. A file opened with O_APPEND
+// (1024) ignores off: Linux appends every write. It returns 0, or an error
+// code.
 func Pwrite(f *File, b bytes, off i64) i64 {
   var p i64 = ptr(b)
   var n i64 = len(b)
