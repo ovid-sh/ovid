@@ -2,6 +2,7 @@ package tool
 
 import (
 	"bytes"
+	"os"
 	"runtime"
 	"strings"
 	"testing"
@@ -14,6 +15,9 @@ import (
 func TestTestBoundsOutput(t *testing.T) {
 	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
 		t.Skip("ovid programs are linux/amd64 binaries")
+	}
+	if _, err := os.Stat("/proc/self/fd"); err != nil {
+		t.Skip("no /proc for TestC_FloodMark to open the mark's descriptor through")
 	}
 	old := testTimeout
 	testTimeout = 300 * time.Millisecond
