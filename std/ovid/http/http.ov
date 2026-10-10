@@ -39,7 +39,7 @@ type Request struct {
   target bytes
   hdr bytes
   body bytes
-  err i64
+  err error
 }
 
 // Response is what the handler fills in. The host writes the framing
@@ -51,10 +51,13 @@ type Response struct {
 }
 
 // Err values: why a request could not be read. The stdio host answers
-// each with the status named.
-const ERR_SYNTAX i64 = 1
-const ERR_TOO_LARGE i64 = 2
-const ERR_UNSUPPORTED i64 = 3
+// each with the status its number ends in. They are errors, numbered past
+// the kernel's codes (ovid/io.E_), so neither is ever taken for the other;
+// a request whose input could not be read has the read's ovid/io error,
+// answered with 500.
+const ERR_SYNTAX error = 4400
+const ERR_TOO_LARGE error = 4413
+const ERR_UNSUPPORTED error = 4501
 
 // MAX_REQUEST is the most bytes a request read from standard input takes,
 // head and body together.
@@ -73,6 +76,7 @@ type Stdio struct {
   used i64
   scan i64
   eof i64
+  rerr error
   done bool
 }
 
@@ -115,9 +119,10 @@ func Body(r *Request) bytes {
   return r.body
 }
 
-// Err is 0 for a request that was read whole, else an ERR_ value. The
-// other funcs of a request with an error see empty values.
-func Err(r *Request) i64 {
+// Err is 0 for a request that was read whole, else an ERR_ value, or the
+// ovid/io error of reading it. The other funcs of a request with an error
+// see empty values.
+func Err(r *Request) error {
   return r.err
 }
 
@@ -144,11 +149,11 @@ func NewRequest(io *ovid/io.Cap, method bytes, target bytes) *Request {
 }
 
 // AddHeader appends a header to a request made with NewRequest. It
-// returns 0, or -1 (and adds nothing) when the name or value is not one
-// a header can carry.
-func AddHeader(io *ovid/io.Cap, r *Request, name bytes, val bytes) i64 {
+// returns 0, or ovid/io.E_INVAL (and adds nothing) when the name or value
+// is not one a header can carry.
+func AddHeader(io *ovid/io.Cap, r *Request, name bytes, val bytes) error {
   if !validName(name) || !validValue(val) {
-    return -1
+    return ovid/io.E_INVAL
   }
   var b *ovid/mem.Buf = ovid/mem.New(io, (len(r.hdr) + len(name)) + (len(val) + 4))
   ovid/mem.WBytes(io, b, r.hdr)
@@ -172,28 +177,28 @@ func NewResponse(io *ovid/io.Cap) *Response {
   return res
 }
 
-// SetStatus sets the status code. It returns 0, or -1 (and changes
-// nothing) for a code outside 100 to 599.
-func SetStatus(res *Response, code i64) i64 {
+// SetStatus sets the status code. It returns 0, or ovid/io.E_INVAL (and
+// changes nothing) for a code outside 100 to 599.
+func SetStatus(res *Response, code i64) error {
   if code < 100 || code > 599 {
-    return -1
+    return ovid/io.E_INVAL
   }
   res.status = code
   return 0
 }
 
-// SetHeader adds a header to the response. It returns 0, or -1 (and adds
-// nothing) when the name or value is not one a header can carry: an empty
-// name, a byte outside a name's token characters, a control byte other
-// than tab (CR and LF among them) or DEL in the value. Content-Length and
-// Transfer-Encoding frame the body, which is the host's to do, so they
-// are refused too.
-func SetHeader(io *ovid/io.Cap, res *Response, name bytes, val bytes) i64 {
+// SetHeader adds a header to the response. It returns 0, or
+// ovid/io.E_INVAL (and adds nothing) when the name or value is not one a
+// header can carry: an empty name, a byte outside a name's token
+// characters, a control byte other than tab (CR and LF among them) or DEL
+// in the value. Content-Length and Transfer-Encoding frame the body,
+// which is the host's to do, so they are refused too.
+func SetHeader(io *ovid/io.Cap, res *Response, name bytes, val bytes) error {
   if !validName(name) || !validValue(val) {
-    return -1
+    return ovid/io.E_INVAL
   }
   if lowerEq(name, "content-length") || lowerEq(name, "transfer-encoding") {
-    return -1
+    return ovid/io.E_INVAL
   }
   putHeader(io, res.hdr, name, val)
   return 0
@@ -279,6 +284,8 @@ func NextStdio(io *ovid/io.Cap, s *Stdio) *Request {
     r.err = ERR_SYNTAX
     if (s.len - s.start) >= max {
       r.err = ERR_TOO_LARGE
+    } else if s.eof == 2 {
+      r.err = s.rerr
     }
     return r
   }
@@ -298,6 +305,9 @@ func NextStdio(io *ovid/io.Cap, s *Stdio) *Request {
   }
   if (s.len - s.start) < (h + bl) {
     r.err = ERR_SYNTAX
+    if s.eof == 2 {
+      r.err = s.rerr
+    }
     return r
   }
   s.used = h + bl
@@ -321,7 +331,7 @@ func ReadStdio(io *ovid/io.Cap) *Request {
 // fill reads more of standard input into s, up to want bytes from start.
 // When the buffer has no room for them, what is left of it moves to the
 // front first, and the bytes it leaves are zeroed. At the end of the input
-// s.eof is 1, and 2 when it could not be read.
+// s.eof is 1, and 2 when it could not be read, with the error in s.rerr.
 func fill(s *Stdio, want i64) i64 {
   if (s.start + want) > (MAX_REQUEST + 1) {
     var rest i64 = s.len - s.start
@@ -330,9 +340,10 @@ func fill(s *Stdio, want i64) i64 {
     s.len = rest
     s.start = 0
   }
-  var n i64, e i64 = ovid/io.Read(s.in, bytes(s.buf + s.len, (s.start + want) - s.len))
+  var n i64, e error = ovid/io.Read(s.in, bytes(s.buf + s.len, (s.start + want) - s.len))
   if e != 0 {
     s.eof = 2
+    s.rerr = e
     return 0
   }
   if n > 0 {
@@ -392,8 +403,8 @@ func zero(p i64, n i64) i64 {
 // Parse fills r from a whole request and returns 0; r points into those
 // bytes afterwards. For bytes that are not a request it returns an ERR_
 // value, which Err reports too, and r is left empty.
-func Parse(r *Request, req bytes) i64 {
-  var e i64 = parse(r, req)
+func Parse(r *Request, req bytes) error {
+  var e error = parse(r, req)
   if e != 0 {
     var none bytes = req[0:0]
     r.method = none
@@ -405,7 +416,7 @@ func Parse(r *Request, req bytes) i64 {
   return e
 }
 
-func parse(r *Request, p bytes) i64 {
+func parse(r *Request, p bytes) error {
   var eol i64 = lineEnd(p, 0)
   if eol < 0 {
     return ERR_SYNTAX
@@ -483,8 +494,9 @@ func parse(r *Request, p bytes) i64 {
 
 // WriteStdio writes the response to standard output and returns the exit
 // code for main: 0 when it was written, 1 when it could not be. A request
-// with an error is answered with its status (400, 413, or 501), and a
-// handler result other than 0 with 500; both drop what the handler wrote.
+// with an error is answered with its status (400, 413, or 501; 500 for an
+// input that could not be read), and a handler result other than 0 with
+// 500; both drop what the handler wrote.
 func WriteStdio(io *ovid/io.Cap, req *Request, res *Response, result i64) i64 {
   var b *ovid/mem.Buf = Format(io, req, res, result)
   if ovid/io.Write(ovid/io.Stdout(io), ovid/mem.Bytes(b)) != 0 {

@@ -104,10 +104,10 @@ func main(io *ovid/io.Cap) i64 {
   if l.f.b[Swap(l.f)] != 98 || Take(l.f.b, Swap(l.f)) != 89 {
     return Fail(io, 9)
   }
-  // Returning a field with an error code: the code's call comes after.
+  // Returning a field with an error: the error's call comes after.
   f = New(io)
-  var r bytes, e i64 = Both(f)
-  if e != 1 || r[0] != 97 {
+  var r bytes, e error = Both(f)
+  if e != 1 as error || r[0] != 97 {
     return Fail(io, 10)
   }
   // And a while condition on a field is just a condition.
@@ -136,6 +136,6 @@ func main(io *ovid/io.Cap) i64 {
   return 0
 }
 
-func Both(f *F) (bytes, i64) {
-  return f.b, Swap(f)
+func Both(f *F) (bytes, error) {
+  return f.b, Swap(f) as error
 }

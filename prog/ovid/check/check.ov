@@ -504,7 +504,7 @@ func CheckPkgConst(c *Ch, n *ovid/parse.Node, pk bytes, name bytes) i64 {
         Err(c, "bad_type", "a table is not a value")
         return SetBad(c)
       }
-      return SetI64(c)
+      return SetTy(c, cd.typ)
     }
   }
   Err(c, "unknown_name", name)
@@ -613,7 +613,7 @@ func TypeDecl(c *Ch, t bytes) *ovid/parse.Decl {
 // pkg.T, or *pkg.T): 0 for i64, bool, or a pointer to a struct that exists,
 // 1 for such a struct by value, -1 when the package or struct is unknown.
 func TyKind(c *Ch, t bytes) i64 {
-  if TyEq(t, "i64") || TyEq(t, "bool") || TyEq(t, "bytes") {
+  if TyEq(t, "i64") || TyEq(t, "bool") || TyEq(t, "bytes") || TyEq(t, "error") {
     return 0
   }
   var star i64 = 0
@@ -680,6 +680,19 @@ func NeedTy(c *Ch, t bytes, msg bytes) i64 {
   return 0
 }
 
+// NeedFit is NeedTy for the value n, which may also be the literal 0
+// where an error is wanted: the error that means success.
+func NeedFit(c *Ch, n *ovid/parse.Node, t bytes, msg bytes) i64 {
+  if TyEq(t, "error") && IsZero(n) {
+    return 0
+  }
+  return NeedTy(c, t, msg)
+}
+
+func IsZero(n *ovid/parse.Node) bool {
+  return n.op == ovid/parse.OP_INT && n.ival == 0
+}
+
 func NeedI64(c *Ch, msg bytes) i64 {
   return NeedTy(c, "i64", msg)
 }
@@ -736,7 +749,7 @@ func CheckExprIn(c *Ch, n *ovid/parse.Node) i64 {
         Err(c, "bad_type", "a table is not a value")
         return SetBad(c)
       }
-      return SetI64(c)
+      return SetTy(c, cd.typ)
     }
     Err(c, "unknown_name", n.name)
     return SetBad(c)
@@ -849,7 +862,9 @@ func CheckExprIn(c *Ch, n *ovid/parse.Node) i64 {
     CheckExpr(c, n.right)
     if !lb {
       if !Bad(c) {
-        if !TyEq(t, c.typ) {
+        // e == 0: the literal 0 is the error that means success.
+        var zero bool = (TyEq(t, "error") && IsZero(n.right)) || (IsTy(c, "error") && IsZero(n.left))
+        if !TyEq(t, c.typ) && !zero {
           Err(c, "type_mismatch", "comparison types differ")
         } else if TyEq(t, "bytes") {
           Here(c, n)
@@ -918,11 +933,17 @@ func CheckExprIn(c *Ch, n *ovid/parse.Node) i64 {
       Here(c, n)
       Err(c, "opaque_type", c.typ)
     }
+    if Bad(c) {
+      return SetTy(c, n.typ)
+    }
+    // An error converts to and from an i64 only.
+    var te bool = TyEq(n.typ, "error")
+    var se bool = IsTy(c, "error")
+    Here(c, n)
     if ck == 1 {
-      if !Bad(c) {
-        Here(c, n)
-        Err(c, "type_mismatch", "cast needs i64, bool, or a pointer type")
-      }
+      Err(c, "type_mismatch", "cast needs i64, bool, or a pointer type")
+    } else if (te && !se && !IsTy(c, "i64")) || (se && !te && !TyEq(n.typ, "i64")) {
+      Err(c, "type_mismatch", "an error converts only to and from i64")
     }
     return SetTy(c, n.typ)
   }
@@ -987,7 +1008,7 @@ func CheckExprIn(c *Ch, n *ovid/parse.Node) i64 {
     }
     NewUse(c, ovid/parse.USE_CALL, n, c.fd, n.fn).decl = fn
     if len(fn.typ2) != 0 && !c.recv {
-      Err(c, "unused_result", "a value and an error code are returned; receive both")
+      Err(c, "unused_result", "a value and an error are returned; receive both")
     }
     c.recv = false
     if ovid/parse.CountNodes(a) != ovid/parse.CountDecls(fn.sub) {
@@ -997,7 +1018,7 @@ func CheckExprIn(c *Ch, n *ovid/parse.Node) i64 {
     while a != 0 as *ovid/parse.Node {
       CheckExpr(c, a)
       if p != 0 as *ovid/parse.Decl {
-        NeedTy(c, p.typ, n.fn)
+        NeedFit(c, a, p.typ, n.fn)
         p = p.next
       }
       a = a.next
@@ -1150,7 +1171,7 @@ func CheckStmt(c *Ch, s *ovid/parse.Node) i64 {
     }
     if s.val != 0 as *ovid/parse.Node {
       CheckExpr(c, s.val)
-      NeedTy(c, bytes(tp, tn), s.name)
+      NeedFit(c, s.val, bytes(tp, tn), s.name)
     }
     Bind(c, s.name, bytes(tp, tn))
     Own(c, s, 0, 0 as *ovid/parse.Decl)
@@ -1190,8 +1211,13 @@ func CheckStmt(c *Ch, s *ovid/parse.Node) i64 {
       if known && t1n >= 0 && !TyEq(bytes(t1p, t1n), "invalid") && !TyEq(bytes(t1p, t1n), callee.typ) {
         Err(c, "type_mismatch", "first result")
       }
-      if t2n >= 0 && !TyEq(bytes(t2p, t2n), "invalid") && !TyEq(bytes(t2p, t2n), "i64") {
-        Err(c, "type_mismatch", "second result")
+      if t2n >= 0 && !TyEq(bytes(t2p, t2n), "invalid") && !TyEq(bytes(t2p, t2n), "error") {
+        Err(c, "type_mismatch", "second result is an error")
+        if op == ovid/parse.OP_VAR2 {
+          // Bound as the error it holds, so its uses report nothing more.
+          t2p = strptr("error")
+          t2n = strlen("error")
+        }
       }
     }
     if op == ovid/parse.OP_VAR2 {
@@ -1215,7 +1241,7 @@ func CheckStmt(c *Ch, s *ovid/parse.Node) i64 {
     }
     UseLocal(c, ovid/parse.USE_ASSIGN, loc, s, s.name)
     CheckExpr(c, s.val)
-    NeedTy(c, bytes(load64(loc + 16), load64(loc + 24)), s.name)
+    NeedFit(c, s.val, bytes(load64(loc + 16), load64(loc + 24)), s.name)
     return 0
   }
   if op == ovid/parse.OP_SETFIELD {
@@ -1241,7 +1267,7 @@ func CheckStmt(c *Ch, s *ovid/parse.Node) i64 {
     }
     CheckExpr(c, s.val)
     if !was {
-      NeedTy(c, bytes(fp, fn), s.name)
+      NeedFit(c, s.val, bytes(fp, fn), s.name)
     }
     return 0
   }
@@ -1284,7 +1310,7 @@ func CheckStmt(c *Ch, s *ovid/parse.Node) i64 {
       }
     }
     CheckExpr(c, s.val)
-    NeedTy(c, c.res, "return type")
+    NeedFit(c, s.val, c.res, "return type")
     if forward {
       return 0
     }
@@ -1293,11 +1319,13 @@ func CheckStmt(c *Ch, s *ovid/parse.Node) i64 {
       Err(c, "arity", "one value is returned")
     } else if s.val2 == 0 as *ovid/parse.Node && c.two {
       Here(c, s)
-      Err(c, "arity", "a value and an error code are returned")
+      Err(c, "arity", "a value and an error are returned")
     }
     if s.val2 != 0 as *ovid/parse.Node {
       CheckExpr(c, s.val2)
-      NeedI64(c, "error code")
+      if c.two {
+        NeedFit(c, s.val2, "error", "error returned")
+      }
     }
     return 0
   }

@@ -1,7 +1,7 @@
 package util
 // Div returns a / b, or 0 and E_ZERO.
-const E_ZERO i64 = 7
-func Div(a i64, b i64) (i64, i64) {
+const E_ZERO error = 7
+func Div(a i64, b i64) (i64, error) {
   if b == 0 {
     return 0, E_ZERO
   }

@@ -187,7 +187,7 @@ func StdHas(m *Mod, path bytes) bool {
 // (name = rel, std = d_type), sorted by name, without . and ..
 // It uses getdents64 through ovid/io.Getdents.
 func ListDir(io *ovid/io.Cap, path i64) *File {
-  var fd *ovid/io.File, e i64 = ovid/io.Open(io, bytes(path, ovid/io.CLen(path)), ovid/io.O_DIRECTORY, 0)
+  var fd *ovid/io.File, e error = ovid/io.Open(io, bytes(path, ovid/io.CLen(path)), ovid/io.O_DIRECTORY, 0)
   if e != 0 {
     return 0 as *File
   }
@@ -293,7 +293,7 @@ func Walk(m *Mod, abs i64, rel bytes) i64 {
         Walk(m, full, bytes(crel, creln))
       }
     } else if HasOvSuffix(e.rel) && !(m.notests && IsTestFile(e.rel)) {
-      var src bytes, re i64 = ovid/io.ReadFile(m.io, bytes(full, ovid/io.CLen(full)))
+      var src bytes, re error = ovid/io.ReadFile(m.io, bytes(full, ovid/io.CLen(full)))
       if re == 0 {
         var f *File = ovid/io.Alloc(m.io, sizeof(File)) as *File
         f.rel = bytes(crel, creln)
@@ -525,7 +525,7 @@ func StdPass(m *Mod) i64 {
       var en *File = e.next
       if !EntIsDir(m.io, dir, e) && HasOvSuffix(e.rel) {
         var full i64 = Path(m.io, bytes(dir, ovid/io.CLen(dir)), e.rel)
-        var src bytes, re i64 = ovid/io.ReadFile(m.io, bytes(full, ovid/io.CLen(full)))
+        var src bytes, re error = ovid/io.ReadFile(m.io, bytes(full, ovid/io.CLen(full)))
         if re == 0 {
           var f *File = ovid/io.Alloc(m.io, sizeof(File)) as *File
           var t i64 = Cat(m.io, "std:", sorted.path)
@@ -632,7 +632,7 @@ func Load(io *ovid/io.Cap, dir bytes, std bytes, notests bool) *Mod {
   m.dir = dir
   m.out = ovid/mem.New(io, 4096)
   var modp i64 = Path(io, dir, "ovid.mod")
-  var msrc bytes, me i64 = ovid/io.ReadFile(io, bytes(modp, ovid/io.CLen(modp)))
+  var msrc bytes, me error = ovid/io.ReadFile(io, bytes(modp, ovid/io.CLen(modp)))
   if me != 0 {
     var b *ovid/mem.Buf = Msg(io, "no ovid.mod in ")
     ovid/mem.WBytes(io, b, dir)
