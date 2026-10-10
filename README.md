@@ -115,7 +115,7 @@ capability for argv, the heap, syscalls, and files, and `syscall` is only allowe
 stream, takes `io`, and one that uses an open file takes its handle:
 `ovid/io.Open(io, path, flags, mode)` returns a `*ovid/io.File` for `Read`,
 `Write`, and `Close`, `ovid/io.Stdout(io)` and its kin are the standard streams,
-and `ovid/io.Print(io, b)` writes to stdout. Other packages' funcs and consts spell the import path:
+and `ovid/io.Print(io, b)` writes to stdout. `Print`, `Eprint`, `PrintInt`, and `EprintInt` (stderr) cannot fail: if the write does, the program exits 74 (`ovid/io.EXIT_IO`) with a line on stderr, while `Write` on any handle returns the error. Other packages' funcs and consts spell the import path:
 `ovid/mem.Copy(dst, src)`, `ovid/io.O_RDONLY`; a one-segment import may be
 written `util.F()`. Imports may not form a cycle (`import_cycle`), so the
 packages are a DAG.

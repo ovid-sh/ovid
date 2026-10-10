@@ -64,7 +64,7 @@ All commands take -C <dir> (default: the module containing the cwd).
 The language at a glance (all of it: ovid help language):
   i64, bool, bytes, error, *T; var x i64 = 0; if/else if/else; while, break, continue
   var p *T = ovid/io.Alloc(io, sizeof(T)) as *T     structs live on the heap
-  ovid/io.Print(io, "hi\n"); ovid/io.PrintInt(io, n)  output
+  ovid/io.Print(io, "hi\n"); ovid/io.PrintInt(io, n)  output (Eprint, EprintInt: stderr)
   var d bytes, e error = ovid/io.ReadFile(io, p)    if e != 0 { ... }
   var sp bool = c == 32 || c == 9                   && || ! work anywhere
 
@@ -126,6 +126,13 @@ A caller of a (T, error) func must receive both, with a var of two names
 or an assignment to two locals, _ discarding one; a call used as a single
 value or as a statement is unused_result. main, handle, and tests return
 one i64 (an exit code): return e as i64 exits with an error's code.
+Printing cannot fail: ovid/io.Print, Eprint, PrintInt, and EprintInt
+return 0, with no error to check. If the write to stdout or stderr fails
+(a full disk, a closed stream), the program ends with exit 74
+(ovid/io.EXIT_IO) and one line on stderr. A reader that has gone
+(prog | head -1) ends it by SIGPIPE first, as it does cat (141 under run).
+ovid/io.Write on any *File, Stdout(io) and Stderr(io) included, returns
+the error, and WriteInt(io, f, n) its code as an i64.
 Faults (a bad load, a division by zero, a table index out of range) are
 not errors: they kill the program, and ovid test reports where.
 
@@ -184,6 +191,7 @@ strptr("hi\n") and strlen("hi\n") are a literal's address and length as
 two i64; the literal is NUL-terminated in memory, for a syscall path.
   ovid/io.Print(io, "total: ")         // Eprint(io, b) writes to stderr
   ovid/io.PrintInt(io, n)              // a number in decimal
+  ovid/io.EprintInt(io, n)             // the same to stderr, for a message
   ovid/io.Print(io, b)                 // a bytes; bytes(p, n) for n bytes at p
 
 Memory: no implicit allocation. ovid/io.Alloc(io, nbytes) returns an i64
