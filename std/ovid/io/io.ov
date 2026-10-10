@@ -492,8 +492,8 @@ func Fdatasync(f *File) i64 {
 
 // Pread reads from f at byte offset off into b, up to len(b) bytes,
 // without moving f's position: the count (0 at or past the end) and 0, or
-// 0 and an error code. A read of a regular file comes back short only at
-// its end.
+// 0 and an error code. The count can be short of len(b) before the end
+// (a read over 2 GiB, some file systems): read again at off plus the count.
 func Pread(f *File, b bytes, off i64) (i64, i64) {
   var r i64 = syscall(SYS_PREAD64, f.fd, ptr(b), len(b), off, 0, 0)
   if r < 0 {
@@ -531,8 +531,9 @@ func Ftruncate(f *File, n i64) i64 {
 // bytes and 0, or an empty bytes and an error code. Nothing is copied;
 // pages are read as they are touched, so a program can look at a few
 // pages of a large file. f must be open for reading, and n should not pass
-// its size (Fstat): a read past the end of the file traps (SIGBUS), as it
-// does when the file shrinks under the mapping. The mapping lasts until the
+// its size (Fstat): past the end, the rest of the last page reads as zeros
+// and a read of a page wholly past it traps (SIGBUS), as it does when the
+// file shrinks under the mapping. The mapping lasts until the
 // program ends, after f is closed too, and writing to it traps.
 func MapFile(f *File, n i64) (bytes, i64) {
   if n == 0 {
