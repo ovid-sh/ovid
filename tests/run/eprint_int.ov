@@ -1,0 +1,28 @@
+package demo
+import ovid/io
+// exit: 0
+// stdout: "ok\n"
+
+// EprintInt is PrintInt to standard error: the numbers stay off stdout.
+// Like Print, Eprint, and PrintInt it cannot fail and returns 0, and it
+// gives its heap scratch back, so the next Alloc is zeroed.
+func main(io *ovid/io.Cap) i64 {
+  ovid/io.Eprint(io, "line ")
+  var r i64 = ovid/io.EprintInt(io, 42)
+  ovid/io.Eprint(io, ": ")
+  r = r + ovid/io.EprintInt(io, -9223372036854775807 - 1)
+  ovid/io.Eprint(io, "\n")
+  if r != 0 {
+    return 1
+  }
+  var p i64 = ovid/io.Alloc(io, 32)
+  var i i64 = 0
+  while i < 32 {
+    if load8(p + i) != 0 {
+      return 2
+    }
+    i = i + 1
+  }
+  ovid/io.Print(io, "ok\n")
+  return 0
+}
