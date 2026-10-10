@@ -221,10 +221,11 @@ Programs: the entry package (ovid.mod "entry") has
 A fatal error deep in the calls can end the program at once instead of
 returning to main: return ovid/io.Exit(io, 1) (it never returns).
 io is the capability for argv, heap, syscalls, and files. syscall(...) is
-only allowed inside ovid/io; everyone else calls ovid/io funcs, and each
-that reaches the file system or a stream takes io: ovid/io.Open(io, path,
-flags, mode) returns a *ovid/io.File for Read, Write, Fstat, and Close;
-ovid/io.Stdin(io), Stdout(io), and Stderr(io) are the standard streams.
+only allowed inside ovid/io; everyone else calls ovid/io funcs. Each that
+opens, names, or creates a file, or gets a stream, takes io; one that uses
+an open file takes its handle. ovid/io.Open(io, path, flags, mode) returns
+a *ovid/io.File for Read, Write, Fstat, and Close; ovid/io.Stdin(io),
+Stdout(io), and Stderr(io) are the standard streams.
 ovid/io's types are handles: outside ovid/io a pointer to one cannot be
 made by a cast, cast to anything, or have its fields read or written
 (opaque_type), so through the API a func without io reaches no file. Raw
