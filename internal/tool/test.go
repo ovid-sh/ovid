@@ -336,11 +336,16 @@ func testProgram(p *ir.Program, tests []testFn) *ir.Program {
 			Right: &ir.Node{ID: id("ex"), Op: "int", ValK: 1, Int: int64(k + 2)}}
 		call := &ir.Node{ID: id("ex"), Op: "call", Pkg: t.pkg, Func: t.name,
 			Args: []*ir.Node{{ID: id("ex"), Op: "name", Name: "io"}}}
-		// r = T(io); ovid/io.Write(returnedFD, strptr("r"), 1); return r
-		mark := &ir.Node{ID: id("ex"), Op: "call", Pkg: "ovid/io", Func: "Write", Args: []*ir.Node{
+		// r = T(io); write(returnedFD, "r", 1); return r. The wrapper
+		// is the toolchain's and is not checked, so it makes the system
+		// call itself: ovid/io has no func that takes a bare descriptor.
+		zero := func() *ir.Node { return &ir.Node{ID: id("ex"), Op: "int", ValK: 1, Int: 0} }
+		mark := &ir.Node{ID: id("ex"), Op: "syscall", Args: []*ir.Node{
+			{ID: id("ex"), Op: "int", ValK: 1, Int: 1},
 			{ID: id("ex"), Op: "int", ValK: 1, Int: returnedFD},
 			{ID: id("ex"), Op: "strptr", ValK: 3, Str: "r"},
-			{ID: id("ex"), Op: "int", ValK: 1, Int: 1}}}
+			{ID: id("ex"), Op: "int", ValK: 1, Int: 1},
+			zero(), zero(), zero()}}
 		body = append(body, &ir.Node{ID: id("st"), Op: "if", Cond: cond, Then: []*ir.Node{
 			{ID: id("st"), Op: "assign", Name: "r", Val: call},
 			{ID: id("st"), Op: "expr", Val: mark},

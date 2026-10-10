@@ -18,7 +18,7 @@ func oddStrings(t *testing.T) string {
 	t.Helper()
 	return mkmod(t, map[string]string{
 		"demo/main.ov": "package demo\nimport ovid/io\nimport shapes\nfunc main(io *ovid/io.Cap) i64 {\n" +
-			"  ovid/io.Print(\"<a href=\\\"x\\\">&amp;</a>\\n\\t\\\\ é \u2028 \x7f end\")\n" +
+			"  ovid/io.Print(io, \"<a href=\\\"x\\\">&amp;</a>\\n\\t\\\\ é \u2028 \x7f end\")\n" +
 			"  return sizeof(shapes.Point) + strlen(\"\")\n}\n",
 		"shapes/shapes.ov": "package shapes\n\nconst Sides i64 = 4\n\ntype Point struct {\n  x i64\n  y i64\n}\n",
 	})

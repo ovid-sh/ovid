@@ -87,9 +87,9 @@ func Imm() i64 {
 }
 
 func Line(io *ovid/io.Cap, name bytes, v i64) i64 {
-  ovid/io.Print(name)
+  ovid/io.Print(io, name)
   ovid/io.PrintInt(io, v)
-  ovid/io.Print("\n")
+  ovid/io.Print(io, "\n")
   return 0
 }
 

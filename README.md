@@ -110,8 +110,11 @@ allocation. Parameters take at most six words (a `bytes` is two); one result, or
 precedence and are signed; `>>` is arithmetic, and `ushr`, `umulhi`, `udiv`, `urem`, and `ult` are the unsigned forms. `strptr("…")`
 and `strlen("…")` are a literal's address and length as two `i64`, and `ptr(b)` a bytes' address, for a syscall path. Memory is `load8/16/32/64`, `store8/16/32/64`, `bswap16/32/64`, and
 `ovid/io.Alloc`. `main` is `func main(io *ovid/io.Cap) i64`; `io` is the
-capability for argv, the heap, and syscalls, and `syscall` is only allowed in
-`ovid/io`. Other packages' funcs and consts spell the import path:
+capability for argv, the heap, syscalls, and files, and `syscall` is only allowed in
+`ovid/io`. Every `ovid/io` func that reaches a file or a stream takes `io`:
+`ovid/io.Open(io, path, flags, mode)` returns a `*ovid/io.File` for `Read`,
+`Write`, and `Close`, `ovid/io.Stdout(io)` and its kin are the standard streams,
+and `ovid/io.Print(io, b)` writes to stdout. Other packages' funcs and consts spell the import path:
 `ovid/mem.Copy(dst, src)`, `ovid/io.O_RDONLY`; a one-segment import may be
 written `util.F()`. Imports may not form a cycle (`import_cycle`), so the
 packages are a DAG.

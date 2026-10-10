@@ -9,6 +9,6 @@ func Total() i64 {
 
 func main(io *ovid/io.Cap) i64 {
   ovid/io.PrintInt(io, Total())
-  ovid/io.Print("\n")
+  ovid/io.Print(io, "\n")
   return 0
 }

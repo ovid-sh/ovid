@@ -104,11 +104,11 @@ func main(io *ovid/io.Cap) i64 {
       buf = bigger
       size = size * 2
     }
-    r, e = ovid/io.Read(0, bytes(buf + n, size - n))
+    r, e = ovid/io.Read(ovid/io.Stdin(io), bytes(buf + n, size - n))
     n = n + r
   }
   if e != 0 {
-    ovid/io.Eprint("sortn: cannot read standard input\n")
+    ovid/io.Eprint(io, "sortn: cannot read standard input\n")
     return 1
   }
   // At most one value per newline, plus a last line without one.
@@ -128,7 +128,7 @@ func main(io *ovid/io.Cap) i64 {
     if i == n || load8(buf + i) == 10 {
       if i > start {
         if Parse(buf + start, i - start, vals + count * 8) != 0 {
-          ovid/io.Eprint("sortn: a line is not an i64\n")
+          ovid/io.Eprint(io, "sortn: a line is not an i64\n")
           return 1
         }
         count = count + 1
@@ -147,7 +147,7 @@ func main(io *ovid/io.Cap) i64 {
     ovid/mem.WByte(io, out, 10)
     i = i + 1
   }
-  ovid/io.Stdout(bytes(out.data, out.len))
+  ovid/io.Print(io, bytes(out.data, out.len))
   return 0
 }
 EOF

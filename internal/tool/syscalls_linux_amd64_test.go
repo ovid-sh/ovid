@@ -410,7 +410,7 @@ func TestHuge(io *ovid/io.Cap) i64 {
   return p & 1
 }
 func TestReturns71(io *ovid/io.Cap) i64 {
-  ovid/io.Eprint("out of memory\n")
+  ovid/io.Eprint(io, "out of memory\n")
   return 71
 }
 func main(io *ovid/io.Cap) i64 {
@@ -457,7 +457,7 @@ func TestExit71(io *ovid/io.Cap) i64 {
 func TestExit71Loud(io *ovid/io.Cap) i64 {
   var i i64 = 0
   while i < 100 {
-    ovid/io.Print("past the cut, past the cut, past the cut, past the cut, past\n")
+    ovid/io.Print(io, "past the cut, past the cut, past the cut, past the cut, past\n")
     i = i + 1
   }
   Stop(io, 71)

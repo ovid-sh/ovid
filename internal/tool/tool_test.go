@@ -219,7 +219,7 @@ func main(io *ovid/io.Cap) i64 {
   var hex i64 = ovid/io.Alloc(io, 80)
   ovid/sha.Sum(io, "abc", raw)
   ovid/sha.Hex(hex, raw)
-  ovid/io.Stdout(bytes(hex, 64))
+  ovid/io.Print(io, bytes(hex, 64))
   return 0
 }
 `), "ovid/sha")
@@ -987,7 +987,7 @@ func Get(n *Node) i64 {
 }
 
 func main(io *ovid/io.Cap) i64 {
-  ovid/io.Print("before\n")
+  ovid/io.Print(io, "before\n")
   return Get(0 as *Node)
 }
 `))
@@ -1058,9 +1058,9 @@ import ovid/io
 
 func main(io *ovid/io.Cap) i64 {
   var buf i64 = ovid/io.Alloc(io, 64)
-  var n i64, _ = ovid/io.Read(0, bytes(buf, 64))
-  ovid/io.Stdout(bytes(buf, n))
-  ovid/io.Stderr(bytes(strptr("to stderr\n"), 10))
+  var n i64, _ = ovid/io.Read(ovid/io.Stdin(io), bytes(buf, 64))
+  ovid/io.Print(io, bytes(buf, n))
+  ovid/io.Eprint(io, bytes(strptr("to stderr\n"), 10))
   return 3
 }
 `))
@@ -1829,12 +1829,12 @@ func Twice(v i64) i64 {
 func TestBinaryShape(t *testing.T) {
 	dir := mkmod(t, demo(`package demo
 import ovid/io
-func Unused() i64 {
-  ovid/io.Stdout("never printed")
+func Unused(io *ovid/io.Cap) i64 {
+  ovid/io.Print(io, "never printed")
   return 1
 }
 func main(io *ovid/io.Cap) i64 {
-  ovid/io.Stdout("hi\n")
+  ovid/io.Print(io, "hi\n")
   return 0
 }
 `))
@@ -1875,7 +1875,7 @@ func TestEditOne(t *testing.T) {
 	dir := mkmod(t, demo("package demo\n\nimport ovid/io\n\nfunc main(io *ovid/io.Cap) i64 {\n  return 1\n}\n"))
 	text := filepath.Join(t.TempDir(), "text.ov")
 	// Quotes and newlines need no escaping; the trailing newline is dropped.
-	os.WriteFile(text, []byte("ovid/io.Stdout(\"a \\\"b\\\"\\n\")\n"), 0o644)
+	os.WriteFile(text, []byte("ovid/io.Print(io, \"a \\\"b\\\"\\n\")\n"), 0o644)
 	var b bytes.Buffer
 	if code := EditOne(dir, EditOp{Op: "insert", Before: "st:demo.main:1", Expect: hashOf(t, dir, "fn:demo.main")}, text, EditOpts{RequireClean: true}, &b); code != 0 {
 		t.Fatalf("insert %d %s", code, b.String())

@@ -15,7 +15,7 @@ func Count(n i64) i64 {
 
 func main(io *ovid/io.Cap) i64 {
   ovid/io.PrintInt(io, Total(2, 3))
-  ovid/io.Print("\n")
+  ovid/io.Print(io, "\n")
   return 0
 }
 

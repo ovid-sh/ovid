@@ -70,6 +70,6 @@ func main(io *ovid/io.Cap) i64 {
   if b[0] != 9 || b[1] != 7 || b[4] != 9 || b[5] != 7 {
     return 4
   }
-  ovid/io.Print("ok\n")
+  ovid/io.Print(io, "ok\n")
   return 0
 }

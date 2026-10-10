@@ -16,9 +16,9 @@ import (
 const writer = `package demo
 import ovid/io
 func main(io *ovid/io.Cap) i64 {
-  var got i64, _ = ovid/io.Read(0, bytes(ovid/io.Alloc(io, 8), 8))
+  var got i64, _ = ovid/io.Read(ovid/io.Stdin(io), bytes(ovid/io.Alloc(io, 8), 8))
   while got > 0 {
-    got, _ = ovid/io.Read(0, bytes(ovid/io.Alloc(io, 8), 8))
+    got, _ = ovid/io.Read(ovid/io.Stdin(io), bytes(ovid/io.Alloc(io, 8), 8))
   }
   var path i64 = ovid/io.ArgC(io, 2)
   var n i64 = ovid/io.CLen(path)

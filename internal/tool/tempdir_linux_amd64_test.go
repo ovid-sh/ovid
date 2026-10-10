@@ -21,7 +21,7 @@ func TestPasses(io *ovid/io.Cap) i64 {
 }
 
 func main(io *ovid/io.Cap) i64 {
-  ovid/io.Print("ran\n")
+  ovid/io.Print(io, "ran\n")
   return 3
 }
 `

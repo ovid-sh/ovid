@@ -22,11 +22,11 @@ import ovid/io
 func main(io *ovid/io.Cap) i64 {
   var here i64 = ovid/io.WriteFile(io, "out.txt", "hello\n", 420)
   var there i64 = ovid/io.WriteFile(io, ovid/io.Arg(io, 1), "hello\n", 420)
-  ovid/io.Print("cwd ")
+  ovid/io.Print(io, "cwd ")
   ovid/io.PrintInt(io, here)
-  ovid/io.Print(" module ")
+  ovid/io.Print(io, " module ")
   ovid/io.PrintInt(io, there)
-  ovid/io.Print("\n")
+  ovid/io.Print(io, "\n")
   return 0
 }
 `
@@ -154,7 +154,7 @@ func TestLauncherNeverRunsTests(t *testing.T) {
 	}
 	// A program of ours, with the list from its receipt: the launcher
 	// becomes it, and the test binary is nothing but that launcher.
-	dir := mkmod(t, demo("package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  ovid/io.Print(\"launched\\n\")\n  return 3\n}\n"))
+	dir := mkmod(t, demo("package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  ovid/io.Print(io, \"launched\\n\")\n  return 3\n}\n"))
 	bin, calls := buildSyscalls(t, dir)
 	var nums []int64
 	for _, n := range calls {

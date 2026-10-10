@@ -46,7 +46,7 @@ func TestD_RewritesOvidMod(io *ovid/io.Cap) i64 {
 }
 
 func TestE_RemovesASource(io *ovid/io.Cap) i64 {
-  return ovid/io.Unlink(` + fmt.Sprintf("strptr(%q)", filepath.Join(dir, "demo/gone.ov")) + `)
+  return ovid/io.Unlink(io, ` + fmt.Sprintf("%q", filepath.Join(dir, "demo/gone.ov")) + `)
 }
 
 func TestF_WritesElsewhere(io *ovid/io.Cap) i64 {
@@ -180,7 +180,7 @@ func TestChangedModuleEdgeCases(t *testing.T) {
 	for rel, text := range map[string]string{
 		"ovid.mod":           "module inner\nentry inner\n",
 		"inner/main.ov":      "package inner\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  return 0\n}\n",
-		"inner/main_test.ov": testFile(fmt.Sprintf("  return ovid/io.Unlink(strptr(%q))", mod)),
+		"inner/main_test.ov": testFile(fmt.Sprintf("  return ovid/io.Unlink(io, %q)", mod)),
 	} {
 		os.MkdirAll(filepath.Dir(filepath.Join(inner, rel)), 0o755)
 		if err := os.WriteFile(filepath.Join(inner, rel), []byte(text), 0o644); err != nil {
@@ -203,7 +203,7 @@ func TestChangedModuleEdgeCases(t *testing.T) {
 	os.MkdirAll(hidden, 0o755)
 	os.WriteFile(filepath.Join(hidden, "x.ov"), []byte("package zzz\n"), 0o644)
 	if err := os.WriteFile(filepath.Join(dir, "inner", "main_test.ov"),
-		[]byte(testFile(fmt.Sprintf("  return ovid/io.Rename(strptr(%q), strptr(%q))", hidden, shown))), 0o644); err != nil {
+		[]byte(testFile(fmt.Sprintf("  return ovid/io.Rename(io, %q, %q)", hidden, shown))), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	os.Chmod(hidden, 0)

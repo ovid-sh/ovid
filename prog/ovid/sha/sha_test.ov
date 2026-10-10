@@ -12,11 +12,11 @@ func HexIs(io *ovid/io.Cap, s bytes, want i64) bool {
   if ovid/mem.Eq(bytes(hex, 64), bytes(want, 64)) {
     return true
   }
-  ovid/io.Stderr("got  ")
-  ovid/io.Stderr(bytes(hex, 64))
-  ovid/io.Stderr(bytes(strptr("\nwant "), 6))
-  ovid/io.Stderr(bytes(want, 64))
-  ovid/io.Stderr(bytes(strptr("\n"), 1))
+  ovid/io.Eprint(io, "got  ")
+  ovid/io.Eprint(io, bytes(hex, 64))
+  ovid/io.Eprint(io, bytes(strptr("\nwant "), 6))
+  ovid/io.Eprint(io, bytes(want, 64))
+  ovid/io.Eprint(io, bytes(strptr("\n"), 1))
   return false
 }
 

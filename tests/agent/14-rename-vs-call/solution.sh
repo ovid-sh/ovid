@@ -22,5 +22,5 @@ bulk WithTax
 h=$(ovid show fn:shop.main | sed -n '1s/.*hash=//p')
 ovid insert --before st:shop.main:3 --expect "$h" <<'EOF2'
 ovid/io.PrintInt(io, Bulk(12, 105))
-ovid/io.Print("\n")
+ovid/io.Print(io, "\n")
 EOF2

@@ -2,6 +2,6 @@
 package demo
 import ovid/io
 func main(io *ovid/io.Cap) i64 {
-  ovid/io.Write(1, "hi\n")
+  ovid/io.Print(io, "hi\n")
   return 0
 }

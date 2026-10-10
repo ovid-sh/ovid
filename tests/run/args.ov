@@ -4,7 +4,7 @@
 package demo
 import ovid/io
 func main(io *ovid/io.Cap) i64 {
-  ovid/io.Print(ovid/io.Arg(io, 2))
-  ovid/io.Print("\n")
+  ovid/io.Print(io, ovid/io.Arg(io, 2))
+  ovid/io.Print(io, "\n")
   return ovid/io.Argc(io)
 }

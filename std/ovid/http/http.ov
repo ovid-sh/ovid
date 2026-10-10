@@ -63,8 +63,10 @@ const MAX_REQUEST i64 = 8 << 20
 // Stdio reads requests from standard input. Its buffer holds, from start
 // to len, the request being served and what was read past it; outside
 // that range it is all zeros. The request being served takes used bytes;
-// scan is how far the search for the end of a head has looked.
+// scan is how far the search for the end of a head has looked; in is
+// standard input.
 type Stdio struct {
+  in *ovid/io.File
   buf i64
   start i64
   len i64
@@ -233,6 +235,7 @@ func HasSentHeader(res *Response, name bytes) bool {
 // any heap mark: its buffer must outlive every reset.
 func NewStdio(io *ovid/io.Cap) *Stdio {
   var s *Stdio = ovid/io.Alloc(io, sizeof(Stdio)) as *Stdio
+  s.in = ovid/io.Stdin(io)
   // One byte past MAX_REQUEST tells a head of exactly the limit from one
   // over it, and no read goes past it. The pages are not touched until a
   // request reaches them.
@@ -327,7 +330,7 @@ func fill(s *Stdio, want i64) i64 {
     s.len = rest
     s.start = 0
   }
-  var n i64, e i64 = ovid/io.Read(0, bytes(s.buf + s.len, (s.start + want) - s.len))
+  var n i64, e i64 = ovid/io.Read(s.in, bytes(s.buf + s.len, (s.start + want) - s.len))
   if e != 0 {
     s.eof = 2
     return 0
@@ -484,7 +487,7 @@ func parse(r *Request, p bytes) i64 {
 // handler result other than 0 with 500; both drop what the handler wrote.
 func WriteStdio(io *ovid/io.Cap, req *Request, res *Response, result i64) i64 {
   var b *ovid/mem.Buf = Format(io, req, res, result)
-  if ovid/io.Write(1, ovid/mem.Bytes(b)) != 0 {
+  if ovid/io.Write(ovid/io.Stdout(io), ovid/mem.Bytes(b)) != 0 {
     return 1
   }
   return 0

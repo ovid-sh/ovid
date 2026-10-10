@@ -119,36 +119,36 @@ func Load(io *ovid/io.Cap, t *Table, p i64, n i64) i64 {
 // first seen, NAME TOTAL, then the line "total" and the sum of all counts.
 func main(io *ovid/io.Cap) i64 {
   if ovid/io.Argc(io) < 2 {
-    ovid/io.Eprint("usage: stock FILE\n")
+    ovid/io.Eprint(io, "usage: stock FILE\n")
     return 1
   }
   var data bytes, re i64 = ovid/io.ReadFile(io, ovid/io.Arg(io, 1))
   if re != 0 {
-    ovid/io.Eprint("stock: cannot read the file\n")
+    ovid/io.Eprint(io, "stock: cannot read the file\n")
     return 1
   }
   var t *Table = NewTable(io)
   var bad i64 = Load(io, t, ptr(data), len(data))
   if bad != 0 {
-    ovid/io.Eprint("stock: bad line ")
-    ovid/io.WriteInt(io, 2, bad)
-    ovid/io.Eprint("\n")
+    ovid/io.Eprint(io, "stock: bad line ")
+    ovid/io.WriteInt(io, ovid/io.Stderr(io), bad)
+    ovid/io.Eprint(io, "\n")
     return 1
   }
   var sum i64 = 0
   var i i64 = 0
   while i < t.len {
     var e i64 = t.names + i * 16
-    ovid/io.Stdout(bytes(load64(e), load64(e + 8)))
-    ovid/io.Print(" ")
+    ovid/io.Print(io, bytes(load64(e), load64(e + 8)))
+    ovid/io.Print(io, " ")
     ovid/io.PrintInt(io, load64(t.counts + i * 8))
-    ovid/io.Print("\n")
+    ovid/io.Print(io, "\n")
     sum = sum + load64(t.counts + i * 8)
     i = i + 1
   }
-  ovid/io.Print("total ")
+  ovid/io.Print(io, "total ")
   ovid/io.PrintInt(io, sum)
-  ovid/io.Print("\n")
+  ovid/io.Print(io, "\n")
   return 0
 }
 EOF
