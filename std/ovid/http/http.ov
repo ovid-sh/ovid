@@ -330,7 +330,7 @@ func fill(s *Stdio, want i64) i64 {
     s.len = rest
     s.start = 0
   }
-  var n i64, e i64 = ovid/io.Read(s.in, bytes(s.buf + s.len, (s.start + want) - s.len))
+  var n i64, e error = ovid/io.Read(s.in, bytes(s.buf + s.len, (s.start + want) - s.len))
   if e != 0 {
     s.eof = 2
     return 0

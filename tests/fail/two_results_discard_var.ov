@@ -1,6 +1,6 @@
 package demo
 import ovid/io
-func Two(x i64) (i64, i64) {
+func Two(x i64) (i64, error) {
   return x, 0
 }
 func main(io *ovid/io.Cap) i64 {

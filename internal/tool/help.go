@@ -62,9 +62,10 @@ Also: ovid build [-o out], ovid dump (program as JSON), ovid version
 All commands take -C <dir> (default: the module containing the cwd).
 
 The language at a glance (all of it: ovid help language):
-  i64, bool, bytes, *T; var x i64 = 0; if/else if/else; while, break, continue
+  i64, bool, bytes, error, *T; var x i64 = 0; if/else if/else; while, break, continue
   var p *T = ovid/io.Alloc(io, sizeof(T)) as *T     structs live on the heap
   ovid/io.Print(io, "hi\n"); ovid/io.PrintInt(io, n)  output
+  var d bytes, e error = ovid/io.ReadFile(io, p)    if e != 0 { ... }
   var sp bool = c == 32 || c == 9                   && || ! work anywhere
 
 Topics: ovid help agent (language, std, edit, ids together) | language | commands | edit | std | ids
@@ -75,9 +76,9 @@ const helpLanguage = `Ovid language reference (v0).
 File:
   package app/util          // must equal the directory path
   import ovid/io            // one import per line, the full path
-  const Limit i64 = 64      // consts are i64
+  const Limit i64 = 64      // consts are i64, or error: const E_FULL error = 1
   const Pow [3]i64 = {1, 10, 100}   // a table: read-only, Pow[i] and len(Pow)
-  type Pair struct {        // fields are i64, bool, or *T; one per line
+  type Pair struct {        // fields are i64, bool, bytes, error, or *T; one per line
     a i64
     next *Pair
   }
@@ -94,29 +95,37 @@ File:
 Imports may not form a cycle, directly or through other packages
 (import_cycle): the packages are a DAG.
 
-Types: i64, bool, bytes, *T (T a struct in this package or path.T from an
-import). No struct values, arrays, generics, methods, globals, or
+Types: i64, bool, bytes, error, *T (T a struct in this package or path.T
+from an import). No struct values, arrays, generics, methods, globals, or
 closures. Params take at most 6 words (a bytes is 2); one result type, or
-two: (T, i64), a value and an error code (0: success), see Errors below.
+two: (T, error), a value and an error, see Errors below.
 
-Errors: a func declared (T, i64) returns a value and an error code, 0 for
-success. A caller must receive both, with a var of two names or an
-assignment to two locals, _ discarding one; a call used as a single value
-or as a statement is unused_result:
-  func Div(a i64, b i64) (i64, i64) {    // the quotient and 0, or 0 and a code
+Errors: error is a type of its own, one word: 0 means success, anything
+else is a failure, named by an error const (ovid/io.E_NOENT, E_ACCES, ...:
+the kernel's errno; ovid/io.ErrText(e) is its text). An error is not a
+number: only == and != apply, against 0 or another error; no arithmetic,
+no <, no if e (write if e != 0). An error never stands where an i64 is
+wanted, nor an i64 (other than the literal 0) where an error is
+(type_mismatch); e as i64 and n as error convert on purpose, e.g. to make
+an exit code. A func that can fail returns (T, error), or just error:
+  const E_ZERO error = 1        // a package's own error: a positive code
+  func Div(a i64, b i64) (i64, error) {  // the quotient and 0, or 0 and an error
     if b == 0 {
-      return 0, E_ZERO
+      return 0, E_ZERO          // the value first, the error second
     }
     return a / b, 0
   }
-  var q i64, e i64 = Div(x, y)
+  var q i64, e error = Div(x, y)
   if e != 0 {
     return 0, e                 // pass it on; return Div(x, y) forwards both
   }
   q, e = Div(q, 2)              // into locals that exist
   var r i64, _ = Div(x, 3)      // the error is ignored, visibly
-What a code means is up to the func: consts the package declares. The
-second result is always i64; main, handle, and tests have one result.
+  e = ovid/io.Close(fd)         // a func whose one result is an error
+A caller of a (T, error) func must receive both, with a var of two names
+or an assignment to two locals, _ discarding one; a call used as a single
+value or as a statement is unused_result. main, handle, and tests return
+one i64 (an exit code): return e as i64 exits with an error's code.
 Faults (a bad load, a division by zero, a table index out of range) are
 not errors: they kill the program, and ovid test reports where.
 
@@ -129,7 +138,7 @@ package. len is a keyword only before a ( (spaces or tabs may sit between);
 elsewhere a variable may be named len.
 
 Statements: var x T = e | var x T (zero: 0, false, or a null pointer) | x = e | p.f = e | if c { } else if c { } else { }
-| var v T, e i64 = f(...) | v, e = f(...) | return v, e (two results, see Errors)
+| var v T, e error = f(...) | v, e = f(...) | return v, e (two results, see Errors)
 | while c { } | return e | store8/16/32/64(addr, v) (the low bits of v) | call(...).
 Every path through a func must return.
 
@@ -167,7 +176,7 @@ statement). No == on bytes (ovid/mem.Eq), no cast to or from i64.
     }
     return s[i:len(s)]
   }
-A func may return (bytes, i64), received as var b bytes, e i64 = f(...).
+A func may return (bytes, error), received as var b bytes, e error = f(...).
 bytes(p, n) is a bytes over n bytes at address p (your own memory, from
 ovid/io.Alloc), ptr(b) the address b starts at, for a syscall path (ptr,
 like len, is a keyword only before a parenthesis).
@@ -183,8 +192,8 @@ return 0 (out of memory ends the program, exit 71). Nothing is freed one
 block at a time: var m *ovid/io.HeapMark = ovid/io.MarkHeap(io) records
 the heap, and ovid/io.ResetHeap(io, m) gives back and zeroes everything
 allocated since, for a host between requests; an address allocated after
-the mark must not be used after the reset. It returns 0, or the kernel's
-error if it refused to unmap; the next reset tries those mappings again.
+the mark must not be used after the reset. It returns an error: 0, or the
+kernel's if it refused to unmap; the next reset tries those mappings again.
 Cast the address: var p *Pair = raw as *Pair.
 Each struct field takes 8 bytes (a bytes field 16); never
 count them by hand, write sizeof(T) (T a struct; path.T for another
@@ -197,8 +206,8 @@ cell and pass its address:
   Scan(data, cell)
   var n i64 = load64(cell)
 Or return a struct: func Read(...) *Result, with the fields you need; or
-a value and an error code, as ovid/io.ReadFile does:
-  var data bytes, e i64 = ovid/io.ReadFile(io, path)
+a value and an error, as ovid/io.ReadFile does:
+  var data bytes, e error = ovid/io.ReadFile(io, path)
   if e != 0 {
     ovid/io.Eprint(io, ovid/io.ErrText(e))
     return 1
@@ -500,9 +509,9 @@ so get fresh ones after edits (edit returns the new ones).
   st:P.Func:N       statement N in the func      ex:P.Func:N   expression
 
 A local is named by its var statement's st: id. A var that receives two
-results (var v i64, e i64 = f()) declares two locals under one id: refs
+results (var v i64, e error = f()) declares two locals under one id: refs
 and rename take --name v or --name e to say which. _ discards a result
-and is no local, so var _, e i64 = f() declares only e.
+and is no local, so var _, e error = f() declares only e.
 Commands that take an id also take a name: Sum, util.Sum (a trailing part of
 the package path), app/util.Sum, Pair.next (a field), Sum.n (a param).
 A hash is a short digest of a node's source text: edits use it to refuse

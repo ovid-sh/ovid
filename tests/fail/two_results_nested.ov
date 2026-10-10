@@ -2,15 +2,15 @@
 // where two names receive the expression or a two-result func forwards it.
 package demo
 import ovid/io
-func Two(x i64) (i64, i64) {
+func Two(x i64) (i64, error) {
   return x, 0
 }
-func Fwd() (i64, i64) {
+func Fwd() (i64, error) {
   return Two(Two(2)) // error: unused_result 14
 }
 func main(io *ovid/io.Cap) i64 {
-  var v i64, e i64 = 1 + Two(1) // error: unused_result 26 // error: arity 22
+  var v i64, e error = 1 + Two(1) // error: unused_result 28 // error: arity 24
   v, e = Two(Two(2)) // error: unused_result 14
-  var f i64, g i64 = Fwd()
-  return v + e + f + g
+  var f i64, g error = Fwd()
+  return v + (e as i64) + f + (g as i64)
 }

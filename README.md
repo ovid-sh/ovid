@@ -102,11 +102,11 @@ re-read).
 
 ## Language, briefly
 
-`i64`, `bool`, `bytes`, and pointers to structs (`*T`). Struct fields are 8 bytes (a `bytes` field 16) and `sizeof(T)` gives a struct's size.
+`i64`, `bool`, `bytes`, `error`, and pointers to structs (`*T`). Struct fields are 8 bytes (a `bytes` field 16) and `sizeof(T)` gives a struct's size.
 A `bytes` is an address and a length: `"lit"` is one in read-only memory, `bytes(p, n)` one over memory of your own, `b[i]` the byte (and `b[i] = v` stores one), `b[i:j]` the subrange without a copy, `len(b)` the length; every index and bound is checked, and a failed check traps.
 Read-only constant tables (`const T [N]i64 = {...}`, read as `T[i]` with a bounds check, `len(T)`).
 No struct values, globals, function pointers, methods, generics, or implicit
-allocation. Parameters take at most six words (a `bytes` is two); one result, or a value and an error code (`func F() (i64, i64)`, received as `var v i64, e i64 = F()`; a call that is not received is a check error). Operators follow Go
+allocation. Parameters take at most six words (a `bytes` is two); one result, or a value and an error (`func F() (i64, error)`, received as `var v i64, e error = F()`; a call that is not received is a check error). An `error` is one word: 0 is success, an error const (`ovid/io.E_NOENT`) a failure; only `==` and `!=` apply, and `e as i64` / `n as error` convert. Operators follow Go
 precedence and are signed; `>>` is arithmetic, and `ushr`, `umulhi`, `udiv`, `urem`, and `ult` are the unsigned forms. `strptr("…")`
 and `strlen("…")` are a literal's address and length as two `i64`, and `ptr(b)` a bytes' address, for a syscall path. Memory is `load8/16/32/64`, `store8/16/32/64`, `bswap16/32/64`, and
 `ovid/io.Alloc`. `main` is `func main(io *ovid/io.Cap) i64`; `io` is the

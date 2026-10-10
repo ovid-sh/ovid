@@ -467,7 +467,9 @@ func EPkg(e *E, k *Pkg) i64 {
           WC(e, 93)
         }
       } else {
-        WL(e, bytes(strptr(",\"type\":\"i64\",\"value\":"), 22))
+        WL(e, ",\"type\":\"")
+        WL(e, d.typ)
+        WL(e, "\",\"value\":")
         WInt(e.io, e.b, d.val)
       }
       WC(e, 125)
