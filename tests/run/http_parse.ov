@@ -1,24 +1,24 @@
 // stdout: "ok 0\n"
 // stdout: "http/1.0 0\n"
-// stdout: "no version 1\n"
-// stdout: "bad version 1\n"
-// stdout: "empty method 1\n"
-// stdout: "bare lf 1\n"
-// stdout: "bare cr 1\n"
-// stdout: "folded 1\n"
-// stdout: "no colon 1\n"
-// stdout: "space before colon 1\n"
-// stdout: "no blank line 1\n"
-// stdout: "two lengths 1\n"
-// stdout: "length not digits 1\n"
-// stdout: "body short 1\n"
-// stdout: "chunked 3\n"
-// stdout: "control in value 1\n"
-// stdout: "del in value 1\n"
+// stdout: "no version 4400\n"
+// stdout: "bad version 4400\n"
+// stdout: "empty method 4400\n"
+// stdout: "bare lf 4400\n"
+// stdout: "bare cr 4400\n"
+// stdout: "folded 4400\n"
+// stdout: "no colon 4400\n"
+// stdout: "space before colon 4400\n"
+// stdout: "no blank line 4400\n"
+// stdout: "two lengths 4400\n"
+// stdout: "length not digits 4400\n"
+// stdout: "body short 4400\n"
+// stdout: "chunked 4501\n"
+// stdout: "control in value 4400\n"
+// stdout: "del in value 4400\n"
 // stdout: "tab and high bytes in value 0\n"
-// stdout: "status 0 -1 -1\n"
-// stdout: "headers -1 -1 -1 -1 -1 0\n"
-// stdout: "values -1 -1 0\n"
+// stdout: "status 0 22 22\n"
+// stdout: "headers 22 22 22 22 22 0\n"
+// stdout: "values 22 22 0\n"
 // stdout: "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n"
 // stdout: "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n"
 // stdout: "HTTP/1.1 418 \r\nX-A: 1\r\nContent-Length: 2\r\n\r\nhi"
@@ -37,7 +37,7 @@ func try(io *ovid/io.Cap, label bytes, req bytes) i64 {
   var r *ovid/http.Request = ovid/http.NewRequest(io, "", "")
   ovid/io.Print(io, label)
   ovid/io.Print(io, " ")
-  ovid/io.PrintInt(io, ovid/http.Parse(r, req))
+  ovid/io.PrintInt(io, ovid/http.Parse(r, req) as i64)
   ovid/io.Print(io, "\n")
   return 0
 }
@@ -80,37 +80,37 @@ func main(io *ovid/io.Cap) i64 {
 
   var res *ovid/http.Response = ovid/http.NewResponse(io)
   ovid/io.Print(io, "status ")
-  ovid/io.PrintInt(io, ovid/http.SetStatus(res, 418))
+  ovid/io.PrintInt(io, ovid/http.SetStatus(res, 418) as i64)
   ovid/io.Print(io, " ")
-  ovid/io.PrintInt(io, ovid/http.SetStatus(res, 99))
+  ovid/io.PrintInt(io, ovid/http.SetStatus(res, 99) as i64)
   ovid/io.Print(io, " ")
-  ovid/io.PrintInt(io, ovid/http.SetStatus(res, 600))
+  ovid/io.PrintInt(io, ovid/http.SetStatus(res, 600) as i64)
   ovid/io.Print(io, "\n")
   // Refused: an empty name, a name with a space, a value with CRLF,
   // Content-Length, and Transfer-Encoding; accepted: X-A.
   ovid/io.Print(io, "headers ")
-  ovid/io.PrintInt(io, ovid/http.SetHeader(io, res, "", "1"))
+  ovid/io.PrintInt(io, ovid/http.SetHeader(io, res, "", "1") as i64)
   ovid/io.Print(io, " ")
-  ovid/io.PrintInt(io, ovid/http.SetHeader(io, res, "X A", "1"))
+  ovid/io.PrintInt(io, ovid/http.SetHeader(io, res, "X A", "1") as i64)
   ovid/io.Print(io, " ")
-  ovid/io.PrintInt(io, ovid/http.SetHeader(io, res, "X-A", "1\r\nSet-Cookie: x"))
+  ovid/io.PrintInt(io, ovid/http.SetHeader(io, res, "X-A", "1\r\nSet-Cookie: x") as i64)
   ovid/io.Print(io, " ")
-  ovid/io.PrintInt(io, ovid/http.SetHeader(io, res, "Content-length", "1"))
+  ovid/io.PrintInt(io, ovid/http.SetHeader(io, res, "Content-length", "1") as i64)
   ovid/io.Print(io, " ")
-  ovid/io.PrintInt(io, ovid/http.SetHeader(io, res, "transfer-Encoding", "chunked"))
+  ovid/io.PrintInt(io, ovid/http.SetHeader(io, res, "transfer-Encoding", "chunked") as i64)
   ovid/io.Print(io, " ")
-  ovid/io.PrintInt(io, ovid/http.SetHeader(io, res, "X-A", "1"))
+  ovid/io.PrintInt(io, ovid/http.SetHeader(io, res, "X-A", "1") as i64)
   ovid/io.Print(io, "\n")
   ovid/http.Write(io, res, "hi")
   // An escape byte and DEL are refused in a value; tab and bytes from
   // 0x80 up are not.
   var other *ovid/http.Response = ovid/http.NewResponse(io)
   ovid/io.Print(io, "values ")
-  ovid/io.PrintInt(io, ovid/http.SetHeader(io, other, "X-B", "\x1b[31m"))
+  ovid/io.PrintInt(io, ovid/http.SetHeader(io, other, "X-B", "\x1b[31m") as i64)
   ovid/io.Print(io, " ")
-  ovid/io.PrintInt(io, ovid/http.SetHeader(io, other, "X-B", "a\x7f"))
+  ovid/io.PrintInt(io, ovid/http.SetHeader(io, other, "X-B", "a\x7f") as i64)
   ovid/io.Print(io, " ")
-  ovid/io.PrintInt(io, ovid/http.SetHeader(io, other, "X-B", "a\tb\xc3\xa9"))
+  ovid/io.PrintInt(io, ovid/http.SetHeader(io, other, "X-B", "a\tb\xc3\xa9") as i64)
   ovid/io.Print(io, "\n")
 
   var ok *ovid/http.Request = ovid/http.NewRequest(io, "GET", "/")
