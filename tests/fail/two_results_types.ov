@@ -3,15 +3,15 @@
 // is reported once, at its decl.
 package demo
 import ovid/io
-func Two(x i64) (i64, i64) {
+func Two(x i64) (i64, error) {
   return x, 0
 }
-func Bad(x i64) (Nope, i64) { // error: bad_type 1
+func Bad(x i64) (Nope, error) { // error: bad_type 1
   return 0 as Nope, 0 // error: bad_type 10
 }
 func main(io *ovid/io.Cap) i64 {
   var a i64 = 0
-  var a Nope, e i64 = Two(1) // error: bad_type 3 // error: duplicate_name 3
-  var b i64, f i64 = Bad(1)
-  return a + e + b + f
+  var a Nope, e error = Two(1) // error: bad_type 3 // error: duplicate_name 3
+  var b i64, f error = Bad(1)
+  return a + b + ((e as i64) + (f as i64))
 }

@@ -775,7 +775,7 @@ func (l *lowerer) stmt(s *ir.Node) ([]*ir.Node, error) {
 			l.bind(s.Two.Name, s.Two.Type)
 		}
 		if s.Val.Op == "call" && l.resultWords(s.Val) == 3 {
-			// var b bytes, e i64 = f(): b, b#n, and e, the third in rcx.
+			// var b bytes, e error = f(): b, b#n, and e, the third in rcx.
 			m.Type = "i64"
 			m.Two = &ir.Second{Name: s.Name + "#n", Type: "i64"}
 			if s.Name == "_" {

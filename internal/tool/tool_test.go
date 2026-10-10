@@ -258,7 +258,7 @@ func main(io *ovid/io.Cap) i64 {
 	if _, code := buildRun(t, demo(`package demo
 import ovid/io
 func main(io *ovid/io.Cap) i64 {
-  var data bytes, e i64 = ovid/io.ReadFile(io, ovid/io.Arg(io, 1))
+  var data bytes, e error = ovid/io.ReadFile(io, ovid/io.Arg(io, 1))
   if e != 0 {
     return 9
   }
@@ -1426,7 +1426,7 @@ func TestEdges(io *ovid/io.Cap) i64 {
 func TestTwoResultFuncIsNoTest(t *testing.T) {
 	dir := mkmod(t, map[string]string{
 		"demo/main.ov":      "package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  return 0\n}\n",
-		"demo/main_test.ov": "package demo\nimport ovid/io\nfunc TestOne(io *ovid/io.Cap) i64 {\n  return 0\n}\nfunc TestTwo(io *ovid/io.Cap) (i64, i64) {\n  return 0, 1\n}\n",
+		"demo/main_test.ov": "package demo\nimport ovid/io\nfunc TestOne(io *ovid/io.Cap) i64 {\n  return 0\n}\nfunc TestTwo(io *ovid/io.Cap) (i64, error) {\n  return 0, 1 as error\n}\n",
 	})
 	var b bytes.Buffer
 	code := Test(dir, "", true, &b)
@@ -2100,7 +2100,7 @@ func TestSelfHost(t *testing.T) {
 	// or its qualified name, and a duplicated id is ambiguous_id before
 	// its kind is looked at.
 	dup := mkmod(t, map[string]string{"ovid.mod": "module app\nentry app\n",
-		"app/a.ov": "package app\nimport ovid/io\ntype T struct {\n  a i64\n}\nfunc F(io *ovid/io.Cap) i64 {\n  var x i64, e i64 = ovid/io.ReadFile(io, \"f\")\n  return x + e\n}\nfunc main(io *ovid/io.Cap) i64 {\n  var t *T = ovid/io.Alloc(io, sizeof(T)) as *T\n  return t.a + F(io)\n}\n",
+		"app/a.ov": "package app\nimport ovid/io\ntype T struct {\n  a i64\n}\nfunc F(io *ovid/io.Cap) i64 {\n  var x i64, e error = ovid/io.ReadFile(io, \"f\")\n  return x + e\n}\nfunc main(io *ovid/io.Cap) i64 {\n  var t *T = ovid/io.Alloc(io, sizeof(T)) as *T\n  return t.a + F(io)\n}\n",
 		"app/b.ov": "package app\nimport ovid/io\nimport ovid/mem\nimport ovid/mem\ntype T struct {\n  a i64\n  f i64\n}\nfunc F(io *ovid/io.Cap) i64 {\n  var y i64 = 2\n  return y\n}\n"})
 	for q, want := range map[string]string{"fld:app.T.f": "", "fld:app.T.a": "ambiguous_id", "st:app.F:1": "ambiguous_id", "ex:app.F:1": "ambiguous_id", "fld:app.T.g": "not_found",
 		"T.f": "", "T.a": "ambiguous_id", "F.io": "ambiguous_id", "im:app:ovid/mem": "ambiguous_id", "im:app:ovid/io": "unsupported"} {
@@ -2116,14 +2116,14 @@ func TestSelfHost(t *testing.T) {
 
 	// --name picks one local of a two-result var, and is refused the same
 	// way by both without one or with a name the target does not declare.
-	vmod := mkmod(t, demo("package demo\nimport ovid/io\nfunc Two(x i64) (i64, i64) {\n  return x, 0\n}\nfunc main(io *ovid/io.Cap) i64 {\n  var v i64, e i64 = Two(1)\n  v, e = Two(v + e)\n  if e != 0 {\n    return e\n  }\n  return v\n}\n"))
+	vmod := mkmod(t, demo("package demo\nimport ovid/io\nfunc Two(x i64) (i64, error) {\n  return x, 0\n}\nfunc main(io *ovid/io.Cap) i64 {\n  var v i64, e error = Two(1)\n  v, e = Two(v + e)\n  if e != 0 {\n    return e\n  }\n  return v\n}\n"))
 	// --name given empty is a usage error for the self-hosted refs too.
 	if out, code := runIn(t, vmod, s1, "refs", "Two", ".", "--std", stdDir, "--name", ""); code != 64 || !strings.Contains(out, "--name needs a name") {
 		t.Fatalf("refs --name '': self-hosted exit %d: %s", code, out)
 	}
 
 	// _ discards a result and is no local.
-	dmod := mkmod(t, demo("package demo\nimport ovid/io\nfunc Two(x i64) (i64, i64) {\n  return x, 0\n}\nfunc main(io *ovid/io.Cap) i64 {\n  var _, e i64 = Two(1)\n  var v i64, _ = Two(e)\n  return v + e\n}\n"))
+	dmod := mkmod(t, demo("package demo\nimport ovid/io\nfunc Two(x i64) (i64, error) {\n  return x, 0\n}\nfunc main(io *ovid/io.Cap) i64 {\n  var _, e error = Two(1)\n  var v i64, _ = Two(e)\n  return v + e\n}\n"))
 	for _, c := range [][3]string{{"v", "st:demo.main:1", "e"}, {"v", "st:demo.main:1", "v"}, {"v", "st:demo.main:1", ""}, {"v", "st:demo.main:1", "z"}, {"v", "Two", "Three"}, {"v", "Two", "Two"},
 		{"d", "st:demo.main:1", ""}, {"d", "st:demo.main:1", "e"}, {"d", "st:demo.main:1", "_"}, {"d", "st:demo.main:2", ""}, {"d", "st:demo.main:2", "_"}, {"d", "st:demo.main:2", "x"}} {
 		dir := vmod
@@ -2220,7 +2220,7 @@ func TestSelfHost(t *testing.T) {
 	// Both dumps are valid JSON and say the same thing. A literal's bytes
 	// that are not UTF-8 (prog's asm tests have some) come out as
 	// value_hex, which loses nothing.
-	lit := mkmod(t, demo("package demo\nimport ovid/io\nconst T [3]i64 = {-1, 0, 7}\nconst E [0]i64 = {}\ntype R struct {\n  s bytes\n}\nfunc Two(x i64) (i64, i64) {\n  return x, 0\n}\nfunc Cut(b bytes) (bytes, i64) {\n  return b[1:len(b)], 0\n}\nfunc main(io *ovid/io.Cap) i64 {\n  var v i64, e i64 = Two(1)\n  v, e = Two(2)\n  var w i64, _ = Two(3)\n  var s bytes = \"ab\"\n  var r *R = ovid/io.Alloc(io, sizeof(R)) as *R\n  r.s = bytes(ovid/io.Alloc(io, 2), 2)\n  r.s[0] = s[1]\n  var c bytes, ce i64 = Cut(r.s)\n  return load8(strptr(\"\\xb8\\n\") + 1) + strlen(\"é\") + T[1] + len(T) + v + e + w + len(c) + ce + len(r.s)\n}\n"))
+	lit := mkmod(t, demo("package demo\nimport ovid/io\nconst T [3]i64 = {-1, 0, 7}\nconst E [0]i64 = {}\ntype R struct {\n  s bytes\n}\nfunc Two(x i64) (i64, error) {\n  return x, 0\n}\nfunc Cut(b bytes) (bytes, error) {\n  return b[1:len(b)], 0\n}\nfunc main(io *ovid/io.Cap) i64 {\n  var v i64, e error = Two(1)\n  v, e = Two(2)\n  var w i64, _ = Two(3)\n  var s bytes = \"ab\"\n  var r *R = ovid/io.Alloc(io, sizeof(R)) as *R\n  r.s = bytes(ovid/io.Alloc(io, 2), 2)\n  r.s[0] = s[1]\n  var c bytes, ce error = Cut(r.s)\n  return load8(strptr(\"\\xb8\\n\") + 1) + strlen(\"é\") + T[1] + len(T) + v + e + w + len(c) + ce + len(r.s)\n}\n"))
 	for _, dir := range []string{prog, lit} {
 		b.Reset()
 		Dump(dir, "", "", &b)

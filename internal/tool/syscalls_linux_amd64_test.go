@@ -272,7 +272,7 @@ func TestReadFileRefusedClose(t *testing.T) {
 	dir := mkmod(t, demo(`package demo
 import ovid/io
 func main(io *ovid/io.Cap) i64 {
-  var data bytes, e i64 = ovid/io.ReadFile(io, ovid/io.Arg(io, 1))
+  var data bytes, e error = ovid/io.ReadFile(io, ovid/io.Arg(io, 1))
   if e != ovid/io.E_PERM {
     return 10
   }

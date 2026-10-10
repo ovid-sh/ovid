@@ -167,7 +167,7 @@ type Node struct {
 // sets dup on a func whose name was already declared in its package. A
 // table (const Name [N]i64) has istab set, its N elements at tab, and ro,
 // once the code generator has placed them in rodata, their offset + 1. A
-// func with two results has the second, its error code, in typ2. The
+// func with two results has the second, its error, in typ2. The
 // lowering sets bres on a func declared to return bytes: 2 result words,
 // or 3 for (bytes, i64). cuses are the uses of the consts a const's value
 // (or a table's elements) names, which the parser folded away; the
@@ -512,16 +512,25 @@ func ParseConst(p *P, s i64) i64 {
       ErrEnd(p)
     }
   }
-  if !ovid/mem.Eq(tok, "i64") {
+  var iserr bool = ovid/mem.Eq(tok, "error")
+  if !ovid/mem.Eq(tok, "i64") && !iserr {
     if ErrBegin(p) {
       EW(p, "const ")
       EW(p, t)
-      EW(p, " must be i64")
+      EW(p, " must be i64 or error")
+      ErrEnd(p)
+    }
+  }
+  if iserr && v <= 0 {
+    if ErrBegin(p) {
+      EW(p, "const ")
+      EW(p, t)
+      EW(p, " error must be a positive code; 0 is success")
       ErrEnd(p)
     }
   }
   var d *Decl = NewDecl(p, t, s)
-  d.typ = "i64"
+  d.typ = tok
   d.val = v
   d.cuses = p.cuses
   AddConst(p.pkg, d)
@@ -796,7 +805,7 @@ func ParseFunc(p *P, s i64) i64 {
   }
   Expect(p, 41)
   if PeekByte(p, 40) {
-    // Two results: (T, i64), the second an error code.
+    // Two results: (T, error), the second an error.
     Expect(p, 40)
     ParseType(p)
     d.typ = p.tok
@@ -805,11 +814,11 @@ func ParseFunc(p *P, s i64) i64 {
     ParseType(p)
     d.typ2 = p.tok
     d.ty2tok = p.ttok
-    if !ovid/mem.Eq(p.tok, "i64") {
+    if !ovid/mem.Eq(p.tok, "error") {
       if ErrBegin(p) {
-        EW(p, "the second result is an error code; write (")
+        EW(p, "the second result is an error; write (")
         EW(p, d.typ)
-        EW(p, ", i64)")
+        EW(p, ", error)")
         ErrEnd(p)
       }
     }

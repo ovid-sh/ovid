@@ -1,0 +1,7 @@
+// An error const is a failure, so its code is positive: 0 is success.
+package demo
+import ovid/io
+const E_OK error = 0 // error: syntax 21 message="const E_OK error must be a positive code; 0 is success"
+func main(io *ovid/io.Cap) i64 {
+  return 0
+}

@@ -4,6 +4,6 @@ import ovid/io
 import ovid/http
 
 // handle is the entry here, and like main it has one result.
-func handle(io *ovid/io.Cap, req *ovid/http.Request, res *ovid/http.Response) (i64, i64) { // error: bad_handler 1
+func handle(io *ovid/io.Cap, req *ovid/http.Request, res *ovid/http.Response) (i64, error) { // error: bad_handler 1
   return 0, 0
 }

@@ -1,0 +1,68 @@
+// error is its own type: 0 or an error const, == and != only, never mixed
+// with an i64 either way except by as, and a swapped return is caught.
+package demo
+import ovid/io
+const E_MINE error = 9
+type Box struct {
+  e error
+}
+func Get(x i64) (i64, error) {
+  if x < 0 {
+    return 0, E_MINE
+  }
+  return x, 0
+}
+func Swapped(x i64) (i64, error) {
+  var e error = 0
+  return e, x // error: type_mismatch 10 expected="i64" got="error" hint="the value comes first and the error second: return v, e" // error: type_mismatch 13 expected="error" got="i64" hint="the value comes first and the error second: return v, e"
+}
+func Code(x i64) error {
+  if x == 0 {
+    return 0
+  }
+  return 2 // error: type_mismatch 10 expected="error" got="i64" hint="an error is 0 (success) or an E_ const such as ovid/io.E_NOENT; a func that fails returns (T, error); n as error converts on purpose"
+}
+func Len(n i64) i64 {
+  return n
+}
+func Takes(e error) bool {
+  return e != 0
+}
+func main(io *ovid/io.Cap) i64 {
+  var v i64, e error = Get(1)
+  var n i64 = e + 1 // error: type_mismatch 15 expected="i64" got="error" hint="an error is not a number: compare it with == or != against 0 (success) or an E_ const such as ovid/io.E_NOENT; e as i64 converts it on purpose"
+  if e < 0 { // error: type_mismatch 6 expected="i64" got="error"
+    return 1
+  }
+  if e { // error: type_mismatch 6 expected="bool" got="error" hint="an error is not a condition: write e != 0 (failed) or e == 0 (succeeded)"
+    return 1
+  }
+  if e == v { // error: type_mismatch 11 expected="error" got="i64"
+    return 1
+  }
+  if e == 1 || 0 == e { // error: type_mismatch 11 expected="error" got="i64"
+    return 1
+  }
+  var w i64 = Len(e) // error: type_mismatch 19 expected="i64" got="error"
+  var t bool = Takes(v) || Takes(0) || Takes(E_MINE) // error: type_mismatch 22 expected="error" got="i64"
+  var m bytes = ovid/io.ErrText(v) // error: type_mismatch 33 expected="error" got="i64"
+  var f error = 2 // error: type_mismatch 17 expected="error" got="i64"
+  f = n // error: type_mismatch 7 expected="error" got="i64"
+  var b *Box = ovid/io.Alloc(io, sizeof(Box)) as *Box
+  b.e = 0
+  b.e = 5 // error: type_mismatch 9 expected="error" got="i64"
+  if e != 0 && e != ovid/io.E_BADF && e != E_MINE && b.e == ovid/io.E_NOENT {
+    return 1
+  }
+  if e == nil { // error: unknown_name 11
+    return 1
+  }
+  var x i64, y i64 = Get(2) // error: type_mismatch 22 expected="i64" got="error" hint="the second result is an error: var x i64, y error = ..."
+  if y != 0 && y != E_MINE {
+    return 1
+  }
+  var c bool = e as bool // error: type_mismatch 16 expected="i64" got="bool"
+  var d error = t as error // error: type_mismatch 17 expected="i64" got="bool"
+  var z i64 = sizeof(error) // error: bad_type 15
+  return n + w + x + z + len(m) + (e as i64) + ((v + 3) as error as i64)
+}

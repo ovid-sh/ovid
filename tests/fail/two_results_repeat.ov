@@ -5,11 +5,11 @@ import ovid/io
 type F struct {
   x i64
 }
-func F(x i64) (i64, i64) { // error: duplicate_name 1
+func F(x i64) (i64, error) { // error: duplicate_name 1
   return x, 0
 }
 func main(io *ovid/io.Cap) i64 {
-  var v i64, e i64 = F(1)
+  var v i64, e error = F(1)
   v, e = F(F(2))
-  return v + e
+  return v + (e as i64)
 }

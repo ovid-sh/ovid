@@ -1,0 +1,68 @@
+// error is a type of its own: a file is written, read back, and a missing
+// one reports E_NOENT, which passes through a func, a field, and a param;
+// e as i64 is the exit code.
+// stdout: "ok 5\nno such file or directory\nmine 7\n"
+// exit: 2
+package demo
+import ovid/io
+import ovid/mem
+const E_MINE error = 7
+type Result struct {
+  n i64
+  e error
+}
+func Copy(io *ovid/io.Cap, from bytes, to bytes) (i64, error) {
+  var data bytes, e error = ovid/io.ReadFile(io, from)
+  if e != 0 {
+    return 0, e
+  }
+  e = ovid/io.WriteFile(io, to, data, 420)
+  if e != 0 {
+    return 0, e
+  }
+  return len(data), 0
+}
+func Check(r *Result) error {
+  if r.n < 0 {
+    return E_MINE
+  }
+  return r.e
+}
+func Failed(e error) bool {
+  return 0 != e
+}
+func main(io *ovid/io.Cap) i64 {
+  var e error = ovid/io.WriteFile(io, "/tmp/ovid-error-type.txt", "hello", 420)
+  if e != 0 {
+    return 1
+  }
+  var n i64, ce error = Copy(io, "/tmp/ovid-error-type.txt", "/tmp/ovid-error-type.2")
+  var back bytes, re error = ovid/io.ReadFile(io, "/tmp/ovid-error-type.2")
+  if ce != 0 || re != 0 || !ovid/mem.Eq(back, "hello") {
+    return 3
+  }
+  ovid/io.Print(io, "ok ")
+  ovid/io.PrintInt(io, n)
+  ovid/io.Print(io, "\n")
+  ovid/io.Unlink(io, "/tmp/ovid-error-type.txt")
+  ovid/io.Unlink(io, "/tmp/ovid-error-type.2")
+  var _, me error = Copy(io, "/tmp/ovid-error-type.none", "/tmp/ovid-error-type.3")
+  if me == ovid/io.E_NOENT {
+    ovid/io.Print(io, ovid/io.ErrText(me))
+    ovid/io.Print(io, "\n")
+  }
+  var r *Result = ovid/io.Alloc(io, sizeof(Result)) as *Result
+  r.n = 0 - 1
+  var mine error = Check(r)
+  if Failed(mine) && mine != me && mine == (7 as error) {
+    ovid/io.Print(io, "mine ")
+    ovid/io.PrintInt(io, mine as i64)
+    ovid/io.Print(io, "\n")
+  }
+  r.n = 1
+  r.e = me
+  if Check(r) != ovid/io.E_NOENT || Failed(0) {
+    return 4
+  }
+  return me as i64
+}

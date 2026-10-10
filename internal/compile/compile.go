@@ -241,7 +241,7 @@ func (c *cg) intern(s string) int {
 }
 
 func (c *cg) resolve(pkg *ir.Package, t string) string {
-	if t == "i64" || t == "bool" {
+	if t == "i64" || t == "bool" || t == "error" {
 		return t
 	}
 	star := false

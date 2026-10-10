@@ -339,11 +339,14 @@ func (p *parser) parseConst(s int) {
 	if !ok {
 		p.errorf("const %s is not a constant integer expression", name)
 	}
-	if typ != "i64" {
-		p.errorf("const %s must be i64", name)
+	if typ != "i64" && typ != "error" {
+		p.errorf("const %s must be i64 or error", name)
+	}
+	if typ == "error" && v <= 0 {
+		p.errorf("const %s error must be a positive code; 0 is success", name)
 	}
 	p.pkg.Consts = append(p.pkg.Consts, ir.Const{
-		ID: "cn:" + p.pkg.Path + "." + name, Name: name, Type: "i64", Value: v, Span: p.span(s), NameSpan: ns,
+		ID: "cn:" + p.pkg.Path + "." + name, Name: name, Type: typ, Value: v, Span: p.span(s), NameSpan: ns,
 		Uses: p.cuses,
 	})
 	p.expectEnd()
@@ -514,7 +517,7 @@ func (p *parser) parseType() (string, ir.Span) {
 	}
 	ns := p.tok(name)
 	if pkg == "" {
-		if name == "i64" || name == "bool" || name == "bytes" {
+		if name == "i64" || name == "bool" || name == "bytes" || name == "error" {
 			if star {
 				p.errorf("cannot use a pointer to %s", name)
 			}
@@ -555,13 +558,13 @@ func (p *parser) parseFunc(s int) {
 	}
 	p.expect(')')
 	if p.peekByte('(') {
-		// Two results: (T, i64), the second an error code.
+		// Two results: (T, error), the second an error.
 		p.expect('(')
 		p.fn.Result, p.fn.ResultSpan = p.parseType()
 		p.expect(',')
 		p.fn.Result2, _ = p.parseType()
-		if p.fn.Result2 != "i64" {
-			p.errorf("the second result is an error code; write (%s, i64)", p.fn.Result)
+		if p.fn.Result2 != "error" {
+			p.errorf("the second result is an error; write (%s, error)", p.fn.Result)
 		}
 		p.expect(')')
 	} else {

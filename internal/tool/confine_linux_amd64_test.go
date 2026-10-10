@@ -20,12 +20,12 @@ import (
 const writerProg = `package demo
 import ovid/io
 func main(io *ovid/io.Cap) i64 {
-  var here i64 = ovid/io.WriteFile(io, "out.txt", "hello\n", 420)
-  var there i64 = ovid/io.WriteFile(io, ovid/io.Arg(io, 1), "hello\n", 420)
+  var here error = ovid/io.WriteFile(io, "out.txt", "hello\n", 420)
+  var there error = ovid/io.WriteFile(io, ovid/io.Arg(io, 1), "hello\n", 420)
   ovid/io.Print(io, "cwd ")
-  ovid/io.PrintInt(io, here)
+  ovid/io.PrintInt(io, here as i64)
   ovid/io.Print(io, " module ")
-  ovid/io.PrintInt(io, there)
+  ovid/io.PrintInt(io, there as i64)
   ovid/io.Print(io, "\n")
   return 0
 }
@@ -115,7 +115,7 @@ func TestTestConfine(t *testing.T) {
 	dir := mkmod(t, map[string]string{"demo/main.ov": writerProg, "demo/main_test.ov": `package demo
 import ovid/io
 func TestWrite(io *ovid/io.Cap) i64 {
-  return ovid/io.WriteFile(io, "t.txt", "x", 420)
+  return ovid/io.WriteFile(io, "t.txt", "x", 420) as i64
 }
 `})
 	var b bytes.Buffer
