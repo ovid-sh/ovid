@@ -1,0 +1,31 @@
+package demo
+import ovid/io
+// exit: 0
+// stdout: "ok\n"
+
+// A closed handle stays closed: a file opened after it may get the same
+// descriptor number, and the old handle must not reach it.
+func main(io *ovid/io.Cap) i64 {
+  var f *ovid/io.File, e i64 = ovid/io.Open(io, "/dev/null", ovid/io.O_WRONLY, 0)
+  if e != 0 {
+    return 1
+  }
+  if ovid/io.Close(f) != 0 {
+    return 2
+  }
+  var g *ovid/io.File, e2 i64 = ovid/io.Open(io, "/dev/null", ovid/io.O_WRONLY, 0)
+  if e2 != 0 {
+    return 3
+  }
+  if ovid/io.Write(f, "x") == 0 {
+    return 4
+  }
+  if ovid/io.Close(f) == 0 {
+    return 5
+  }
+  if ovid/io.Write(g, "x") != 0 {
+    return 6
+  }
+  ovid/io.Print(io, "ok\n")
+  return 0
+}
