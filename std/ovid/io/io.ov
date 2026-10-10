@@ -288,6 +288,7 @@ func ErrText(e i64) bytes {
 // can still do).
 type File struct {
   fd i64
+  std bool
 }
 
 // Write writes all of b to f. It returns 0, or an error code.
@@ -330,6 +331,7 @@ func Stderr(io *Cap) *File {
 // is standard error).
 func stream(io *Cap, n i64) *File {
   var f *File = Alloc(io, sizeof(File)) as *File
+  f.std = true
   f.fd = 2
   if n == 0 || n == 1 {
     f.fd = n
@@ -371,13 +373,13 @@ func openC(io *Cap, path i64, flags i64, mode i64) (*File, i64) {
 // Close closes f. It returns 0, or an error code. f forgets its descriptor
 // first, so a later Read, Write, or Close of f fails (EBADF) instead of
 // reaching a file that reused the number. A standard stream stays open:
-// closing its handle only invalidates that handle, since every other
-// handle to the stream shares its descriptor, and a freed 0, 1, or 2 would
-// go to the next Open.
+// closing a handle from Stdin, Stdout, or Stderr only invalidates that
+// handle, since every other handle to the stream shares its descriptor,
+// and a freed 0, 1, or 2 would go to the next Open.
 func Close(f *File) i64 {
   var fd i64 = f.fd
   f.fd = -1
-  if fd >= 0 && fd < 3 {
+  if f.std {
     return 0
   }
   return Code(syscall(SYS_CLOSE, fd, 0, 0, 0, 0, 0))
