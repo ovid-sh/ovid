@@ -714,6 +714,7 @@ func printTo(io *Cap, n i64, b bytes) i64 {
   var f *File = stream(io, n)
   var r i64 = Write(f, b)
   f.fd = 0
+  f.std = false
   if io.heap == region {
     io.used = mark
   }
@@ -728,6 +729,7 @@ func PrintInt(io *Cap, v i64) i64 {
   var f *File = stream(io, 1)
   var r i64 = WriteInt(io, f, v)
   f.fd = 0
+  f.std = false
   if io.heap == region {
     io.used = mark
   }
