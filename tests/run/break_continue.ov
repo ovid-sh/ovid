@@ -95,6 +95,6 @@ func main(io *ovid/io.Cap) i64 {
   if Find("hello") != 2 || Find("xyz") != 3 {
     return 4
   }
-  ovid/io.Print("ok\n")
+  ovid/io.Print(io, "ok\n")
   return 0
 }

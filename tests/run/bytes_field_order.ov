@@ -46,11 +46,11 @@ func New(io *ovid/io.Cap) *F {
 }
 
 func Fail(io *ovid/io.Cap, k i64) i64 {
-  ovid/io.Print("case ")
+  ovid/io.Print(io, "case ")
   var d bytes = ovid/io.AllocBytes(io, 1)
   d[0] = 48 + k
-  ovid/io.Print(d)
-  ovid/io.Print(" failed\n")
+  ovid/io.Print(io, d)
+  ovid/io.Print(io, " failed\n")
   return 1
 }
 
@@ -132,7 +132,7 @@ func main(io *ovid/io.Cap) i64 {
   if len(dst.b) != 4 || dst.b[3] != 100 {
     return Fail(io, 12)
   }
-  ovid/io.Print("ok\n")
+  ovid/io.Print(io, "ok\n")
   return 0
 }
 

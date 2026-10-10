@@ -6,16 +6,16 @@ package demo
 import ovid/io
 func main(io *ovid/io.Cap) i64 {
   var _, e i64 = ovid/io.ReadFile(io, "no-such-file")
-  ovid/io.Print(ovid/io.ErrText(e))
-  ovid/io.Print("\n")
-  var fd i64, oe i64 = ovid/io.Open(strptr("."), ovid/io.O_RDONLY, 0)
+  ovid/io.Print(io, ovid/io.ErrText(e))
+  ovid/io.Print(io, "\n")
+  var fd *ovid/io.File, oe i64 = ovid/io.Open(io, ".", ovid/io.O_RDONLY, 0)
   if oe != 0 {
     return 1
   }
   var buf bytes = ovid/io.AllocBytes(io, 8)
   var n i64, re i64 = ovid/io.Read(fd, buf)
-  ovid/io.Print(ovid/io.ErrText(re))
-  ovid/io.Print("\n")
+  ovid/io.Print(io, ovid/io.ErrText(re))
+  ovid/io.Print(io, "\n")
   if n != 0 || re != ovid/io.E_ISDIR || ovid/io.Close(fd) != 0 {
     return 3
   }

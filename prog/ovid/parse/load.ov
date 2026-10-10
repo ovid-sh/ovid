@@ -88,7 +88,7 @@ func LoadErr(m *Mod, code bytes, f *File, off i64, msg *ovid/mem.Buf) i64 {
     WPos(m.io, b, f, off)
   }
   ovid/mem.WBytes(m.io, b, bytes(strptr("}\n"), 2))
-  ovid/io.Stdout(bytes(b.data, b.len))
+  ovid/io.Print(m.io, bytes(b.data, b.len))
   return 0
 }
 
@@ -187,7 +187,7 @@ func StdHas(m *Mod, path bytes) bool {
 // (name = rel, std = d_type), sorted by name, without . and ..
 // It uses getdents64 through ovid/io.Getdents.
 func ListDir(io *ovid/io.Cap, path i64) *File {
-  var fd i64, e i64 = ovid/io.Open(path, 65536, 0)
+  var fd *ovid/io.File, e i64 = ovid/io.Open(io, bytes(path, ovid/io.CLen(path)), ovid/io.O_DIRECTORY, 0)
   if e != 0 {
     return 0 as *File
   }
@@ -289,7 +289,7 @@ func Walk(m *Mod, abs i64, rel bytes) i64 {
     if EntIsDir(m.io, abs, e) {
       var modf i64 = Path(m.io, bytes(full, ovid/io.CLen(full)), "ovid.mod")
       var st i64 = ovid/io.Alloc(m.io, 256)
-      if load8(ptr(e.rel)) != 46 && ovid/io.FstatAt(modf, st) != 0 {
+      if load8(ptr(e.rel)) != 46 && ovid/io.FstatAt(m.io, bytes(modf, ovid/io.CLen(modf)), st) != 0 {
         Walk(m, full, bytes(crel, creln))
       }
     } else if HasOvSuffix(e.rel) && !(m.notests && IsTestFile(e.rel)) {

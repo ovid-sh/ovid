@@ -20,8 +20,8 @@ func ErrIs(io *ovid/io.Cap, src bytes, msg bytes, off i64) bool {
     return false
   }
   if !ovid/mem.Eq(bytes(p.emsg.data, p.emsg.len), msg) {
-    ovid/io.Stderr(bytes(p.emsg.data, p.emsg.len))
-    ovid/io.Stderr(bytes(strptr("\n"), 1))
+    ovid/io.Eprint(io, bytes(p.emsg.data, p.emsg.len))
+    ovid/io.Eprint(io, bytes(strptr("\n"), 1))
     return false
   }
   return p.eoff == off

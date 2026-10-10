@@ -121,7 +121,7 @@ func TestHelperJail(t *testing.T) {
 // killed.
 func TestBuildReportsSyscalls(t *testing.T) {
 	needExec(t)
-	hello := mkmod(t, demo("package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  ovid/io.Print(\"hi\\n\")\n  return 3\n}\n"))
+	hello := mkmod(t, demo("package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  ovid/io.Print(io, \"hi\\n\")\n  return 3\n}\n"))
 	bin, calls := buildSyscalls(t, hello)
 	if want := []int{1, 9, 60}; !reflect.DeepEqual(calls, want) { // write, mmap, exit
 		t.Fatalf("a program that prints lists %v, want %v", calls, want)
@@ -146,7 +146,7 @@ func main(io *ovid/io.Cap) i64 {
   if e != 0 {
     return 1
   }
-  ovid/io.Stdout(data)
+  ovid/io.Print(io, data)
   return 0
 }
 `))

@@ -1,5 +1,5 @@
 {"ops":[
   {"op":"delete","id":"st:tally.Count:5","expect":"11e35187be84"},
   {"op":"append","into":"tally","text":"// Total counts the events of two days.\nfunc Total(a i64, b i64) i64 {\n  return Count(a) + Count(b)\n}"},
-  {"op":"replace","id":"st:tally.main:1","expect":"54aa6d201fb9","text":"ovid/io.PrintInt(io, Total(2, 3))"}
+  {"op":"replace","id":"st:tally.main:1","expect":"c941a04f2a8d","text":"ovid/io.PrintInt(io, Total(2, 3))"}
 ]}

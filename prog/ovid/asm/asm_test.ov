@@ -10,14 +10,14 @@ func BytesAre(io *ovid/io.Cap, c *Code, want bytes) bool {
   }
   var h i64 = ovid/io.Alloc(io, 2)
   var i i64 = 0
-  ovid/io.Eprint("got")
+  ovid/io.Eprint(io, "got")
   while i < c.len {
-    ovid/io.Eprint(" ")
+    ovid/io.Eprint(io, " ")
     ovid/mem.HexOut(h, load8(c.data + i), 2)
-    ovid/io.Stderr(bytes(h, 2))
+    ovid/io.Eprint(io, bytes(h, 2))
     i = i + 1
   }
-  ovid/io.Eprint("\n")
+  ovid/io.Eprint(io, "\n")
   return false
 }
 

@@ -10,13 +10,13 @@ func Deep(io *ovid/io.Cap, n i64) i64 {
     return ovid/io.Exit(io, 3)
   }
   var r i64 = Deep(io, n - 1)
-  ovid/io.Print("after\n")
+  ovid/io.Print(io, "after\n")
   return r
 }
 
 func main(io *ovid/io.Cap) i64 {
-  ovid/io.Print("before\n")
+  ovid/io.Print(io, "before\n")
   Deep(io, 3)
-  ovid/io.Print("not reached\n")
+  ovid/io.Print(io, "not reached\n")
   return 0
 }

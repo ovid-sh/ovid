@@ -7,15 +7,15 @@ import ovid/parse
 // MsgIs reports whether c failed with the message want.
 func MsgIs(io *ovid/io.Cap, c *C, want bytes) bool {
   if c.err == 0 {
-    ovid/io.Eprint("no failure\n")
+    ovid/io.Eprint(io, "no failure\n")
     return false
   }
   if ovid/mem.Eq(bytes(c.msg.data, c.msg.len), want) {
     return true
   }
-  ovid/io.Eprint("got ")
-  ovid/io.Stderr(bytes(c.msg.data, c.msg.len))
-  ovid/io.Eprint("\n")
+  ovid/io.Eprint(io, "got ")
+  ovid/io.Eprint(io, bytes(c.msg.data, c.msg.len))
+  ovid/io.Eprint(io, "\n")
   return false
 }
 

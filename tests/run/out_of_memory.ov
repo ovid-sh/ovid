@@ -7,8 +7,8 @@ package demo
 import ovid/io
 
 func main(io *ovid/io.Cap) i64 {
-  ovid/io.Print("before\n")
+  ovid/io.Print(io, "before\n")
   var p i64 = ovid/io.Alloc(io, 1 << 47)
-  ovid/io.Print("after\n")
+  ovid/io.Print(io, "after\n")
   return p & 1
 }

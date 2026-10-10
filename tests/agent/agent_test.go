@@ -137,7 +137,7 @@ import ovid/io
 
 func main(io *ovid/io.Cap) i64 {
   while true {
-    ovid/io.Print("y\n")
+    ovid/io.Print(io, "y\n")
   }
   return 0
 }

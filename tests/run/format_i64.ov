@@ -9,8 +9,8 @@ import ovid/mem
 
 func show(io *ovid/io.Cap, d i64, v i64) i64 {
   var n i64 = ovid/mem.FormatI64(d, v)
-  ovid/io.Stdout(bytes(d, n))
-  ovid/io.Print("\n")
+  ovid/io.Print(io, bytes(d, n))
+  ovid/io.Print(io, "\n")
   return 0
 }
 

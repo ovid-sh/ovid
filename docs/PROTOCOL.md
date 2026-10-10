@@ -242,7 +242,7 @@ spells one cycle (`import cycle: app/a -> app/b -> app/a`). Packages must
 form a DAG so that each can be checked and compiled once its imports are,
 which keeps per-package parallel and incremental builds possible.
 
-`opaque_type`: outside `ovid/io`, a pointer to one of its types (`Cap` today)
+`opaque_type`: outside `ovid/io`, a pointer to one of its types (`Cap`, `File`, …)
 was made by a cast, cast to something else, or had a field read or written.
 Those types are handles on what the program may do; they come from `main` or
 from an `ovid/io` func, and only `ovid/io` looks inside them.

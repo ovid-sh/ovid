@@ -38,7 +38,7 @@ func Usage(io *ovid/io.Cap, msg bytes) i64 {
   ovid/mem.WBytes(io, b, "{\"ok\":false,\"error\":\"usage\",\"message\":")
   ovid/parse.WStr(io, b, msg)
   ovid/mem.WBytes(io, b, ",\"usage\":\"ovid check [dir] [--std dir] | ovid build [dir] [-o out] [--std dir] | ovid dump [dir] [--std dir] | ovid refs <id|name> [dir] [--name N] [--std dir]; dir defaults to . and may also be given as -C dir; out defaults to <dir>/bin/<module name>; --std names the directory holding the shipped packages (ovid/io, ovid/mem)\"}\n")
-  ovid/io.Stdout(bytes(b.data, b.len))
+  ovid/io.Print(io, bytes(b.data, b.len))
   return 64
 }
 
@@ -49,7 +49,7 @@ func Fail(io *ovid/io.Cap, code bytes, detail bytes) i64 {
   ovid/mem.WBytes(io, b, ",\"message\":")
   ovid/parse.WStr(io, b, detail)
   ovid/mem.WBytes(io, b, bytes(strptr("}\n"), 2))
-  ovid/io.Stdout(bytes(b.data, b.len))
+  ovid/io.Print(io, bytes(b.data, b.len))
   return 1
 }
 
@@ -64,7 +64,7 @@ func LoadFailed(io *ovid/io.Cap, m *ovid/parse.Mod, build bool) i64 {
   }
   ovid/parse.WInt(io, b, m.nerr)
   ovid/mem.WBytes(io, b, bytes(strptr("}\n"), 2))
-  ovid/io.Stdout(bytes(b.data, b.len))
+  ovid/io.Print(io, bytes(b.data, b.len))
   return 1
 }
 
@@ -73,10 +73,7 @@ func MkParent(io *ovid/io.Cap, path i64) i64 {
   var i i64 = n - 1
   while i >= 0 {
     if load8(path + i) == 47 {
-      var p i64 = ovid/io.Alloc(io, i + 1)
-      ovid/mem.CopyN(p, path, i)
-      store8(p + i, 0)
-      ovid/io.Mkdir(p)
+      ovid/io.Mkdir(io, bytes(path, i))
       return 0
     }
     i = i - 1
@@ -175,7 +172,7 @@ func CmdDump(io *ovid/io.Cap) i64 {
     return 1
   }
   ovid/parse.Emit(m)
-  ovid/io.Stdout(bytes(m.json.data, m.json.len))
+  ovid/io.Print(io, bytes(m.json.data, m.json.len))
   return 0
 }
 
@@ -237,7 +234,7 @@ func CmdBuild(io *ovid/io.Cap) i64 {
     ovid/parse.WInt(io, qb, m.sysunk)
   }
   ovid/mem.WBytes(io, qb, bytes(strptr("}\n"), 2))
-  ovid/io.Stdout(bytes(qb.data, qb.len))
+  ovid/io.Print(io, bytes(qb.data, qb.len))
   return 0
 }
 

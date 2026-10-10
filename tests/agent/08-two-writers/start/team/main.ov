@@ -14,8 +14,8 @@ func Beta(x i64) i64 {
 
 func main(io *ovid/io.Cap) i64 {
   ovid/io.PrintInt(io, Alpha(4))
-  ovid/io.Print(" ")
+  ovid/io.Print(io, " ")
   ovid/io.PrintInt(io, Beta(4))
-  ovid/io.Print("\n")
+  ovid/io.Print(io, "\n")
   return 0
 }

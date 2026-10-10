@@ -855,6 +855,6 @@ func CmdRefs(io *ovid/io.Cap) i64 {
   ovid/mem.WBytes(io, b, bytes(strptr("\",\"total\":"), 10))
   ovid/parse.WInt(io, b, n)
   ovid/mem.WBytes(io, b, bytes(strptr("}\n"), 2))
-  ovid/io.Stdout(bytes(b.data, b.len))
+  ovid/io.Print(io, bytes(b.data, b.len))
   return 0
 }

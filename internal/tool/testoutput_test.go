@@ -2,6 +2,7 @@ package tool
 
 import (
 	"bytes"
+	"os"
 	"runtime"
 	"strings"
 	"testing"
@@ -15,6 +16,9 @@ func TestTestBoundsOutput(t *testing.T) {
 	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
 		t.Skip("ovid programs are linux/amd64 binaries")
 	}
+	if _, err := os.Stat("/proc/self/fd"); err != nil {
+		t.Skip("no /proc for TestC_FloodMark to open the mark's descriptor through")
+	}
 	old := testTimeout
 	testTimeout = 300 * time.Millisecond
 	defer func() { testTimeout = old }()
@@ -25,7 +29,7 @@ import ovid/io
 func TestA_Big(io *ovid/io.Cap) i64 {
   var i i64 = 0
   while i < 100000 {
-    ovid/io.Print("0123456789\n")
+    ovid/io.Print(io, "0123456789\n")
     i = i + 1
   }
   return 0
@@ -33,20 +37,21 @@ func TestA_Big(io *ovid/io.Cap) i64 {
 
 func TestB_Flood(io *ovid/io.Cap) i64 {
   while true {
-    ovid/io.Print("0123456789\n")
+    ovid/io.Print(io, "0123456789\n")
   }
   return 0
 }
 
 func TestC_FloodMark(io *ovid/io.Cap) i64 {
-  while true {
-    ovid/io.Write(3, bytes(strptr("0123456789\n"), 11))
+  var f *ovid/io.File, e i64 = ovid/io.Open(io, "/proc/self/fd/3", ovid/io.O_WRONLY, 0)
+  while e == 0 {
+    ovid/io.Write(f, "0123456789\n")
   }
   return 0
 }
 
 func TestD_Small(io *ovid/io.Cap) i64 {
-  ovid/io.Print("hi\n")
+  ovid/io.Print(io, "hi\n")
   return 1
 }
 

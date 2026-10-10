@@ -139,7 +139,7 @@ func WNum(c *Ch, v i64) i64 {
 func Line(c *Ch) i64 {
   if !c.quiet {
     ovid/mem.WByte(c.io, c.b, 10)
-    ovid/io.Stdout(bytes(c.b.data, c.b.len))
+    ovid/io.Print(c.io, bytes(c.b.data, c.b.len))
   }
   c.b.len = 0
   return 0

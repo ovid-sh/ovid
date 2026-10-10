@@ -64,7 +64,7 @@ All commands take -C <dir> (default: the module containing the cwd).
 The language at a glance (all of it: ovid help language):
   i64, bool, bytes, *T; var x i64 = 0; if/else if/else; while, break, continue
   var p *T = ovid/io.Alloc(io, sizeof(T)) as *T     structs live on the heap
-  ovid/io.Print("hi\n"); ovid/io.PrintInt(io, n)   output
+  ovid/io.Print(io, "hi\n"); ovid/io.PrintInt(io, n)  output
   var sp bool = c == 32 || c == 9                   && || ! work anywhere
 
 Topics: ovid help agent (language, std, edit, ids together) | language | commands | edit | std | ids
@@ -173,9 +173,9 @@ ovid/io.Alloc), ptr(b) the address b starts at, for a syscall path (ptr,
 like len, is a keyword only before a parenthesis).
 strptr("hi\n") and strlen("hi\n") are a literal's address and length as
 two i64; the literal is NUL-terminated in memory, for a syscall path.
-  ovid/io.Print("total: ")             // Eprint writes to stderr
+  ovid/io.Print(io, "total: ")         // Eprint(io, b) writes to stderr
   ovid/io.PrintInt(io, n)              // a number in decimal
-  ovid/io.Stdout(b)                    // a bytes; bytes(p, n) for n bytes at p
+  ovid/io.Print(io, b)                 // a bytes; bytes(p, n) for n bytes at p
 
 Memory: no implicit allocation. ovid/io.Alloc(io, nbytes) returns an i64
 address of zeroed bytes from the heap, which grows as needed; it does not
@@ -200,7 +200,7 @@ Or return a struct: func Read(...) *Result, with the fields you need; or
 a value and an error code, as ovid/io.ReadFile does:
   var data bytes, e i64 = ovid/io.ReadFile(io, path)
   if e != 0 {
-    ovid/io.Eprint(ovid/io.ErrText(e))
+    ovid/io.Eprint(io, ovid/io.ErrText(e))
     return 1
   }
 
@@ -220,10 +220,18 @@ Programs: the entry package (ovid.mod "entry") has
   func main(io *ovid/io.Cap) i64    // result is the exit code
 A fatal error deep in the calls can end the program at once instead of
 returning to main: return ovid/io.Exit(io, 1) (it never returns).
-io is the capability for argv, heap, and syscalls. syscall(...) is only
-allowed inside ovid/io; everyone else calls ovid/io funcs. ovid/io's types
-are handles: outside ovid/io a pointer to one cannot be made by a cast, cast
-to anything, or have its fields read or written (opaque_type).
+io is the capability for argv, heap, syscalls, and files. syscall(...) is
+only allowed inside ovid/io; everyone else calls ovid/io funcs. Each that
+opens, names, or creates a file, or gets a stream, takes io; one that uses
+an open file takes its handle. ovid/io.Open(io, path, flags, mode) returns
+a *ovid/io.File for Read, Write, Fstat, and Close; ovid/io.Stdin(io),
+Stdout(io), and Stderr(io) are the standard streams.
+ovid/io's types are handles: outside ovid/io a pointer to one cannot be
+made by a cast, cast to anything, or have its fields read or written
+(opaque_type), so through the API a func without io reaches only the
+files it was handed. Raw memory is not checked: store64 and a cast to a
+struct of your own holding a handle can forge one, so this is a boundary
+for honest code, not a sandbox.
 
 Serving HTTP: write a handler in the entry package and no main; build
 makes the program the stdio host around it, which reads the requests on
@@ -369,7 +377,7 @@ ovid replace <id> | insert --after <id> | insert --before <id> | append <id>
   [--require-clean|--allow-broken] [--show]
   One edit op; the text is read from stdin (or F), so a heredoc works:
     ovid replace st:app.main:3 --expect 1f0c9a2b7d4e <<'EOF'
-    ovid/io.Stdout("a \"quoted\" line\n")
+    ovid/io.Print(io, "a \"quoted\" line\n")
     EOF
   Same checks and result as ovid edit. Every op needs a guard: --expect
   (the hash of the node it names), --rev (the module revision), or --force;
@@ -665,7 +673,7 @@ func Greeting() bytes {
 }
 
 func main(io *ovid/io.Cap) i64 {
-  ovid/io.Print(Greeting())
+  ovid/io.Print(io, Greeting())
   return 0
 }
 `,

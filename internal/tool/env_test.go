@@ -29,18 +29,18 @@ func Dump(io *ovid/io.Cap) i64 {
       i = i + 1
     }
     if eq {
-      ovid/io.Stdout(bytes(p, len))
-      ovid/io.Print("\n")
+      ovid/io.Print(io, bytes(p, len))
+      ovid/io.Print(io, "\n")
       n = n + 1
     }
     p = (p + len) + 1
   }
   if ovid/io.ArgC(io, argc + 1) != 0 || ovid/io.ArgC(io, argc) != 0 || ovid/io.ArgC(io, -1) != 0 {
-    ovid/io.Print("Arg reads past the arguments\n")
+    ovid/io.Print(io, "Arg reads past the arguments\n")
   }
-  ovid/io.Print("entries: ")
+  ovid/io.Print(io, "entries: ")
   ovid/io.PrintInt(io, n)
-  ovid/io.Print("\n")
+  ovid/io.Print(io, "\n")
   return 0
 }
 

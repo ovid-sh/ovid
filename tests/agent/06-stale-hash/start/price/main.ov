@@ -12,8 +12,8 @@ func Price(n i64) i64 {
 
 func main(io *ovid/io.Cap) i64 {
   ovid/io.PrintInt(io, Price(3))
-  ovid/io.Print("\n")
+  ovid/io.Print(io, "\n")
   ovid/io.PrintInt(io, Price(12))
-  ovid/io.Print("\n")
+  ovid/io.Print(io, "\n")
   return 0
 }
