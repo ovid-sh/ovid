@@ -1,9 +1,11 @@
 package ovid/io
 
 // Cap is the capability main receives: argv, the heap, and the file
-// system. Only code handed a *Cap can allocate, read arguments, or open,
-// name, or print to a file; a file it opened is a *File, which reaches
-// that file and no other. maps is the newest mapping Alloc took from the
+// system. No ovid/io func allocates, reads arguments, or opens, names, or
+// prints to a file for a caller without a *Cap; a file it opened is a
+// *File, which reaches that file and no other. This is the API's boundary,
+// not memory safety: code that writes raw memory and casts it to a struct
+// of its own can forge a *Cap or a *File. maps is the newest mapping Alloc took from the
 // kernel after the first region, or 0; each starts with the one before it
 // and its own length (see Alloc).
 type Cap struct {
@@ -281,7 +283,9 @@ func ErrText(e i64) bytes {
 
 // File is an open file: what Open, Stdin, Stdout, and Stderr return. It
 // reaches that file and no other, and outside ovid/io it cannot be made by
-// a cast or taken apart, so a func can only use a file it was handed.
+// a cast or taken apart (opaque_type), so a func that keeps to the API uses
+// only a file it was handed or opened with io (see Cap for what raw memory
+// can still do).
 type File struct {
   fd i64
 }
