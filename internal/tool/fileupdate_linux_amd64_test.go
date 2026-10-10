@@ -2,16 +2,20 @@ package tool
 
 import (
 	"bufio"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
+	"time"
 )
 
 // TestFileLock: a write lock ovid/io.Lock takes is a POSIX record lock
 // another process sees and respects (as sqlite3 does), until it is given
-// back; and a lock another process holds makes Lock fail without waiting.
+// back; a lock another process holds makes Lock fail without waiting, or,
+// asked to wait, block until it is given back.
 func TestFileLock(t *testing.T) {
 	bin := buildUpdater(t)
 	p := filepath.Join(t.TempDir(), "db")
@@ -76,4 +80,58 @@ func TestFileLock(t *testing.T) {
 	if ee, ok := err.(*exec.ExitError); !ok || ee.ExitCode() != 3 {
 		t.Fatalf("lock held elsewhere: %v", err)
 	}
+
+	// Asked to wait, the program blocks in F_SETLKW: the kernel lists it as
+	// a waiter in /proc/locks ("->" before the entry). Once this process
+	// gives its lock back, the program takes the lock and says so.
+	waiter := exec.Command(bin, "l", p, "wait")
+	win, err := waiter.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wout, err := waiter.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := waiter.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer waiter.Process.Kill()
+	blocked := fmt.Sprintf(" WRITE %d ", waiter.Process.Pid)
+	for deadline := time.Now().Add(10 * time.Second); ; {
+		locks, err := os.ReadFile("/proc/locks")
+		if err != nil {
+			t.Skipf("no /proc/locks to see the waiter in: %v", err)
+		}
+		if waiting(string(locks), blocked) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the program never waited for the lock:\n%s", locks)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	fl = syscall.Flock_t{Type: syscall.F_UNLCK}
+	if err := syscall.FcntlFlock(f.Fd(), syscall.F_SETLK, &fl); err != nil {
+		t.Fatal(err)
+	}
+	wr := bufio.NewReader(wout)
+	if line, err := wr.ReadString('\n'); line != "locked\n" {
+		t.Fatalf("after the wait, read %q, %v", line, err)
+	}
+	win.Close()
+	if err := waiter.Wait(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// waiting reports whether /proc/locks text has a blocked request ("->")
+// whose line holds entry.
+func waiting(locks, entry string) bool {
+	for _, l := range strings.Split(locks, "\n") {
+		if strings.Contains(l, "->") && strings.Contains(l, entry) {
+			return true
+		}
+	}
+	return false
 }
