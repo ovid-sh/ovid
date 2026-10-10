@@ -13,9 +13,9 @@ func Eq(io *ovid/io.Cap, got i64, want i64) bool {
     return true
   }
   ovid/io.Eprint(io, "got ")
-  ovid/io.WriteInt(io, ovid/io.Stderr(io), got)
+  ovid/io.EprintInt(io, got)
   ovid/io.Eprint(io, ", want ")
-  ovid/io.WriteInt(io, ovid/io.Stderr(io), want)
+  ovid/io.EprintInt(io, want)
   ovid/io.Eprint(io, "\n")
   return false
 }
