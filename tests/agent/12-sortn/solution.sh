@@ -92,6 +92,7 @@ func Parse(p i64, n i64, out i64) i64 {
 }
 
 func main(io *ovid/io.Cap) i64 {
+  var in *ovid/io.File = ovid/io.Stdin(io)
   var size i64 = 65536
   var buf i64 = ovid/io.Alloc(io, size)
   var n i64 = 0
@@ -104,7 +105,7 @@ func main(io *ovid/io.Cap) i64 {
       buf = bigger
       size = size * 2
     }
-    r, e = ovid/io.Read(ovid/io.Stdin(io), bytes(buf + n, size - n))
+    r, e = ovid/io.Read(in, bytes(buf + n, size - n))
     n = n + r
   }
   if e != 0 {
