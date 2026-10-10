@@ -2,6 +2,9 @@ package tool
 
 import (
 	"bytes"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -73,5 +76,51 @@ func TestErrorTypeHints(t *testing.T) {
 	Check(dir, false, &b)
 	if !strings.Contains(b.String(), `"message":"the second result is an error; write (*demo.Pt, error)"`) {
 		t.Errorf("(*Pt, i64): %s", b.String())
+	}
+}
+
+// TestHTTPReadError: a request whose input cannot be read is not taken
+// for a malformed one (#198): Err is the read's ovid/io error, not
+// ERR_SYNTAX, and the stdio host answers it with 500, not 400. A
+// directory as standard input fails every read with EISDIR.
+func TestHTTPReadError(t *testing.T) {
+	dir := mkmod(t, demo(`package demo
+
+import ovid/io
+import ovid/http
+
+func main(io *ovid/io.Cap) i64 {
+  var req *ovid/http.Request = ovid/http.ReadStdio(io)
+  var e error = ovid/http.Err(req)
+  if e == ovid/http.ERR_SYNTAX {
+    return 3
+  }
+  if e != ovid/io.E_ISDIR {
+    return 4
+  }
+  return ovid/http.WriteStdio(io, req, ovid/http.NewResponse(io), 0)
+}
+`))
+	bin := filepath.Join(t.TempDir(), "srv")
+	var b bytes.Buffer
+	if code := Build(dir, bin, &b); code != 0 {
+		t.Fatalf("build: %s", b.String())
+	}
+	if !canExec {
+		t.Skip("built only: ovid programs are linux/amd64 binaries")
+	}
+	in, err := os.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer in.Close()
+	var out, stderr bytes.Buffer
+	cmd := exec.Command(bin)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = in, &out, &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("%v; stdout %q, stderr %q", err, out.String(), stderr.String())
+	}
+	if want := "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n"; out.String() != want {
+		t.Fatalf("stdout %q, want %q", out.String(), want)
 	}
 }
