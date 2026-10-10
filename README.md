@@ -19,7 +19,7 @@ go build -o bin/ovid ./cmd/ovid
 bin/ovid init hello && cd hello
 ovid run            # hello, world
 ovid test           # runs TestGreeting
-ovid help           # overview; `ovid help language` is the full language
+ovid help           # overview; `ovid help agent` is everything before a first edit
 ```
 
 ## A module
