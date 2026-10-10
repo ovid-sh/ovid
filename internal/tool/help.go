@@ -228,10 +228,10 @@ a *ovid/io.File for Read, Write, Fstat, and Close; ovid/io.Stdin(io),
 Stdout(io), and Stderr(io) are the standard streams.
 ovid/io's types are handles: outside ovid/io a pointer to one cannot be
 made by a cast, cast to anything, or have its fields read or written
-(opaque_type), so through the API a func without io reaches no file. Raw
-memory is not checked: store64 and a cast to a struct of your own holding
-a handle can forge one, so this is a boundary for honest code, not a
-sandbox.
+(opaque_type), so through the API a func without io reaches only the
+files it was handed. Raw memory is not checked: store64 and a cast to a
+struct of your own holding a handle can forge one, so this is a boundary
+for honest code, not a sandbox.
 
 Serving HTTP: write a handler in the entry package and no main; build
 makes the program the stdio host around it, which reads the requests on
