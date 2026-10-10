@@ -1,0 +1,175 @@
+package sqlite/cli
+
+import ovid/io
+import ovid/mem
+import sqlite/db
+import sqlite/real
+
+// sqlread prints what a SQLite database file holds, in the format of the
+// sqlite3 shell's default list mode, so the two can be diffed:
+//   sqlread file.db                the tables
+//   sqlread file.db table          every row, in rowid order
+//   sqlread file.db table rowid    one row, found through the b-tree
+//   sqlread file.db table --count  "rows|columns", decoded but not printed
+
+func die(msg i64) i64 {
+  ovid/io.Eprint(strptr("sqlread: "))
+  ovid/io.Eprint(msg)
+  ovid/io.Eprint(strptr("\n"))
+  return 1
+}
+
+// wInt appends v in decimal. The digits come from negative remainders so
+// the most negative i64 works.
+func wInt(io *ovid/io.Cap, out *ovid/mem.Buf, v i64) i64 {
+  ovid/mem.Grow(io, out, 24)
+  var end i64 = (out.data + out.len) + 24
+  var i i64 = 0
+  var x i64 = v
+  if x > 0 {
+    x = 0 - x
+  }
+  while x != 0 || i == 0 {
+    i = i + 1
+    store8(end - i, 48 - (x % 10))
+    x = x / 10
+  }
+  if v < 0 {
+    i = i + 1
+    store8(end - i, 45)
+  }
+  ovid/mem.Copy(out.data + out.len, end - i, i)
+  out.len = out.len + i
+  return 0
+}
+
+// parseInt reads a decimal rowid; ok (an 8-byte cell) gets 1 when p is one.
+func parseInt(p i64, ok i64) i64 {
+  var i i64 = 0
+  var neg bool = load8(p) == 45
+  if neg {
+    i = 1
+  }
+  var v i64 = 0
+  var digits i64 = 0
+  while load8(p + i) >= 48 && load8(p + i) <= 57 {
+    v = (v * 10) + (load8(p + i) - 48)
+    i = i + 1
+    digits = digits + 1
+  }
+  if digits > 0 && load8(p + i) == 0 {
+    store64(ok, 1)
+  }
+  if neg {
+    return 0 - v
+  }
+  return v
+}
+
+// row appends the cursor's row: columns joined by "|", NULL as nothing.
+func row(io *ovid/io.Cap, out *ovid/mem.Buf, c *sqlite/db.Cursor, rec *sqlite/db.Rec, t *sqlite/db.Table, f *sqlite/real.Fmt) i64 {
+  sqlite/db.RecInit(rec, c.payload)
+  var col i64 = 0
+  while sqlite/db.RecNext(rec) {
+    if col > 0 {
+      ovid/mem.WByte(io, out, 124)
+    }
+    if rec.kind == sqlite/db.KInt && col < t.ncol && load8(t.real + col) == 1 {
+      ovid/mem.Grow(io, out, 40)
+      out.len = out.len + sqlite/real.FormatInt(f, out.data + out.len, rec.ival)
+    } else if rec.kind == sqlite/db.KInt {
+      wInt(io, out, rec.ival)
+    } else if rec.kind == sqlite/db.KReal {
+      ovid/mem.Grow(io, out, 40)
+      out.len = out.len + sqlite/real.Format(f, out.data + out.len, rec.ival)
+    } else if rec.kind == sqlite/db.KNull {
+      if col == t.ipk {
+        wInt(io, out, c.rowid)
+      }
+    } else {
+      ovid/mem.WBytes(io, out, rec.ptr, rec.len)
+    }
+    col = col + 1
+  }
+  ovid/mem.WByte(io, out, 10)
+  if out.len >= 65536 {
+    ovid/io.Stdout(out.data, out.len)
+    out.len = 0
+  }
+  return 0
+}
+
+func main(io *ovid/io.Cap) i64 {
+  var argc i64 = ovid/io.Argc(io)
+  if argc < 2 || argc > 4 {
+    ovid/io.Eprint(strptr("usage: sqlread file.db [table [rowid | --count]]\n"))
+    return 64
+  }
+  var path i64 = ovid/io.Arg(io, 1)
+  var d *sqlite/db.DB = sqlite/db.Open(io, path, ovid/io.CLen(path))
+  if d.err != 0 {
+    return die(sqlite/db.ErrStr(d.err))
+  }
+  if d.wal {
+    ovid/io.Eprint(strptr("sqlread: warning: WAL mode; rows still in the -wal file are not shown\n"))
+  }
+  var c *sqlite/db.Cursor = sqlite/db.NewCursor(io, d)
+  var t *sqlite/db.Table = sqlite/db.Tables(io, c)
+  if c.err != 0 {
+    return die(sqlite/db.ErrStr(c.err))
+  }
+  var out *ovid/mem.Buf = ovid/mem.New(io, 131072)
+  if argc == 2 {
+    while t != 0 as *sqlite/db.Table {
+      ovid/mem.WBytes(io, out, t.name, t.namen)
+      ovid/mem.WByte(io, out, 10)
+      t = t.next
+    }
+    ovid/io.Stdout(out.data, out.len)
+    return 0
+  }
+  var name i64 = ovid/io.Arg(io, 2)
+  t = sqlite/db.FindTable(t, name, ovid/io.CLen(name))
+  if t == 0 as *sqlite/db.Table {
+    return die(strptr("no such table"))
+  }
+  var rec *sqlite/db.Rec = sqlite/db.NewRec(io)
+  var f *sqlite/real.Fmt = sqlite/real.New(io)
+  if argc == 4 && ovid/mem.EqC(ovid/io.Arg(io, 3), strptr("--count"), strlen("--count")) {
+    // Walk the table and decode every column, printing only the totals:
+    // the cost of reading without the cost of formatting.
+    var rows i64 = 0
+    var cols i64 = 0
+    sqlite/db.First(c, t.root)
+    while sqlite/db.Next(c) {
+      sqlite/db.RecInit(rec, c.payload)
+      while sqlite/db.RecNext(rec) {
+        cols = cols + 1
+      }
+      rows = rows + 1
+    }
+    wInt(io, out, rows)
+    ovid/mem.WByte(io, out, 124)
+    wInt(io, out, cols)
+    ovid/mem.WByte(io, out, 10)
+  } else if argc == 4 {
+    var ok i64 = ovid/io.Alloc(io, 8)
+    var id i64 = parseInt(ovid/io.Arg(io, 3), ok)
+    if load64(ok) == 0 {
+      return die(strptr("rowid must be an integer"))
+    }
+    if sqlite/db.Seek(c, t.root, id) {
+      row(io, out, c, rec, t, f)
+    }
+  } else {
+    sqlite/db.First(c, t.root)
+    while sqlite/db.Next(c) {
+      row(io, out, c, rec, t, f)
+    }
+  }
+  ovid/io.Stdout(out.data, out.len)
+  if c.err != 0 {
+    return die(sqlite/db.ErrStr(c.err))
+  }
+  return 0
+}

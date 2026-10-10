@@ -1,0 +1,317 @@
+package sqlite/db
+
+import ovid/io
+import ovid/mem
+
+// Error codes, in DB.err and Cursor.err. ErrStr names them.
+const ErrOpen i64 = 1
+const ErrNotDB i64 = 2
+const ErrEncoding i64 = 3
+const ErrCorrupt i64 = 4
+const ErrNotTable i64 = 5
+
+// DB is a SQLite database file read whole into memory. Nothing is locked
+// and the -wal file is not read: wal says the file is in WAL mode, where
+// the newest rows may not be in it yet.
+type DB struct {
+  data i64
+  size i64
+  page i64
+  usable i64
+  npages i64
+  wal bool
+  err i64
+}
+
+// Rd is a read position: Varint reads at p and moves it.
+type Rd struct {
+  p i64
+}
+
+// ErrStr is the NUL-terminated message for an error code.
+func ErrStr(code i64) i64 {
+  if code == ErrOpen {
+    return strptr("cannot read the file")
+  }
+  if code == ErrNotDB {
+    return strptr("not a SQLite 3 database")
+  }
+  if code == ErrEncoding {
+    return strptr("text encoding is not UTF-8")
+  }
+  if code == ErrNotTable {
+    return strptr("not a rowid table (WITHOUT ROWID and virtual tables are not supported)")
+  }
+  return strptr("database is malformed")
+}
+
+// Be16 is the big-endian 16-bit unsigned value at p.
+func Be16(p i64) i64 {
+  return (load8(p) << 8) | load8(p + 1)
+}
+
+// Be32 is the big-endian 32-bit unsigned value at p.
+func Be32(p i64) i64 {
+  return (Be16(p) << 16) | Be16(p + 2)
+}
+
+// Varint reads a SQLite varint (1 to 9 bytes, big-endian, 7 bits each and
+// 8 in the ninth) at r.p and moves r.p past it.
+func Varint(r *Rd) i64 {
+  var v i64 = 0
+  var i i64 = 0
+  while i < 8 {
+    var c i64 = load8(r.p + i)
+    v = (v << 7) | (c & 127)
+    if c < 128 {
+      r.p = (r.p + i) + 1
+      return v
+    }
+    i = i + 1
+  }
+  v = (v << 8) | load8(r.p + 8)
+  r.p = r.p + 9
+  return v
+}
+
+// Open reads the database at path (pathn bytes). Check err on the result.
+func Open(io *ovid/io.Cap, path i64, pathn i64) *DB {
+  var db *DB = ovid/io.Alloc(io, sizeof(DB)) as *DB
+  var pp i64 = ovid/io.Alloc(io, 8)
+  var nn i64 = ovid/io.Alloc(io, 8)
+  if ovid/io.ReadFile(io, path, pathn, pp, nn) != 0 {
+    db.err = ErrOpen
+    return db
+  }
+  db.data = load64(pp)
+  db.size = load64(nn)
+  // A zero-length file is an empty database.
+  if db.size == 0 {
+    return db
+  }
+  if db.size < 100 || !ovid/mem.Eq(db.data, 15, strptr("SQLite format 3"), 15) || load8(db.data + 15) != 0 {
+    db.err = ErrNotDB
+    return db
+  }
+  var ps i64 = Be16(db.data + 16)
+  if ps == 1 {
+    ps = 65536
+  }
+  if ps < 512 || (ps & (ps - 1)) != 0 {
+    db.err = ErrNotDB
+    return db
+  }
+  db.page = ps
+  db.usable = ps - load8(db.data + 20)
+  db.npages = db.size / ps
+  db.wal = load8(db.data + 18) == 2
+  var enc i64 = Be32(db.data + 56)
+  if enc != 1 && enc != 0 {
+    db.err = ErrEncoding
+  }
+  return db
+}
+
+// pageBase is the address of page pg (numbered from 1).
+func pageBase(db *DB, pg i64) i64 {
+  return db.data + ((pg - 1) * db.page)
+}
+
+// pageHdr is the address of page pg's b-tree header: page 1 keeps the
+// 100-byte file header in front of it.
+func pageHdr(db *DB, pg i64) i64 {
+  if pg == 1 {
+    return db.data + 100
+  }
+  return pageBase(db, pg)
+}
+
+const MaxDepth i64 = 40
+const PageLeaf i64 = 13
+const PageInterior i64 = 5
+
+// Cursor walks one table b-tree in rowid order. After Next or Seek returns
+// true, rowid, payload, and paylen describe the row; payload is a record
+// for RecInit.
+type Cursor struct {
+  io *ovid/io.Cap
+  db *DB
+  rd *Rd
+  stack i64
+  depth i64
+  rowid i64
+  payload i64
+  paylen i64
+  err i64
+}
+
+// NewCursor is a cursor on db, not yet on any table.
+func NewCursor(io *ovid/io.Cap, db *DB) *Cursor {
+  var c *Cursor = ovid/io.Alloc(io, sizeof(Cursor)) as *Cursor
+  c.io = io
+  c.db = db
+  c.rd = ovid/io.Alloc(io, sizeof(Rd)) as *Rd
+  c.stack = ovid/io.Alloc(io, MaxDepth * 16)
+  c.depth = -1
+  return c
+}
+
+func fail(c *Cursor, code i64) bool {
+  c.err = code
+  c.depth = -1
+  return false
+}
+
+// push descends to page pg: the stack holds, per level, the page number
+// and the index of the next cell to visit.
+func push(c *Cursor, pg i64) bool {
+  if pg < 1 || pg > c.db.npages || (c.depth + 1) >= MaxDepth {
+    return fail(c, ErrCorrupt)
+  }
+  c.depth = c.depth + 1
+  store64(c.stack + (c.depth * 16), pg)
+  store64((c.stack + (c.depth * 16)) + 8, 0)
+  return true
+}
+
+// First puts the cursor before the first row of the table rooted at page
+// root. Next then yields each row.
+func First(c *Cursor, root i64) bool {
+  c.depth = -1
+  c.err = 0
+  if c.db.npages == 0 && root == 1 {
+    return true
+  }
+  return push(c, root)
+}
+
+// payloadAt returns the address of the n payload bytes of the cell whose
+// local part starts at p. A payload that fits in the page is returned in
+// place; one that spills is copied out of its overflow chain.
+func payloadAt(c *Cursor, p i64, n i64) i64 {
+  var u i64 = c.db.usable
+  var x i64 = u - 35
+  if n <= x {
+    return p
+  }
+  var m i64 = (((u - 12) * 32) / 255) - 23
+  var local i64 = m + ((n - m) % (u - 4))
+  if local > x {
+    local = m
+  }
+  var buf i64 = ovid/io.Alloc(c.io, n)
+  ovid/mem.Copy(buf, p, local)
+  var got i64 = local
+  var ovf i64 = Be32(p + local)
+  while got < n && ovf >= 1 && ovf <= c.db.npages {
+    var a i64 = pageBase(c.db, ovf)
+    var take i64 = u - 4
+    if take > (n - got) {
+      take = n - got
+    }
+    ovid/mem.Copy(buf + got, a + 4, take)
+    got = got + take
+    ovf = Be32(a)
+  }
+  if got < n {
+    c.err = ErrCorrupt
+  }
+  return buf
+}
+
+// leafCell loads the row in the leaf cell at address cell.
+func leafCell(c *Cursor, cell i64) bool {
+  c.rd.p = cell
+  c.paylen = Varint(c.rd)
+  c.rowid = Varint(c.rd)
+  c.payload = payloadAt(c, c.rd.p, c.paylen)
+  return c.err == 0
+}
+
+// Next moves to the next row; false at the end or on an error (see err).
+func Next(c *Cursor) bool {
+  while c.depth >= 0 {
+    var slot i64 = c.stack + (c.depth * 16)
+    var pg i64 = load64(slot)
+    var idx i64 = load64(slot + 8)
+    var base i64 = pageBase(c.db, pg)
+    var h i64 = pageHdr(c.db, pg)
+    var kind i64 = load8(h)
+    var ncell i64 = Be16(h + 3)
+    store64(slot + 8, idx + 1)
+    if kind == PageLeaf {
+      if idx < ncell {
+        return leafCell(c, base + Be16((h + 8) + (idx * 2)))
+      }
+      c.depth = c.depth - 1
+    } else if kind == PageInterior {
+      if idx < ncell {
+        if !push(c, Be32(base + Be16((h + 12) + (idx * 2)))) {
+          return false
+        }
+      } else if idx == ncell {
+        if !push(c, Be32(h + 8)) {
+          return false
+        }
+      } else {
+        c.depth = c.depth - 1
+      }
+    } else {
+      return fail(c, ErrNotTable)
+    }
+  }
+  return false
+}
+
+// Seek finds the row with the given rowid in the table rooted at root,
+// descending the b-tree instead of scanning. False if there is none.
+func Seek(c *Cursor, root i64, rowid i64) bool {
+  c.depth = -1
+  c.err = 0
+  var pg i64 = root
+  var level i64 = 0
+  while level < MaxDepth {
+    if pg < 1 || pg > c.db.npages {
+      return fail(c, ErrCorrupt)
+    }
+    var base i64 = pageBase(c.db, pg)
+    var h i64 = pageHdr(c.db, pg)
+    var kind i64 = load8(h)
+    var ncell i64 = Be16(h + 3)
+    var i i64 = 0
+    if kind == PageLeaf {
+      while i < ncell {
+        var cell i64 = base + Be16((h + 8) + (i * 2))
+        c.rd.p = cell
+        Varint(c.rd)
+        var k i64 = Varint(c.rd)
+        if k == rowid {
+          return leafCell(c, cell)
+        }
+        if k > rowid {
+          return false
+        }
+        i = i + 1
+      }
+      return false
+    }
+    if kind != PageInterior {
+      return fail(c, ErrNotTable)
+    }
+    // Each interior cell is a child page and the largest rowid under it;
+    // rowids above every cell are under the right-most pointer.
+    pg = Be32(h + 8)
+    var found bool = false
+    while i < ncell && !found {
+      var icell i64 = base + Be16((h + 12) + (i * 2))
+      c.rd.p = icell + 4
+      if rowid <= Varint(c.rd) {
+        pg = Be32(icell)
+        found = true
+      }
+      i = i + 1
+    }
+    level = level + 1
+  }
+  return fail(c, ErrCorrupt)
+}
