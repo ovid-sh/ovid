@@ -1,5 +1,6 @@
 package demo
 import ovid/io
+const E_FIELD error = 2
 // exit: 42
 // stdout: "WORLD\n"
 
@@ -48,9 +49,9 @@ func Upper(io *ovid/io.Cap, s bytes) bytes {
   return d
 }
 
-// Field finds the n-th space-separated field of s, or an error code: a
-// (bytes, i64) result, three words.
-func Field(s bytes, n i64) (bytes, i64) {
+// Field finds the n-th space-separated field of s, or an error: a
+// (bytes, error) result, three words.
+func Field(s bytes, n i64) (bytes, error) {
   var start i64 = 0
   var i i64 = 0
   while i <= len(s) {
@@ -63,23 +64,27 @@ func Field(s bytes, n i64) (bytes, i64) {
     }
     i = i + 1
   }
-  return s[0:0], 2
+  return s[0:0], E_FIELD
 }
 
 // Second forwards a three-word result.
-func Second(s bytes) (bytes, i64) {
+func Second(s bytes) (bytes, error) {
   return Field(s, 1)
 }
 
-// Tag returns its bytes with a code that is a local, and Tagged one
-// whose code is a call, in a func that otherwise calls nothing.
-func Tag(s bytes, n i64) (bytes, i64) {
-  var code i64 = n * 2
+// Tag returns its bytes with an error that is a local, and Tagged one
+// whose error is a call, in a func that otherwise calls nothing.
+func Tag(s bytes, n i64) (bytes, error) {
+  var code error = (n * 2) as error
   return s, code
 }
 
-func Tagged(s bytes, n i64) (bytes, i64) {
-  return s, Id(n)
+func Tagged(s bytes, n i64) (bytes, error) {
+  return s, IdErr(n)
+}
+
+func IdErr(v i64) error {
+  return v as error
 }
 
 // Bump adds one to r.n and returns r.path: a call that writes memory a
@@ -150,24 +155,24 @@ func main(io *ovid/io.Cap) i64 {
     return 7
   }
   // Three words: received, forwarded, and the error path.
-  var f bytes, fe i64 = Field(t, 1)
+  var f bytes, fe error = Field(t, 1)
   if fe != 0 || !Eq(f, "world") {
     return 8
   }
-  var g bytes, ge i64 = Second(t)
+  var g bytes, ge error = Second(t)
   if ge != 0 || !Eq(g, "world") {
     return 9
   }
-  var h bytes, he i64 = Field(t, 5)
-  if he != 2 || len(h) != 0 {
+  var h bytes, he error = Field(t, 5)
+  if he != E_FIELD || len(h) != 0 {
     return 10
   }
   f, fe = Field(t, 0)
   if fe != 0 || !Eq(f, "hello") {
     return 11
   }
-  var _, de i64 = Field(t, 9)
-  if de != 2 {
+  var _, de error = Field(t, 9)
+  if de != E_FIELD {
     return 12
   }
   // Under &&, the right side's checks run only when it is evaluated:
@@ -198,12 +203,12 @@ func main(io *ovid/io.Cap) i64 {
   if Three(q + 1, t[1:3], Id(q)) != 300 + 101 + 2 {
     return 19
   }
-  var tg bytes, tc i64 = Tag(t, 21)
-  if tc != 42 || !Eq(tg, t) {
+  var tg bytes, tc error = Tag(t, 21)
+  if tc != 42 as error || !Eq(tg, t) {
     return 20
   }
   tg, tc = Tagged(t, 7)
-  if tc != 7 || len(tg) != 11 {
+  if tc != 7 as error || len(tg) != 11 {
     return 21
   }
   // r.n is read before Bump writes it.

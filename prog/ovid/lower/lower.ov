@@ -1126,7 +1126,7 @@ func Region(l *L, s *ovid/parse.Node, k i64) *ovid/parse.Node {
 }
 
 func ThirdName(l *L, s *ovid/parse.Node) i64 {
-  // var b bytes, e i64 = f(): b, b#n, and e, the third in rcx.
+  // var b bytes, e error = f(): b, b#n, and e, the third in rcx.
   var third *ovid/parse.Node = Name(l, s.name2)
   if ovid/parse.IsBlank(s.name) {
     s.name2 = s.name

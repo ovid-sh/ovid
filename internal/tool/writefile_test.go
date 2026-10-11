@@ -28,7 +28,7 @@ func main(io *ovid/io.Cap) i64 {
   if ovid/io.Argc(io) > 3 {
     mode = 128
   }
-  var r i64 = 0
+  var r error = 0
   if load8(ovid/io.ArgC(io, 1)) == 97 {
     r = ovid/io.WriteFileAtomic(io, bytes(path, n), bytes(strptr("new\n"), 4), mode)
   } else {

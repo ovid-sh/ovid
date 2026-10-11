@@ -43,7 +43,7 @@ func TestB_Flood(io *ovid/io.Cap) i64 {
 }
 
 func TestC_FloodMark(io *ovid/io.Cap) i64 {
-  var f *ovid/io.File, e i64 = ovid/io.Open(io, "/proc/self/fd/3", ovid/io.O_WRONLY, 0)
+  var f *ovid/io.File, e error = ovid/io.Open(io, "/proc/self/fd/3", ovid/io.O_WRONLY, 0)
   while e == 0 {
     ovid/io.Write(f, "0123456789\n")
   }

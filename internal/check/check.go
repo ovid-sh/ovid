@@ -56,7 +56,7 @@ type sig struct {
 	params []string
 	names  []string
 	result string
-	two    bool // the func also returns an error code (i64)
+	two    bool // the func also returns an error
 	id     string
 }
 
@@ -88,7 +88,7 @@ func (c *checker) use(target, id, kind, in string, sp ir.Span) {
 // useType records a use of the struct type t resolves to, if it is one.
 func (c *checker) useType(t, id, kind, in string, sp ir.Span) {
 	t = strings.TrimPrefix(t, "*")
-	if t == "" || t == "i64" || t == "bool" || t == "bytes" || t == "invalid" {
+	if t == "" || t == "i64" || t == "bool" || t == "bytes" || t == "error" || t == "invalid" {
 		return
 	}
 	c.use("ty:"+t, id, kind, in, sp)
@@ -99,7 +99,32 @@ func (c *checker) err(id, code, msg string) {
 }
 
 func (c *checker) mismatch(id, what, got, want string) {
-	c.issue(Issue{Code: "type_mismatch", ID: id, Message: fmt.Sprintf("%s: got %s, want %s", what, got, want), Expected: want, Got: got})
+	c.issue(Issue{Code: "type_mismatch", ID: id, Message: fmt.Sprintf("%s: got %s, want %s", what, got, want), Expected: want, Got: got, Hint: errHint(got, want)})
+}
+
+// errHint is the fix for a type_mismatch that mixes an error with another
+// type: an error is not a number, and a number is not an error.
+func errHint(got, want string) string {
+	switch {
+	case got == "error" && want == "bool":
+		return "an error is not a condition: write e != 0 (failed) or e == 0 (succeeded)"
+	case got == "error":
+		return "an error is not a number: compare it with == or != against 0 (success) or an E_ const such as ovid/io.E_NOENT; e as i64 converts it on purpose"
+	case want == "error":
+		return "an error is 0 (success) or an E_ const such as ovid/io.E_NOENT; a func that fails returns (T, error); n as error converts on purpose"
+	}
+	return ""
+}
+
+// fits reports whether an expression n of type got may stand where want is
+// expected: the same type, or the literal 0, which is also the error that
+// means success.
+func fits(n *ir.Node, got, want string) bool {
+	return got == want || got == "invalid" || want == "invalid" || (want == "error" && isZero(n))
+}
+
+func isZero(n *ir.Node) bool {
+	return n != nil && n.Op == "int" && n.Int == 0
 }
 
 // Run checks p and records, besides the issues, the type of every
@@ -203,8 +228,8 @@ func run(p *ir.Program, lean bool) *Result {
 				continue
 			}
 			c.r.Facts = append(c.r.Facts, Fact{"fact": "const", "id": cn.ID, "value": cn.Value})
-			if cn.Type != "i64" {
-				c.err(cn.ID, "bad_type", "const must be i64")
+			if cn.Type != "i64" && cn.Type != "error" {
+				c.err(cn.ID, "bad_type", "const must be i64 or error")
 			}
 		}
 		for _, t := range pkg.Types {
@@ -615,7 +640,7 @@ func ShowType(pkg, t string) string {
 }
 
 func scalar(t string) bool {
-	return t == "i64" || t == "bool" || t == "bytes" || strings.HasPrefix(t, "*") || t == "invalid"
+	return t == "i64" || t == "bool" || t == "bytes" || t == "error" || strings.HasPrefix(t, "*") || t == "invalid"
 }
 
 // resolve turns a source type into its full form (i64, bool, pkg.T, *pkg.T).
@@ -624,12 +649,12 @@ func (c *checker) resolve(t string) (string, error) {
 }
 
 func Resolve(pkg *ir.Package, t string, pkgs map[string]*ir.Package) (string, error) {
-	if t == "i64" || t == "bool" || t == "bytes" {
+	if t == "i64" || t == "bool" || t == "bytes" || t == "error" {
 		return t, nil
 	}
 	star := strings.HasPrefix(t, "*")
 	t = strings.TrimPrefix(t, "*")
-	if t == "i64" || t == "bool" || t == "bytes" {
+	if t == "i64" || t == "bool" || t == "bytes" || t == "error" {
 		return "", fmt.Errorf("cannot point at %s; use i64 for a raw address", t)
 	}
 	tpkg, name := pkg.Path, t
@@ -764,7 +789,7 @@ func (c *checker) stmt(e *env, s *ir.Node) {
 		}
 		if s.Val != nil {
 			vt := c.expr(e, s.Val)
-			if vt != t && vt != "invalid" && t != "invalid" {
+			if !fits(s.Val, vt, t) {
 				c.mismatch(s.Val.ID, "var "+s.Name, vt, t)
 			}
 		}
@@ -778,7 +803,7 @@ func (c *checker) stmt(e *env, s *ir.Node) {
 			c.use(id, s.ID, "assign", c.fn.ID, s.NameSpan)
 		}
 		vt := c.expr(e, s.Val)
-		if vt != t && vt != "invalid" && t != "invalid" {
+		if !fits(s.Val, vt, t) {
 			c.mismatch(s.Val.ID, "assign to "+s.Name, vt, t)
 		}
 	case "var2", "assign2":
@@ -791,7 +816,7 @@ func (c *checker) stmt(e *env, s *ir.Node) {
 				continue
 			}
 			if i == 1 && name == s.Name {
-				c.err(s.ID, "duplicate_name", name+" receives both results; give the error code its own name, or _")
+				c.err(s.ID, "duplicate_name", name+" receives both results; give the error its own name, or _")
 			}
 			if s.Op == "var2" {
 				typ, sp := s.Type, s.TypeSpan
@@ -835,12 +860,21 @@ func (c *checker) stmt(e *env, s *ir.Node) {
 			if vt != "invalid" {
 				c.issue(Issue{Code: "arity", ID: s.Val.ID, Message: "two names receive one value",
 					Expected: "a call to a func with two results", Got: "one value",
-					Hint: "only a func declared (T, i64) returns two results"})
+					Hint: "only a func declared (T, error) returns two results"})
 			}
 		} else {
-			for i, want := range []string{sg.result, "i64"} {
+			for i, want := range []string{sg.result, "error"} {
 				if ts[i] != "_" && ts[i] != "invalid" && want != "invalid" && ts[i] != want {
 					c.mismatch(s.Val.ID, []string{"first", "second"}[i]+" result into "+[]string{s.Name, s.Two.Name}[i], want, ts[i])
+					if i == 1 && s.Op == "var2" {
+						first := ShowType(c.pkg.Path, sg.result)
+						if first == "invalid" {
+							first = "T"
+						}
+						c.r.Issues[len(c.r.Issues)-1].Hint = "the second result is an error: var " + s.Name + " " + first + ", " + s.Two.Name + " error = ..."
+						// Bind it as the error it holds, so its uses report nothing more.
+						ts[1] = "error"
+					}
 				}
 			}
 		}
@@ -855,7 +889,7 @@ func (c *checker) stmt(e *env, s *ir.Node) {
 		bt := c.expr(e, s.Base)
 		ft := c.field(s, bt)
 		vt := c.expr(e, s.Val)
-		if vt != ft && vt != "invalid" && ft != "invalid" {
+		if !fits(s.Val, vt, ft) {
 			c.mismatch(s.Val.ID, "field "+s.Name, vt, ft)
 		}
 	case "setbyte":
@@ -890,22 +924,30 @@ func (c *checker) stmt(e *env, s *ir.Node) {
 			c.recv, forward = true, true
 		}
 		vt := c.expr(e, s.Val)
-		if vt != c.res && vt != "invalid" && c.res != "invalid" {
+		if !fits(s.Val, vt, c.res) {
 			c.mismatch(s.Val.ID, "return value of "+c.fn.Name, vt, c.res)
+			if vt == "error" && c.two {
+				c.r.Issues[len(c.r.Issues)-1].Hint = "the value comes first and the error second: return v, e"
+			}
 		}
 		if forward {
 			return
 		}
 		if s.Val2 != nil && !c.two {
 			c.issue(Issue{Code: "arity", ID: s.ID, Message: c.fn.Name + " returns one value", Expected: "1", Got: "2",
-				Hint: "declare the func (" + c.fn.Result + ", i64) to return an error code too"})
+				Hint: "declare the func (" + c.fn.Result + ", error) to return an error too"})
 		} else if s.Val2 == nil && c.two {
-			c.issue(Issue{Code: "arity", ID: s.ID, Message: c.fn.Name + " returns a value and an error code", Expected: "2", Got: "1",
-				Hint: "write return v, 0 on success and return 0, code on failure"})
+			c.issue(Issue{Code: "arity", ID: s.ID, Message: c.fn.Name + " returns a value and an error", Expected: "2", Got: "1",
+				Hint: "write return v, 0 on success and return 0, e on failure"})
 		}
-		if s.Val2 != nil {
-			if et := c.expr(e, s.Val2); et != "i64" && et != "invalid" {
-				c.mismatch(s.Val2.ID, "error code returned by "+c.fn.Name, et, "i64")
+		if s.Val2 != nil && !c.two {
+			c.expr(e, s.Val2)
+		} else if s.Val2 != nil {
+			if et := c.expr(e, s.Val2); !fits(s.Val2, et, "error") {
+				c.mismatch(s.Val2.ID, "error returned by "+c.fn.Name, et, "error")
+				if et == c.res {
+					c.r.Issues[len(c.r.Issues)-1].Hint = "the value comes first and the error second: return v, e"
+				}
 			}
 		}
 	case "if":
@@ -939,7 +981,7 @@ func (c *checker) unknownName(id, name string, e *env) {
 	is := Issue{Code: "unknown_name", ID: id, Message: "undefined: " + name}
 	switch name {
 	case "nil", "null":
-		is.Hint = "a null pointer is 0 as *T: var z i64 = 0, then z as *T"
+		is.Hint = "a null pointer is 0 as *T: var z i64 = 0, then z as *T; the error that means success is 0: if e != 0"
 	default:
 		if s := Suggest(name, cands); s != "" {
 			is.Hint = "did you mean " + s + "?"
@@ -995,7 +1037,7 @@ func (c *checker) expr(e *env, n *ir.Node) string {
 }
 
 func (c *checker) want(e *env, n *ir.Node, want, what string) {
-	if t := c.expr(e, n); t != want && t != "invalid" {
+	if t := c.expr(e, n); !fits(n, t, want) {
 		c.mismatch(n.ID, what, t, want)
 	}
 }
@@ -1029,7 +1071,7 @@ func (c *checker) expr0(e *env, n *ir.Node) string {
 					c.tableAsValue(n, cn)
 					return "invalid"
 				}
-				return "i64"
+				return cn.Type
 			}
 		}
 		c.unknownName(n.ID, n.Name, e)
@@ -1119,7 +1161,9 @@ func (c *checker) expr0(e *env, n *ir.Node) string {
 	case "eq", "ne":
 		lt := c.expr(e, n.Left)
 		rt := c.expr(e, n.Right)
-		if lt != rt && lt != "invalid" && rt != "invalid" {
+		if (lt == "error" && isZero(n.Right)) || (rt == "error" && isZero(n.Left)) {
+			// e == 0: the literal 0 is the error that means success.
+		} else if lt != rt && lt != "invalid" && rt != "invalid" {
 			c.mismatch(n.Right.ID, "right of "+opText[n.Op], rt, lt)
 		} else if lt == "bytes" {
 			c.issue(Issue{Code: "bad_type", ID: n.ID, Message: "bytes cannot be compared with " + opText[n.Op], Hint: "ovid/mem.Eq(a, b) compares the bytes"})
@@ -1155,10 +1199,18 @@ func (c *checker) expr0(e *env, n *ir.Node) string {
 		}
 		if src != "invalid" && !scalar(t) {
 			c.mismatch(n.ID, "cast", src, "i64, bool, or a pointer type")
+		} else if (t == "error" && src != "i64" && src != "error" && src != "invalid") || (src == "error" && t != "i64" && t != "error") {
+			// An error converts to and from an i64 only.
+			other := src
+			if src == "error" {
+				other = t
+			}
+			c.issue(Issue{Code: "type_mismatch", ID: n.ID, Message: "cast: an error converts only to and from i64, not " + other,
+				Expected: "i64", Got: other, Hint: "e as i64 is its code; n as error makes one from an i64"})
 		}
 		return t
 	case "sizeof":
-		if n.Type == "i64" || n.Type == "bool" {
+		if n.Type == "i64" || n.Type == "bool" || n.Type == "error" {
 			c.issue(Issue{Code: "bad_type", ID: n.ID, Message: "sizeof(" + n.Type + ") is always 8", Hint: "write 8; sizeof takes a struct type"})
 			return "i64"
 		}
@@ -1285,7 +1337,7 @@ func (c *checker) pkgConst(n *ir.Node) string {
 					c.tableAsValue(n, cn)
 					return "invalid"
 				}
-				return "i64"
+				return cn.Type
 			}
 			cands = append(cands, pk.Consts[i].Name)
 		}
@@ -1354,8 +1406,8 @@ func (c *checker) call(e *env, n *ir.Node) string {
 	}
 	c.use(sg.id, n.ID, "call", c.fn.ID, n.NameSpan)
 	if sg.two && !c.recv {
-		c.issue(Issue{Code: "unused_result", ID: n.ID, Message: n.Func + " returns a value and an error code; only a var or an assignment of two names can receive them",
-			Hint: "var v " + sg.result + ", e i64 = " + n.Func + "(...), or _ for the one not needed"})
+		c.issue(Issue{Code: "unused_result", ID: n.ID, Message: n.Func + " returns a value and an error; only a var or an assignment of two names can receive them",
+			Hint: "var v " + sg.result + ", e error = " + callName(n) + "(...), or _ for the one not needed"})
 	}
 	c.recv = false
 	if len(n.Args) != len(sg.params) {
@@ -1364,10 +1416,10 @@ func (c *checker) call(e *env, n *ir.Node) string {
 	}
 	for i, a := range n.Args {
 		at := c.expr(e, a)
-		if i < len(sg.params) && at != sg.params[i] && at != "invalid" && sg.params[i] != "invalid" {
+		if i < len(sg.params) && !fits(a, at, sg.params[i]) {
 			c.issue(Issue{Code: "type_mismatch", ID: a.ID,
 				Message:  fmt.Sprintf("argument %d (%s) of %s: got %s, want %s", i+1, sg.names[i], n.Func, at, sg.params[i]),
-				Expected: sg.params[i], Got: at, Hint: c.sigText(path, n.Func)})
+				Expected: sg.params[i], Got: at, Hint: hints(errHint(at, sg.params[i]), c.sigText(path, n.Func))})
 		}
 	}
 	return sg.result
@@ -1482,4 +1534,23 @@ func lev(a, b string) int {
 		prev, cur = cur, prev
 	}
 	return prev[len(b)]
+}
+
+// callName is a call's func as source spells it, path included.
+func callName(n *ir.Node) string {
+	if n.Pkg != "" {
+		return n.Pkg + "." + n.Func
+	}
+	return n.Func
+}
+
+// hints joins the hints that are not empty.
+func hints(hs ...string) string {
+	var out []string
+	for _, h := range hs {
+		if h != "" {
+			out = append(out, h)
+		}
+	}
+	return strings.Join(out, "; ")
 }

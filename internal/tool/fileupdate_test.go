@@ -24,7 +24,7 @@ func Update(io *ovid/io.Cap, f *ovid/io.File) i64 {
     return 10
   }
   var b bytes = ovid/io.AllocBytes(io, 4)
-  var n i64, e i64 = ovid/io.Pread(f, b, 4096)
+  var n i64, e error = ovid/io.Pread(f, b, 4096)
   if e != 0 || n != 4 || !ovid/mem.Eq(b, "PAGE") {
     return 11
   }
@@ -42,7 +42,7 @@ func Update(io *ovid/io.Cap, f *ovid/io.File) i64 {
   if ovid/io.Fdatasync(f) != 0 {
     return 15
   }
-  var m bytes, me i64 = ovid/io.MapFile(f, 8192)
+  var m bytes, me error = ovid/io.MapFile(f, 8192)
   if me != 0 || !ovid/mem.Eq(m[4096:4100], "PAGE") || m[8191] != 0 || m[0] != 120 {
     return 16
   }
@@ -50,7 +50,7 @@ func Update(io *ovid/io.Cap, f *ovid/io.File) i64 {
 }
 
 func Hold(io *ovid/io.Cap, f *ovid/io.File, wait bool) i64 {
-  var e i64 = ovid/io.Lock(io, f, ovid/io.LOCK_WRITE, 0, 0, wait)
+  var e error = ovid/io.Lock(io, f, ovid/io.LOCK_WRITE, 0, 0, wait)
   if e == ovid/io.E_AGAIN || e == ovid/io.E_ACCES {
     return 3
   }
@@ -72,7 +72,7 @@ func Hold(io *ovid/io.Cap, f *ovid/io.File, wait bool) i64 {
 }
 
 func main(io *ovid/io.Cap) i64 {
-  var f *ovid/io.File, e i64 = ovid/io.Open(io, ovid/io.Arg(io, 2), ovid/io.O_RDWR, 0)
+  var f *ovid/io.File, e error = ovid/io.Open(io, ovid/io.Arg(io, 2), ovid/io.O_RDWR, 0)
   if e != 0 {
     return 2
   }

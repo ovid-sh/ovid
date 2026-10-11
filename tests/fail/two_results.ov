@@ -1,14 +1,14 @@
-// A func with two results: the second must be i64, both must be received,
+// A func with two results: the second must be an error, both must be received,
 // a return must give both, and one-result funcs cannot be received as two.
 package demo
 import ovid/io
-func Two(x i64) (i64, i64) {
+func Two(x i64) (i64, error) {
   return x, 0
 }
 func One(x i64) i64 {
   return x
 }
-func Three(x i64) (i64, i64) {
+func Three(x i64) (i64, error) {
   return x // error: arity 3 expected="2" got="1"
 }
 func Four(x i64) i64 {
@@ -17,11 +17,11 @@ func Four(x i64) i64 {
 func main(io *ovid/io.Cap) i64 {
   var a i64 = Two(1) // error: unused_result 15
   Two(2) // error: unused_result 3
-  var b i64, c i64 = One(3) // error: arity 22
-  var d bool, e i64 = Two(4) // error: type_mismatch 23 expected="bool" got="i64"
-  var f i64, g bool = Two(5) // error: type_mismatch 23 expected="bool" got="i64"
+  var b i64, c error = One(3) // error: arity 24
+  var d bool, e error = Two(4) // error: type_mismatch 25 expected="bool" got="i64"
+  var f i64, g bool = Two(5) // error: type_mismatch 23 expected="bool" got="error" hint="the second result is an error: var f i64, g error = ..."
   var h i64, _ = Two(6)
-  a, h = Two(7)
+  a, h = Two(7) // error: type_mismatch 10 expected="i64" got="error"
   a, nope = Two(8) // error: unknown_name 3
-  return a + b + c + f + h + Three(1) + Four(2) + One(9) // error: unused_result 30
+  return a + b + (c as i64) + f + h + Three(1) + Four(2) + One(9) // error: unused_result 39
 }

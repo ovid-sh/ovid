@@ -122,7 +122,7 @@ func main(io *ovid/io.Cap) i64 {
     ovid/io.Eprint(io, "usage: stock FILE\n")
     return 1
   }
-  var data bytes, re i64 = ovid/io.ReadFile(io, ovid/io.Arg(io, 1))
+  var data bytes, re error = ovid/io.ReadFile(io, ovid/io.Arg(io, 1))
   if re != 0 {
     ovid/io.Eprint(io, "stock: cannot read the file\n")
     return 1

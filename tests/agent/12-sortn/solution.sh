@@ -97,7 +97,7 @@ func main(io *ovid/io.Cap) i64 {
   var buf i64 = ovid/io.Alloc(io, size)
   var n i64 = 0
   var r i64 = 1
-  var e i64 = 0
+  var e error = 0
   while r > 0 && e == 0 {
     if n == size {
       var bigger i64 = ovid/io.Alloc(io, size * 2)

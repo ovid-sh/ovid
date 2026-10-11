@@ -1,0 +1,10 @@
+// The second result is an error, not an i64: the old spelling names the
+// new one.
+package demo
+import ovid/io
+func Two(x i64) (i64, i64) { // error: syntax 26 message="the second result is an error; write (i64, error)"
+  return x, 0
+}
+func main(io *ovid/io.Cap) i64 {
+  return 0
+}
