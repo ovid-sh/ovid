@@ -1,0 +1,188 @@
+// Every type declared without a value is zero until assigned: a bytes is
+// empty (address 0, length 0), a pointer is 0, a bool is false. The
+// declaration zeroes each time it runs, so inside a loop a local starts at
+// zero every turn, whatever the last turn assigned it (#204).
+// stdout: "straight 0\nnested 0\nloop 0\nread 0\nsum 75\n"
+// exit: 0
+package demo
+
+import ovid/io
+
+type Box struct {
+  v i64
+  b bytes
+}
+
+// Dirty leaves values in the registers and frame slots the locals below
+// could live in.
+func Dirty(a i64, b i64, c i64, d i64, e i64, f i64) i64 {
+  var g i64 = a * 1111
+  var h i64 = b * 2222
+  var i i64 = c * 3333
+  var j i64 = d * 4444
+  var k i64 = e * 5555
+  var l i64 = f * 6666
+  return ((((g + h) + i) + j) + k) + l
+}
+
+// Zero is 0 when every local it is handed is still zero.
+func Zero(n i64, ok bool, b bytes, p *Box) i64 {
+  var bad i64 = 0
+  if n != 0 {
+    bad = bad + 1
+  }
+  if ok {
+    bad = bad + 2
+  }
+  if len(b) != 0 || ptr(b) != 0 {
+    bad = bad + 4
+  }
+  if p != 0 as *Box {
+    bad = bad + 8
+  }
+  return bad
+}
+
+// Straight declares one of each, reads them, then assigns them all.
+func Straight(io *ovid/io.Cap) i64 {
+  var n i64
+  var ok bool
+  var b bytes
+  var p *Box
+  var bad i64 = Zero(n, ok, b, p)
+  n = 7
+  ok = true
+  b = "seven"
+  p = ovid/io.Alloc(io, sizeof(Box)) as *Box
+  p.v = n
+  p.b = b
+  if !ok || len(p.b) != 5 || p.b[0] != 115 || p.v != 7 {
+    bad = bad + 16
+  }
+  return bad
+}
+
+// Nested declares them two blocks down, after a sibling block left values
+// in the slots they may share.
+func Nested(io *ovid/io.Cap, k i64) i64 {
+  var bad i64 = 0
+  if k > 0 {
+    var s bytes = "sibling"
+    var q *Box = ovid/io.Alloc(io, sizeof(Box)) as *Box
+    var t bool = true
+    var m i64 = 99
+    q.v = m
+    if t && len(s) == 7 {
+      bad = bad + q.v - 99
+    }
+  }
+  if k > 0 {
+    if k > 1 {
+      var n i64
+      var ok bool
+      var b bytes
+      var p *Box
+      bad = bad + Zero(n, ok, b, p)
+      b = "nested"
+      p = ovid/io.Alloc(io, sizeof(Box)) as *Box
+      p.b = b[1:3]
+      n = len(p.b)
+      ok = n == 2
+      if !ok {
+        bad = bad + 32
+      }
+    }
+  }
+  return bad
+}
+
+// Loop declares them in a loop body and in a block inside it, reads them
+// before assigning, then assigns them, so a turn that saw the last turn's
+// values would count.
+func Loop(io *ovid/io.Cap) i64 {
+  var bad i64 = 0
+  var i i64 = 0
+  while i < 4 {
+    var n i64
+    var ok bool
+    var b bytes
+    var p *Box
+    bad = bad + Zero(n, ok, b, p)
+    n = i + 1
+    ok = true
+    b = "loop"
+    p = ovid/io.Alloc(io, sizeof(Box)) as *Box
+    if i != 2 {
+      var m i64
+      var c bytes
+      var q *Box
+      var f bool
+      bad = bad + Zero(m, f, c, q)
+      m = n
+      c = b[0:n]
+      q = p
+      f = ok
+      q.b = c
+    }
+    i = i + 1
+  }
+  return bad
+}
+
+// Read assigns a declared-without-value bytes from a two-result call, the
+// shape in #204: the read fails, so b keeps what the call returned.
+func Read(io *ovid/io.Cap) i64 {
+  var data bytes
+  var e i64 = 0
+  var bad i64 = Zero(e, false, data, 0 as *Box)
+  data, e = ovid/io.ReadFile(io, "/nonexistent/var_zero_types")
+  if e == 0 {
+    bad = bad + 64
+  }
+  var ok bytes
+  var e2 i64
+  ok, e2 = Pick("abc", 0)
+  if e2 != 0 || len(ok) != 3 {
+    bad = bad + 128
+  }
+  return bad
+}
+
+func Pick(b bytes, e i64) (bytes, i64) {
+  return b, e
+}
+
+// Sum uses the zeroed locals as accumulators across a loop.
+func Sum() i64 {
+  var total i64
+  var i i64 = 0
+  while i < 5 {
+    var b bytes
+    var step i64
+    b = "abcdefghijklmnopqrstuvwxyz"
+    step = len(b[0:(i * 2) + 11])
+    total = total + step
+    i = i + 1
+  }
+  return total
+}
+
+func Line(io *ovid/io.Cap, name bytes, v i64) i64 {
+  ovid/io.Print(name)
+  ovid/io.PrintInt(io, v)
+  ovid/io.Print("\n")
+  return 0
+}
+
+func main(io *ovid/io.Cap) i64 {
+  Dirty(1, 2, 3, 4, 5, 6)
+  Line(io, "straight ", Straight(io))
+  Dirty(1, 2, 3, 4, 5, 6)
+  Line(io, "nested ", Nested(io, 2))
+  Dirty(1, 2, 3, 4, 5, 6)
+  Line(io, "loop ", Loop(io))
+  Dirty(1, 2, 3, 4, 5, 6)
+  Line(io, "read ", Read(io))
+  Line(io, "sum ", Sum())
+  return 0
+}

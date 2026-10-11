@@ -739,6 +739,13 @@ func (l *lowerer) stmt(s *ir.Node) ([]*ir.Node, error) {
 	switch s.Op {
 	case "var":
 		if s.Type == "bytes" {
+			if s.Val == nil {
+				// var b bytes: both words are declared without a value,
+				// so each is zero every time the declaration runs.
+				l.bind(s.Name, "bytes")
+				return []*ir.Node{{ID: s.ID, Op: "var", Name: s.Name, Type: "i64"},
+					{Op: "var", Name: s.Name + "#n", Type: "i64"}}, nil
+			}
 			if s.Val.Op == "call" {
 				c, err := l.expr(s.Val, &p)
 				if err != nil {

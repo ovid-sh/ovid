@@ -1149,6 +1149,18 @@ func Stmt(l *L, s *ovid/parse.Node, p *Pre) i64 {
   var op i64 = s.op
   if op == ovid/parse.OP_VAR {
     if IsBytes(s.typ) {
+      if s.val == 0 as *ovid/parse.Node {
+        // var b bytes: both words are declared without a value, so each
+        // is zero every time the declaration runs.
+        Bind(l, s.name, "bytes")
+        s.typ = "i64"
+        Append(p, s)
+        var z2 *ovid/parse.Node = NewNode(l, ovid/parse.OP_VAR)
+        z2.name = NName(l, s.name)
+        z2.typ = "i64"
+        Append(p, z2)
+        return 0
+      }
       if s.val.op == ovid/parse.OP_CALL {
         Expr(l, s.val, p)
         Bind(l, s.name, "bytes")
