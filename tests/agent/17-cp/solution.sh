@@ -35,7 +35,7 @@ func main(io *ovid/io.Cap) i64 {
   if e != 0 {
     return Fail(src, ovid/io.ErrText(e))
   }
-  e = ovid/io.WriteFile(io, dst, data, 420)
+  e = ovid/io.WriteFileAtomic(io, dst, data, 420)
   if e != 0 {
     return Fail(dst, ovid/io.ErrText(e))
   }

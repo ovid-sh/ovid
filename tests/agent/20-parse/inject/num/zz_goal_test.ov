@@ -25,10 +25,12 @@ func GoalIs(io *ovid/io.Cap, s bytes, want i64) bool {
   return GoalParse(s, cell) == 0 && load64(cell) == want
 }
 
-// GoalErr reports whether s fails with code (1 E_SYNTAX, 2 E_RANGE).
+// GoalErr reports whether s fails with code (1 E_SYNTAX, 2 E_RANGE) and
+// a value of 0, as the task requires.
 func GoalErr(io *ovid/io.Cap, s bytes, code i64) bool {
   var cell i64 = ovid/io.Alloc(io, 8)
-  return GoalParse(s, cell) == code
+  store64(cell, 1)
+  return GoalParse(s, cell) == code && load64(cell) == 0
 }
 
 func TestGoalParseValid(io *ovid/io.Cap) i64 {
