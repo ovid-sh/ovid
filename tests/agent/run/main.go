@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -51,8 +52,10 @@ type Result struct {
 	TokensOut int     `json:"tokens_out"`
 	CostUSD   float64 `json:"cost_usd"`
 	Seconds   float64 `json:"seconds"`
-	// Outside lists tool inputs that named the repository or the exercise:
-	// a run that looked there is not a fair one.
+	// Outside lists tool inputs that looked outside the work directory
+	// (see scope.outside): named the repository or the exercise, or
+	// listed, read, or ran something elsewhere. A run that did is not a
+	// fair one.
 	Outside []string `json:"outside,omitempty"`
 	Env     Env      `json:"env"`
 }
@@ -97,6 +100,14 @@ type Env struct {
 	Tools    string  `json:"tools"`
 	Budget   float64 `json:"budget_usd"`
 	Preamble string  `json:"preamble_sha256"`
+	// Confine is how the agents were confined: "bwrap", or "none".
+	Confine string `json:"confine"`
+}
+
+// launcher starts Claude Code: as the -claude command, or in a jail.
+type launcher struct {
+	claude string
+	jail   *jail // nil: not confined
 }
 
 func main() {
@@ -108,6 +119,8 @@ func main() {
 	timeout := flag.Duration("timeout", 20*time.Minute, "time limit per run")
 	summary := flag.String("summary", "", "print a Markdown table of a results.jsonl and exit")
 	preamble := flag.String("preamble", "", "the preamble file (default: tests/agent/preamble.md), to compare wordings")
+	confine := flag.Bool("confine", true, "run each agent in a bubblewrap jail that holds only its work directory, ovid, and what claude needs (Linux; elsewhere off, with a warning)")
+	claude := flag.String("claude", "claude", "the claude command; in a jail, the executable itself, not a version manager's shim")
 	flag.Parse()
 	if *summary != "" {
 		if err := summarize(*summary); err != nil {
@@ -129,7 +142,22 @@ func main() {
 			fatal(err)
 		}
 	}
-	bin := filepath.Join(*out, "bin")
+	// go build made it, by making out/bin, when ovid was built there.
+	if err := os.MkdirAll(*out, 0o755); err != nil {
+		fatal(err)
+	}
+	// The jail mounts the run's directories by absolute path, and the
+	// look outside is judged against them.
+	if *out, err = filepath.Abs(*out); err != nil {
+		fatal(err)
+	}
+	bin, tmpBin, err := binDir(*out)
+	if err != nil {
+		fatal(err)
+	}
+	if tmpBin {
+		defer os.RemoveAll(bin)
+	}
 	ovid := filepath.Join(bin, "ovid")
 	if b, err := exec.Command("go", "build", "-o", ovid, "ovid/cmd/ovid").CombinedOutput(); err != nil {
 		fatal(fmt.Errorf("go build: %v\n%s", err, b))
@@ -141,12 +169,32 @@ func main() {
 	if err != nil {
 		fatal(err)
 	}
+	l := launcher{claude: *claude}
+	if *confine {
+		home, _ := os.UserHomeDir()
+		if l.jail, err = newJail(*claude, home); err != nil {
+			explicit := false
+			flag.Visit(func(f *flag.Flag) { explicit = explicit || f.Name == "confine" })
+			if explicit {
+				fatal(fmt.Errorf("-confine: %v", err))
+			}
+			fmt.Fprintf(os.Stderr, "run: warning: the agents are not confined, and can read anything this user can: %v (-confine=false to run so without this warning)\n", err)
+		} else {
+			for _, w := range l.jail.warn {
+				fmt.Fprintf(os.Stderr, "run: warning: %s\n", w)
+			}
+		}
+	}
 	const tools = "Bash,Read,Write,Edit"
 	env := Env{
 		Date:     time.Now().UTC().Format(time.RFC3339),
 		Tools:    tools,
 		Budget:   *budget,
 		Preamble: sha(string(pre)),
+		Confine:  "none",
+	}
+	if l.jail != nil {
+		env.Confine = "bwrap"
 	}
 	env.Commit, _ = gitOut("rev-parse", "HEAD")
 	if s, _ := gitOut("status", "--porcelain"); s != "" {
@@ -155,7 +203,7 @@ func main() {
 	if b, err := exec.Command(ovid, "version").Output(); err == nil {
 		env.Ovid = strings.TrimSpace(string(b))
 	}
-	if b, err := exec.Command("claude", "--version").Output(); err == nil {
+	if b, err := exec.Command(*claude, "--version").Output(); err == nil {
 		// The last line: a version manager's shim may print its own first.
 		v := strings.TrimSpace(string(b))
 		env.Claude = v[strings.LastIndexByte(v, '\n')+1:]
@@ -172,17 +220,20 @@ func main() {
 			continue
 		}
 		for i := 1; i <= *n; i++ {
-			r := runTask(t, i, repo, bin, ovid, string(pre), *model, *budget, *timeout, *out)
+			r := runTask(l, t, i, repo, bin, ovid, string(pre), *model, *budget, *timeout, *out)
 			r.Env = env
 			b, _ := json.Marshal(r)
 			rf.Write(append(b, '\n'))
-			fmt.Fprintf(os.Stderr, "%s #%d pass=%v calls=%d failed=%d cost=$%.2f %.0fs %s\n",
-				t.Name, i, r.Pass, r.Calls, r.Failed, r.CostUSD, r.Seconds, strings.Join(r.Problems, "; "))
+			fmt.Fprintf(os.Stderr, "%s #%d pass=%v calls=%d failed=%d outside=%d cost=$%.2f %.0fs %s\n",
+				t.Name, i, r.Pass, r.Calls, r.Failed, len(r.Outside), r.CostUSD, r.Seconds, strings.Join(r.Problems, "; "))
+			for _, o := range r.Outside {
+				fmt.Fprintf(os.Stderr, "  looked outside: %s\n", o)
+			}
 		}
 	}
 }
 
-func runTask(t agent.Task, i int, repo, bin, ovid, pre, model string, budget float64, timeout time.Duration, out string) Result {
+func runTask(l launcher, t agent.Task, i int, repo, bin, ovid, pre, model string, budget float64, timeout time.Duration, out string) Result {
 	r := Result{Task: t.Name, Run: i}
 	name := fmt.Sprintf("%s-%d", t.Name, i)
 	work := filepath.Join(out, "work", name)
@@ -196,6 +247,7 @@ func runTask(t agent.Task, i int, repo, bin, ovid, pre, model string, budget flo
 		fatal(err)
 	}
 	before := agent.Snapshot(work)
+	home, _ := os.UserHomeDir()
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	start := time.Now()
@@ -207,7 +259,12 @@ func runTask(t agent.Task, i int, repo, bin, ovid, pre, model string, budget flo
 			defer wg.Done()
 			prompt := strings.ReplaceAll(pre, "{{dir}}", work) + p
 			tr := filepath.Join(out, "transcripts", fmt.Sprintf("%s-%c.jsonl", name, 'a'+k))
-			r.Agents[k] = runAgent(ctx, work, bin, prompt, model, budget, tr, repo)
+			// Claude Code keeps a large tool result in its config
+			// directory and has the agent Read it there.
+			results := filepath.Join(claudeConfigDir(home), "projects")
+			sc := &scope{repo: repo, work: work, home: home, allow: []string{bin, results},
+				scratch: scratchDirs(), deny: []string{out}, gitUp: gitAbove(work)}
+			r.Agents[k] = runAgent(ctx, l, work, bin, prompt, model, budget, tr, sc)
 			r.Agents[k].Prompt = sha(pre + p)
 		}(k, p)
 	}
@@ -243,11 +300,17 @@ func runTask(t agent.Task, i int, repo, bin, ovid, pre, model string, budget flo
 	return r
 }
 
-var ovidCmd = regexp.MustCompile(`(^|[\s;&|(])ovid\s`)
+// ovidWord is ovid as a shell word, run by its name or by a path to it
+// (/tmp/x/bin/ovid, ./bin/ovid, "$BIN/ovid"), quoted or not, followed by
+// an argument: not by an operator, as a path given to another command is
+// (ls bin/ovid && ...).
+const ovidWord = `(?:^|[\s;&|(` + "`" + `])(?:"(?:[^"]*/)?ovid"|'(?:[^']*/)?ovid'|(?:[^\s;&|()<>'"` + "`" + `]*/)?ovid)\s+`
+
+var ovidCmd = regexp.MustCompile(ovidWord + `[^\s;&|<>)]`)
 
 // ovidSub finds each ovid invocation's subcommand in a shell command,
 // past any leading -C DIR (ovid -C mod check), DIR quoted or not.
-var ovidSub = regexp.MustCompile(`(?:^|[\s;&|(])ovid\s+(?:-C\s+(?:"[^"]*"|'[^']*'|\S+)\s+)*([a-z]+)`)
+var ovidSub = regexp.MustCompile(ovidWord + `(?:-C\s+(?:"[^"]*"|'[^']*'|\S+)\s+)*([a-z]+)`)
 
 // ovidSubs counts the ovid subcommands in a shell command.
 func ovidSubs(command string, into map[string]int) {
@@ -348,7 +411,7 @@ func code(ln string) string {
 }
 
 // runAgent runs one Claude Code process in work and reads its stream.
-func runAgent(ctx context.Context, work, bin, prompt, model string, budget float64, transcript, repo string) Agent {
+func runAgent(ctx context.Context, l launcher, work, bin, prompt, model string, budget float64, transcript string, sc *scope) Agent {
 	var a Agent
 	args := []string{"-p", "--bare", "--output-format", "stream-json", "--verbose",
 		"--tools", "Bash,Read,Write,Edit", "--permission-mode", "bypassPermissions",
@@ -357,9 +420,13 @@ func runAgent(ctx context.Context, work, bin, prompt, model string, budget float
 		args = append(args, "--model", model)
 	}
 	args = append(args, prompt)
-	cmd := exec.CommandContext(ctx, "claude", args...)
+	cmd := exec.CommandContext(ctx, l.claude, args...)
 	cmd.Dir = work
 	cmd.Env = childEnv(bin)
+	if l.jail != nil {
+		cmd = l.jail.command(ctx, work, bin, append([]string{l.jail.exe}, args...))
+		cmd.Env = jailEnv(childEnv(bin), l.jail.pathEnv(bin), work)
+	}
 	os.MkdirAll(filepath.Dir(transcript), 0o755)
 	tf, err := os.Create(transcript)
 	if err != nil {
@@ -370,7 +437,6 @@ func runAgent(ctx context.Context, work, bin, prompt, model string, budget float
 	if err != nil {
 		fatal(err)
 	}
-	ovidUse := map[string]bool{} // tool_use ids of the Bash calls that ran ovid
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	start := time.Now()
@@ -378,11 +444,24 @@ func runAgent(ctx context.Context, work, bin, prompt, model string, budget float
 		a.Stop = "start: " + err.Error()
 		return a
 	}
-	sc := bufio.NewScanner(stdout)
-	sc.Buffer(make([]byte, 1<<20), 64<<20)
-	for sc.Scan() {
-		ln := sc.Bytes()
-		tf.Write(append(ln, '\n'))
+	readStream(&a, stdout, tf, sc)
+	err = cmd.Wait()
+	a.Seconds = time.Since(start).Seconds()
+	if a.Stop == "" {
+		a.Stop = fmt.Sprintf("no result (%v): %s", err, cut(stderr.String(), 300))
+	}
+	return a
+}
+
+// readStream reads Claude Code's stream-json output into a, and copies
+// each line to transcript.
+func readStream(a *Agent, stream io.Reader, transcript io.Writer, sc *scope) {
+	ovidUse := map[string]bool{} // tool_use ids of the Bash calls that ran ovid
+	lines := bufio.NewScanner(stream)
+	lines.Buffer(make([]byte, 1<<20), 64<<20)
+	for lines.Scan() {
+		ln := lines.Bytes()
+		transcript.Write(append(ln, '\n'))
 		var m struct {
 			Type    string
 			Subtype string
@@ -434,9 +513,8 @@ func runAgent(ctx context.Context, work, bin, prompt, model string, budget float
 					ovidSubs(in.Command, a.OvidCmds)
 					ovidUse[c.ID] = true
 				}
-				s := string(c.Input)
-				if namesDir(s, repo) || strings.Contains(s, "tests/agent") || strings.Contains(s, "ovid-sh") {
-					a.Outside = append(a.Outside, cut(s, 200))
+				if sc.outside(c.Name, c.Input) {
+					a.Outside = append(a.Outside, cut(string(c.Input), 200))
 				}
 			}
 		case "user":
@@ -467,12 +545,6 @@ func runAgent(ctx context.Context, work, bin, prompt, model string, budget float
 			a.TokensOut = m.Usage.Out
 		}
 	}
-	err = cmd.Wait()
-	a.Seconds = time.Since(start).Seconds()
-	if a.Stop == "" {
-		a.Stop = fmt.Sprintf("no result (%v): %s", err, cut(stderr.String(), 300))
-	}
-	return a
 }
 
 // resultText is a tool result's text, which is a string or a list of
@@ -510,6 +582,28 @@ func namesDir(s, dir string) bool {
 		}
 		from = i + 1
 	}
+}
+
+// binDir is the directory the runner builds ovid into and puts first on
+// the agents' PATH: out/bin, unless out holds the PATH list separator
+// (a model id such as ...-v1:0 does), which would split that entry in two
+// and leave ovid off PATH. Then it is a new temporary directory, which
+// the caller removes (tmp is true). A temporary directory that holds the
+// separator too is an error: there is nowhere to put ovid.
+func binDir(out string) (dir string, tmp bool, err error) {
+	sep := string(os.PathListSeparator)
+	if !strings.Contains(out, sep) {
+		return filepath.Join(out, "bin"), false, nil
+	}
+	dir, err = os.MkdirTemp("", "ovid-agent-bin-")
+	if err != nil {
+		return "", false, err
+	}
+	if strings.Contains(dir, sep) {
+		os.Remove(dir)
+		return "", false, fmt.Errorf("-out %q holds %q, the PATH list separator, and so does the temporary directory %q: there is no directory to put ovid in that PATH can name; pick another -out or TMPDIR", out, sep, dir)
+	}
+	return dir, true, nil
 }
 
 // childEnv is this process's environment with ovid first on PATH and
