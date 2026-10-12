@@ -1,0 +1,13 @@
+package cp
+
+import ovid/io
+
+// main copies the file SRC to DST: cp SRC DST. DST is created, or
+// replaced if it is a file, and gets permission 0644.
+func main(io *ovid/io.Cap) i64 {
+  var src bytes = ovid/io.Arg(io, 1)
+  var dst bytes = ovid/io.Arg(io, 2)
+  var data bytes, _ = ovid/io.ReadFile(io, src)
+  ovid/io.WriteFile(io, dst, data, 420)
+  return 0
+}

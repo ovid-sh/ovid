@@ -1,0 +1,118 @@
+package calc
+
+import ovid/io
+
+// P parses one line: its text and the position of the next byte.
+type P struct {
+  s bytes
+  pos i64
+}
+
+// Peek moves past spaces and returns the next byte, or -1 at the end of
+// the line.
+func Peek(p *P) i64 {
+  while p.pos < len(p.s) && p.s[p.pos] == 32 {
+    p.pos = p.pos + 1
+  }
+  if p.pos == len(p.s) {
+    return -1
+  }
+  return p.s[p.pos]
+}
+
+// Expr is a sum: Term { ("+" | "-") Term }, left to right.
+func Expr(p *P) i64 {
+  var v i64 = Term(p)
+  var op i64 = Peek(p)
+  while op == 43 || op == 45 {
+    p.pos = p.pos + 1
+    var w i64 = Term(p)
+    if op == 43 {
+      v = v + w
+    } else {
+      v = v - w
+    }
+    op = Peek(p)
+  }
+  return v
+}
+
+// Term is a product: Factor { ("*" | "/") Factor }, left to right; "/"
+// truncates toward zero.
+func Term(p *P) i64 {
+  var v i64 = Factor(p)
+  var op i64 = Peek(p)
+  while op == 42 || op == 47 {
+    p.pos = p.pos + 1
+    var w i64 = Factor(p)
+    if op == 42 {
+      v = v * w
+    } else {
+      v = v / w
+    }
+    op = Peek(p)
+  }
+  return v
+}
+
+// Factor is a decimal number, "(" Expr ")", or "-" Factor.
+func Factor(p *P) i64 {
+  var c i64 = Peek(p)
+  if c == 40 {
+    p.pos = p.pos + 1
+    var v i64 = Expr(p)
+    Peek(p)
+    p.pos = p.pos + 1
+    return v
+  }
+  if c == 45 {
+    p.pos = p.pos + 1
+    return 0 - Factor(p)
+  }
+  var v i64 = 0
+  while p.pos < len(p.s) && p.s[p.pos] >= 48 && p.s[p.pos] <= 57 {
+    v = v * 10 + (p.s[p.pos] - 48)
+    p.pos = p.pos + 1
+  }
+  return v
+}
+
+// Line is the value of the expression s, a whole line.
+func Line(io *ovid/io.Cap, s bytes) i64 {
+  var p *P = ovid/io.Alloc(io, sizeof(P)) as *P
+  p.s = s
+  return Expr(p)
+}
+
+// Blank reports whether s is empty or only spaces.
+func Blank(s bytes) bool {
+  var i i64 = 0
+  while i < len(s) && s[i] == 32 {
+    i = i + 1
+  }
+  return i == len(s)
+}
+
+// main evaluates each line of the file FILE (calc FILE) and prints the
+// values, one a line. Blank lines are skipped.
+func main(io *ovid/io.Cap) i64 {
+  var data bytes, e i64 = ovid/io.ReadFile(io, ovid/io.Arg(io, 1))
+  if e != 0 {
+    ovid/io.Eprint("calc: cannot read the file\n")
+    return 1
+  }
+  var start i64 = 0
+  var i i64 = 0
+  while i <= len(data) {
+    if i == len(data) || data[i] == 10 {
+      var line bytes = data[start:i]
+      if !Blank(line) {
+        ovid/io.PrintInt(io, Line(io, line))
+        ovid/io.Print("\n")
+      }
+      start = i + 1
+    }
+    i = i + 1
+  }
+  return 0
+}

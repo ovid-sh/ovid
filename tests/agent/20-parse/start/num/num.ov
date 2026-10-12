@@ -1,0 +1,10 @@
+package num
+
+// The error codes of this package.
+const E_SYNTAX i64 = 1
+const E_RANGE i64 = 2
+
+// IsDigit reports whether c is a decimal digit.
+func IsDigit(c i64) bool {
+  return c >= 48 && c <= 57
+}

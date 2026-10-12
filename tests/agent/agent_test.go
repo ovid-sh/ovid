@@ -161,3 +161,29 @@ func TestForever(io *ovid/io.Cap) i64 {
 		}
 	}
 }
+
+// TestCheckAfter: a path that must not exist passes only when it does not
+// exist, not when it merely cannot be looked at.
+func TestCheckAfter(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "here"), []byte("x"), 0o644)
+	os.Mkdir(filepath.Join(dir, "locked"), 0o755)
+	os.WriteFile(filepath.Join(dir, "locked", "f"), []byte("y"), 0o644)
+	x := "x"
+	if msgs := checkAfter(dir, map[string]*string{"here": &x, "gone": nil}); len(msgs) != 0 {
+		t.Fatalf("want no problems, got %q", msgs)
+	}
+	if msgs := checkAfter(dir, map[string]*string{"here": nil}); len(msgs) != 1 || !strings.Contains(msgs[0], "exists") {
+		t.Fatalf("an existing path: %q", msgs)
+	}
+	if err := os.Chmod(filepath.Join(dir, "locked"), 0); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(filepath.Join(dir, "locked"), 0o755)
+	if _, err := os.Lstat(filepath.Join(dir, "locked", "f")); err == nil {
+		t.Skip("permissions are not enforced here (running as root?)")
+	}
+	if msgs := checkAfter(dir, map[string]*string{"locked/f": nil}); len(msgs) != 1 || !strings.Contains(msgs[0], "want it not to exist") {
+		t.Fatalf("an unsearchable directory must not pass as absent: %q", msgs)
+	}
+}
