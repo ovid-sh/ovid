@@ -342,28 +342,7 @@ func run(exe, dir string, r Run) string {
 			msgs = append(msgs, fmt.Sprintf("stderr %q does not match %q", cut(errb.String()), r.Stderr))
 		}
 	}
-	var after []string
-	for f := range r.After {
-		after = append(after, f)
-	}
-	sort.Strings(after)
-	for _, f := range after {
-		p := filepath.Join(dir, filepath.FromSlash(f))
-		want := r.After[f]
-		if want == nil {
-			if _, err := os.Lstat(p); err == nil {
-				msgs = append(msgs, fmt.Sprintf("%s exists, want none", f))
-			}
-			continue
-		}
-		b, err := os.ReadFile(p)
-		switch {
-		case err != nil:
-			msgs = append(msgs, fmt.Sprintf("%s: %v", f, err))
-		case string(b) != *want:
-			msgs = append(msgs, fmt.Sprintf("%s holds %q, want %q", f, cut(string(b)), *want))
-		}
-	}
+	msgs = append(msgs, checkAfter(dir, r.After)...)
 	return strings.Join(msgs, "; ")
 }
 
@@ -467,4 +446,37 @@ func copyTree(src, dst string) error {
 		}
 		return os.WriteFile(t, b, 0o644)
 	})
+}
+
+// checkAfter compares dir with what a run must leave there: each path's
+// content, or nil for a path that must not exist. A path that cannot be
+// looked at for another reason (a directory it cannot search) is reported,
+// not taken as absent.
+func checkAfter(dir string, after map[string]*string) []string {
+	var msgs []string
+	var paths []string
+	for f := range after {
+		paths = append(paths, f)
+	}
+	sort.Strings(paths)
+	for _, f := range paths {
+		p := filepath.Join(dir, filepath.FromSlash(f))
+		want := after[f]
+		if want == nil {
+			if _, err := os.Lstat(p); err == nil {
+				msgs = append(msgs, fmt.Sprintf("%s exists, want none", f))
+			} else if !os.IsNotExist(err) {
+				msgs = append(msgs, fmt.Sprintf("%s: %v, want it not to exist", f, err))
+			}
+			continue
+		}
+		b, err := os.ReadFile(p)
+		switch {
+		case err != nil:
+			msgs = append(msgs, fmt.Sprintf("%s: %v", f, err))
+		case string(b) != *want:
+			msgs = append(msgs, fmt.Sprintf("%s holds %q, want %q", f, cut(string(b)), *want))
+		}
+	}
+	return msgs
 }
