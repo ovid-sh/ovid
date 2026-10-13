@@ -41,19 +41,19 @@ A func reaches only what its parameters carry, transitively through struct
 fields; the kernel enforces what the program may do. That is the whole
 promise, and the shape of `ovid/io` makes it, not a checker rule:
 
-- Files and the network sit behind opaque handles (#124, #130). `Open`
-  returns a `*File` that is never 0 and carries its error; nothing in
-  `ovid/io` takes or returns a bare descriptor; path funcs take a `*Dir`
-  (openat-relative); listening and dialing take a `*Net`. `opaque_type`,
-  already in both checkers, keeps a handle from being cast or taken apart
-  outside `ovid/io`. Handle funcs live in `ovid/io`, beside the syscall.
-- `Cap` splits: `io` is argv and the heap; `fs *ovid/io.Dir` and
-  `net *ovid/io.Net` are asked for on `main`'s signature, and `main(io)`
-  alone keeps everything, so the cheap default stays cheap. An HTTP handler
-  `(io, req, res)` holds no `Dir`, so it cannot open a file the request
-  names.
-- Stdio stays on `io` (`Stdout(io, b)`, `Print(io, …)`): moving it behind
-  handles is 156 call sites in 36 files for no new guarantee.
+- Files sit behind opaque handles, done in #214: `Open(io, path, …)`
+  returns a `*File` and an error, every stream and path func takes `io` or
+  a `*File`, nothing in `ovid/io` takes or returns a bare descriptor, and
+  `opaque_type`, in both checkers, keeps a handle from being cast or taken
+  apart outside `ovid/io`. The network follows the same shape (#124 is the
+  prototype): listening and dialing take a `*Net`, a connection is a
+  `*Conn`, and results are `(T, error)` as #216 spells them. Handle funcs
+  live in `ovid/io`, beside the syscall.
+- `Cap` splits next: `io` is argv, the heap, and stdio; `fs *ovid/io.Dir`
+  (openat-relative) and `net *ovid/io.Net` are asked for on `main`'s
+  signature, and `main(io)` alone keeps everything, so the cheap default
+  stays cheap. An HTTP handler `(io, req, res)` holds no `Dir`, so it
+  cannot open a file the request names.
 - The build receipt names the grant (`"capabilities": ["fs", "net"]`)
   beside its syscalls, and the sandbox (#107, #155) is derived from it: a
   Landlock read root when `fs` is absent, no address families when `net`
@@ -68,15 +68,16 @@ would cost 160–220 lines in two checkers; it is not built. The boundary for
 distrusted code is a process (the receipt sandbox, #75 workers), not the
 type system, until #8.
 
-Why: measured on main at fb595e3 (2026-10-07, on starship). Then 18 of
-`ovid/io`'s 40 funcs reached the kernel with no capability parameter, and
-#123's `Sneaky` still checked, built, and read `/etc/hostname`. The handle
-shape costs five user instructions per I/O call (37 to 42 per 4 KB read,
-wall time within noise; a Redis-protocol server +0.08–0.77% instructions
-per request), the network PoC +818 B of self-hosted compiler and +7 B per
-program, and the file reshape about 66 mechanical call sites. In ten agent
-runs, five per API shape, no agent misused a descriptor under either; the
-handle API took a median 6 turns to the raw one's 11, which traced to its
-doc idiom, not to enforcement. Order: the network shape first (greenfield),
-files second, receipt and sandbox third, then an agent experiment in which
-misuse is possible before any further checker rule.
+Why: measured on main at fb595e3 (2026-10-07, on starship, before #214).
+Then 18 of `ovid/io`'s 40 funcs reached the kernel with no capability
+parameter, and #123's `Sneaky` still checked, built, and read
+`/etc/hostname`. The handle shape costs five user instructions per I/O
+call (37 to 42 per 4 KB read, wall time within noise; a Redis-protocol
+server +0.08–0.77% instructions per request), the network PoC +818 B of
+self-hosted compiler and +7 B per program, and the file reshape about 66
+mechanical call sites, which #214 then paid. In ten agent runs, five per
+API shape, no agent misused a descriptor under either; the handle API took
+a median 6 turns to the raw one's 11, which traced to its doc idiom, not to
+enforcement. Order: the network shape, the `Cap` split, the receipt and
+sandbox, then an agent experiment in which misuse is possible before any
+further checker rule.
