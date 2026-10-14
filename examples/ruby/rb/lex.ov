@@ -1,0 +1,176 @@
+package rb
+
+import ovid/io
+import ovid/mem
+
+// Token kinds.
+const T_EOF i64 = 0
+const T_INT i64 = 1
+const T_STR i64 = 2
+const T_SQSTR i64 = 3
+const T_ID i64 = 4
+const T_NL i64 = 5
+const T_OP i64 = 6
+
+type Tok struct {
+  kind i64
+  p i64
+  n i64
+  ival i64
+  line i64
+  sp bool
+}
+
+func isDigit(c i64) bool {
+  return c >= 48 && c <= 57
+}
+
+func isIdStart(c i64) bool {
+  return (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || c == 95
+}
+
+func isIdChar(c i64) bool {
+  return isIdStart(c) || isDigit(c)
+}
+
+func addTok(r *R, kind i64, p i64, n i64, line i64, sp bool) *Tok {
+  if r.ntok == r.captok {
+    var nc i64 = r.captok * 2
+    if nc < 256 {
+      nc = 256
+    }
+    var nt i64 = ovid/io.Alloc(r.io, nc * 8)
+    ovid/mem.Copy(nt, r.toks, r.ntok * 8)
+    r.toks = nt
+    r.captok = nc
+  }
+  var t *Tok = ovid/io.Alloc(r.io, sizeof(Tok)) as *Tok
+  t.kind = kind
+  t.p = p
+  t.n = n
+  t.line = line
+  t.sp = sp
+  store64(r.toks + (r.ntok * 8), t as i64)
+  r.ntok = r.ntok + 1
+  return t
+}
+
+// twoOp reports whether the two bytes at p form one operator.
+func twoOp(a i64, b i64) bool {
+  if b == 61 {
+    // == != <= >= += -= *= /=
+    return a == 61 || a == 33 || a == 60 || a == 62 || a == 43 || a == 45 || a == 42 || a == 47
+  }
+  return (a == 38 && b == 38) || (a == 124 && b == 124) || (a == 60 && b == 60) || (a == 42 && b == 42) || (a == 46 && b == 46)
+}
+
+// lex tokenizes src[0:n] into r.toks. line is the first line number.
+func lex(r *R, src i64, n i64, line i64) i64 {
+  r.toks = 0
+  r.ntok = 0
+  r.captok = 0
+  var i i64 = 0
+  var sp bool = true
+  while i < n {
+    var c i64 = load8(src + i)
+    if c == 32 || c == 9 || c == 13 {
+      i = i + 1
+      sp = true
+    } else if c == 92 && (i + 1) < n && load8(src + i + 1) == 10 {
+      // a backslash continues the line
+      i = i + 2
+      line = line + 1
+      sp = true
+    } else if c == 35 {
+      while i < n && load8(src + i) != 10 {
+        i = i + 1
+      }
+    } else if c == 10 || c == 59 {
+      if r.ntok > 0 && lastKind(r) != T_NL {
+        addTok(r, T_NL, src + i, 1, line, sp)
+      }
+      if c == 10 {
+        line = line + 1
+      }
+      i = i + 1
+      sp = true
+    } else if isDigit(c) {
+      var s i64 = i
+      var v i64 = 0
+      while i < n && (isDigit(load8(src + i)) || load8(src + i) == 95) {
+        if load8(src + i) != 95 {
+          v = (v * 10) + (load8(src + i) - 48)
+        }
+        i = i + 1
+      }
+      var t *Tok = addTok(r, T_INT, src + s, i - s, line, sp)
+      t.ival = v
+      sp = false
+    } else if isIdStart(c) || c == 64 {
+      // @ivar is accepted as a plain name
+      var s2 i64 = i
+      i = i + 1
+      while i < n && isIdChar(load8(src + i)) {
+        i = i + 1
+      }
+      if i < n && (load8(src + i) == 63 || load8(src + i) == 33) {
+        if (i + 1) >= n || load8(src + i + 1) != 61 {
+          i = i + 1
+        }
+      }
+      addTok(r, T_ID, src + s2, i - s2, line, sp)
+      sp = false
+    } else if c == 34 || c == 39 {
+      var s3 i64 = i + 1
+      var startLine i64 = line
+      i = i + 1
+      var depth i64 = 0
+      while i < n && (depth > 0 || load8(src + i) != c) {
+        var d i64 = load8(src + i)
+        if d == 92 {
+          i = i + 1
+        } else if c == 34 && d == 35 && (i + 1) < n && load8(src + i + 1) == 123 {
+          depth = depth + 1
+          i = i + 1
+        } else if depth > 0 && d == 125 {
+          depth = depth - 1
+        } else if d == 10 {
+          line = line + 1
+        }
+        i = i + 1
+      }
+      if i >= n {
+        return lexErr(r, startLine, strptr("unterminated string"))
+      }
+      var kind i64 = T_STR
+      if c == 39 {
+        kind = T_SQSTR
+      }
+      addTok(r, kind, src + s3, i - s3, startLine, sp)
+      i = i + 1
+      sp = false
+    } else {
+      var w i64 = 1
+      if (i + 1) < n && twoOp(c, load8(src + i + 1)) {
+        w = 2
+      }
+      addTok(r, T_OP, src + i, w, line, sp)
+      i = i + w
+      sp = false
+    }
+  }
+  addTok(r, T_NL, src + n, 0, line, true)
+  addTok(r, T_EOF, src + n, 0, line, true)
+  return 0
+}
+
+func lastKind(r *R) i64 {
+  var t *Tok = load64(r.toks + ((r.ntok - 1) * 8)) as *Tok
+  return t.kind
+}
+
+func lexErr(r *R, line i64, msg i64) i64 {
+  rerr(r, line, msg)
+  addTok(r, T_EOF, 0, 0, line, true)
+  return 1
+}

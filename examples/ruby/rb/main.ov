@@ -1,0 +1,98 @@
+package rb
+
+import ovid/io
+import ovid/mem
+
+// R is the interpreter: the token stream while parsing, the control-flow
+// flags while running, and the methods defined so far.
+type R struct {
+  io *ovid/io.Cap
+  file i64
+  toks i64
+  ntok i64
+  captok i64
+  pos i64
+  nodo bool
+  err bool
+  ret bool
+  brk bool
+  nxt bool
+  retv *Val
+  fns *Fn
+  out *ovid/mem.Buf
+  nilv *Val
+  truev *Val
+  falsev *Val
+  ints i64
+  depth i64
+}
+
+// flush writes buffered standard output.
+func flush(r *R) i64 {
+  ovid/io.Stdout(r.out.data, r.out.len)
+  r.out.len = 0
+  return 0
+}
+
+// rerr reports the first error, Ruby style: file:line: message.
+func rerr(r *R, line i64, msg i64) i64 {
+  if r.err {
+    return 0
+  }
+  r.err = true
+  flush(r)
+  ovid/io.Eprint(r.file)
+  ovid/io.Eprint(strptr(":"))
+  ovid/io.WriteInt(r.io, 2, line)
+  ovid/io.Eprint(strptr(": "))
+  ovid/io.Eprint(msg)
+  ovid/io.Eprint(strptr("\n"))
+  return 0
+}
+
+func main(io *ovid/io.Cap) i64 {
+  if ovid/io.Argc(io) < 2 {
+    ovid/io.Eprint(strptr("usage: rb file.rb\n"))
+    return 64
+  }
+  var r *R = ovid/io.Alloc(io, sizeof(R)) as *R
+  r.io = io
+  r.file = ovid/io.Arg(io, 1)
+  r.out = ovid/mem.New(io, 8192)
+  r.nilv = newVal(r, V_NIL)
+  r.truev = newVal(r, V_BOOL)
+  r.truev.i = 1
+  r.falsev = newVal(r, V_BOOL)
+  r.ints = ovid/io.Alloc(io, (INT_HI - INT_LO) * 8)
+  var i i64 = INT_LO
+  while i < INT_HI {
+    var v *Val = newVal(r, V_INT)
+    v.i = i
+    store64(r.ints + ((i - INT_LO) * 8), v as i64)
+    i = i + 1
+  }
+  var pp i64 = ovid/io.Alloc(io, 8)
+  var nn i64 = ovid/io.Alloc(io, 8)
+  if ovid/io.ReadFile(io, r.file, ovid/io.CLen(r.file), pp, nn) != 0 {
+    ovid/io.Eprint(strptr("rb: cannot read "))
+    ovid/io.Eprint(r.file)
+    ovid/io.Eprint(strptr("\n"))
+    return 1
+  }
+  lex(r, load64(pp), load64(nn), 1)
+  if r.err {
+    return 1
+  }
+  r.pos = 0
+  var prog *Node = parseProgram(r)
+  if r.err {
+    return 1
+  }
+  var top *Env = newEnv(r, 0 as *Env)
+  evalBody(r, top, prog)
+  flush(r)
+  if r.err {
+    return 1
+  }
+  return 0
+}

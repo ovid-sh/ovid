@@ -1,0 +1,637 @@
+package rb
+
+import ovid/io
+import ovid/mem
+
+// MAX_DEPTH bounds method recursion (Ruby's SystemStackError).
+const MAX_DEPTH i64 = 10000
+
+type Var struct {
+  p i64
+  n i64
+  v *Val
+  next *Var
+}
+
+// Env is one scope. A method body gets a root Env (parent nil) that also
+// holds the block it was called with; a block's Env sees its parent's
+// variables.
+type Env struct {
+  vars *Var
+  parent *Env
+  blk *Node
+  benv *Env
+}
+
+type Fn struct {
+  p i64
+  n i64
+  params *Node
+  body *Node
+  next *Fn
+}
+
+func newEnv(r *R, parent *Env) *Env {
+  var e *Env = ovid/io.Alloc(r.io, sizeof(Env)) as *Env
+  e.parent = parent
+  return e
+}
+
+func findVar(env *Env, p i64, n i64) *Var {
+  while env != 0 as *Env {
+    var v *Var = env.vars
+    while v != 0 as *Var {
+      if ovid/mem.Eq(v.p, v.n, p, n) {
+        return v
+      }
+      v = v.next
+    }
+    env = env.parent
+  }
+  return 0 as *Var
+}
+
+// defVar binds p[0:n] in env itself, shadowing any outer binding.
+func defVar(r *R, env *Env, p i64, n i64, val *Val) i64 {
+  var v *Var = ovid/io.Alloc(r.io, sizeof(Var)) as *Var
+  v.p = p
+  v.n = n
+  v.v = val
+  v.next = env.vars
+  env.vars = v
+  return 0
+}
+
+// setVar assigns an existing binding in scope, or makes a new local.
+func setVar(r *R, env *Env, p i64, n i64, val *Val) i64 {
+  var v *Var = findVar(env, p, n)
+  if v != 0 as *Var {
+    v.v = val
+    return 0
+  }
+  return defVar(r, env, p, n, val)
+}
+
+func findFn(r *R, p i64, n i64) *Fn {
+  var f *Fn = r.fns
+  while f != 0 as *Fn {
+    if ovid/mem.Eq(f.p, f.n, p, n) {
+      return f
+    }
+    f = f.next
+  }
+  return f
+}
+
+func rootEnv(env *Env) *Env {
+  while env.parent != 0 as *Env {
+    env = env.parent
+  }
+  return env
+}
+
+func stopped(r *R) bool {
+  return r.err || r.ret || r.brk || r.nxt
+}
+
+func evalBody(r *R, env *Env, n *Node) *Val {
+  var v *Val = r.nilv
+  while n != nilNode() && !stopped(r) {
+    v = eval(r, env, n)
+    n = n.next
+  }
+  return v
+}
+
+// fail reports a message made of a, the name p[0:n], and c.
+func fail(r *R, line i64, a i64, p i64, n i64, c i64) *Val {
+  var b *ovid/mem.Buf = ovid/mem.New(r.io, 64)
+  wlit(r, b, a)
+  ovid/mem.WBytes(r.io, b, p, n)
+  wlit(r, b, c)
+  ovid/mem.WByte(r.io, b, 0)
+  rerr(r, line, b.data)
+  return r.nilv
+}
+
+func noMethod(r *R, n *Node, v *Val) *Val {
+  var b *ovid/mem.Buf = ovid/mem.New(r.io, 64)
+  wlit(r, b, strptr("undefined method '"))
+  ovid/mem.WBytes(r.io, b, n.p, n.n)
+  wlit(r, b, strptr("' for an instance of "))
+  wlit(r, b, typeName(v))
+  wlit(r, b, strptr(" (NoMethodError)"))
+  ovid/mem.WByte(r.io, b, 0)
+  rerr(r, n.line, b.data)
+  return r.nilv
+}
+
+func eval(r *R, env *Env, n *Node) *Val {
+  var k i64 = n.kind
+  if k == N_INT {
+    return mkInt(r, n.ival)
+  } else if k == N_STR {
+    return mkStr(r, n.p, n.n)
+  } else if k == N_DSTR {
+    var b *ovid/mem.Buf = ovid/mem.New(r.io, 32)
+    var part *Node = n.a
+    while part != nilNode() && !r.err {
+      tos(r, eval(r, env, part), b)
+      part = part.next
+    }
+    return bufStr(r, b)
+  } else if k == N_TRUE {
+    return r.truev
+  } else if k == N_FALSE {
+    return r.falsev
+  } else if k == N_NIL {
+    return r.nilv
+  } else if k == N_VAR {
+    var v *Var = findVar(env, n.p, n.n)
+    if v != 0 as *Var {
+      return v.v
+    }
+    // a bare name that is not a local is a call without arguments
+    return evalCall(r, env, n)
+  } else if k == N_ASGN {
+    var av *Val = eval(r, env, n.a)
+    setVar(r, env, n.p, n.n, av)
+    return av
+  } else if k == N_BIN {
+    return evalBin(r, n.ival, eval(r, env, n.a), eval(r, env, n.b), n.line)
+  } else if k == N_AND {
+    var l *Val = eval(r, env, n.a)
+    if !truthy(l) {
+      return l
+    }
+    return eval(r, env, n.b)
+  } else if k == N_OR {
+    var l2 *Val = eval(r, env, n.a)
+    if truthy(l2) {
+      return l2
+    }
+    return eval(r, env, n.b)
+  } else if k == N_NOT {
+    return mkBool(r, !truthy(eval(r, env, n.a)))
+  } else if k == N_NEG {
+    var x *Val = eval(r, env, n.a)
+    if x.kind != V_INT {
+      return noMethod(r, n, x)
+    }
+    return mkInt(r, 0 - x.i)
+  } else if k == N_IF {
+    if truthy(eval(r, env, n.a)) {
+      return evalBody(r, env, n.b)
+    }
+    return evalBody(r, env, n.c)
+  } else if k == N_WHILE {
+    var going bool = true
+    while going && !r.err {
+      var c bool = truthy(eval(r, env, n.a))
+      if n.ival == 1 {
+        c = !c
+      }
+      if !c || stopped(r) {
+        going = false
+      } else {
+        evalBody(r, env, n.b)
+        r.nxt = false
+        if r.brk {
+          r.brk = false
+          going = false
+        } else if r.ret {
+          going = false
+        }
+      }
+    }
+    return r.nilv
+  } else if k == N_DEF {
+    var f2 *Fn = ovid/io.Alloc(r.io, sizeof(Fn)) as *Fn
+    f2.p = n.p
+    f2.n = n.n
+    f2.params = n.a
+    f2.body = n.b
+    f2.next = r.fns
+    r.fns = f2
+    return r.nilv
+  } else if k == N_CALL {
+    return evalCall(r, env, n)
+  } else if k == N_YIELD {
+    var root *Env = rootEnv(env)
+    if root.blk == nilNode() {
+      rerr(r, n.line, strptr("no block given (yield) (LocalJumpError)"))
+      return r.nilv
+    }
+    return callBlock(r, root.benv, root.blk, evalArgs(r, env, n.b))
+  } else if k == N_RET {
+    var rv *Val = r.nilv
+    if n.a != nilNode() {
+      rv = eval(r, env, n.a)
+    }
+    r.retv = rv
+    r.ret = true
+    return rv
+  } else if k == N_BREAK {
+    r.brk = true
+    return r.nilv
+  } else if k == N_NEXT {
+    r.nxt = true
+    return r.nilv
+  } else if k == N_ARR {
+    return evalArgs(r, env, n.a)
+  } else if k == N_RANGE {
+    var lo *Val = eval(r, env, n.a)
+    var hi *Val = eval(r, env, n.b)
+    if lo.kind != V_INT || hi.kind != V_INT {
+      rerr(r, n.line, strptr("bad value for range (ArgumentError)"))
+      return r.nilv
+    }
+    var g *Val = newVal(r, V_RANGE)
+    g.i = lo.i
+    g.n = hi.i
+    return g
+  } else if k == N_INDEX {
+    return index(r, eval(r, env, n.a), eval(r, env, n.b), n)
+  } else if k == N_ISET {
+    var recv *Val = eval(r, env, n.a)
+    var iv *Val = eval(r, env, n.b)
+    var sv *Val = eval(r, env, n.c)
+    if recv.kind != V_ARR || iv.kind != V_INT {
+      return noMethod(r, n, recv)
+    }
+    var ix i64 = iv.i
+    if ix < 0 {
+      ix = ix + recv.n
+    }
+    if ix < 0 {
+      rerr(r, n.line, strptr("index out of array (IndexError)"))
+      return r.nilv
+    }
+    while recv.n <= ix {
+      push(r, recv, r.nilv)
+    }
+    store64(recv.p + (ix * 8), sv as i64)
+    return sv
+  }
+  rerr(r, n.line, strptr("internal error: unknown node"))
+  return r.nilv
+}
+
+func index(r *R, recv *Val, iv *Val, n *Node) *Val {
+  if iv.kind != V_INT || (recv.kind != V_ARR && recv.kind != V_STR) {
+    return noMethod(r, n, recv)
+  }
+  var i i64 = iv.i
+  if i < 0 {
+    i = i + recv.n
+  }
+  if i < 0 || i >= recv.n {
+    return r.nilv
+  }
+  if recv.kind == V_STR {
+    return mkStr(r, recv.p + i, 1)
+  }
+  return at8(recv, i)
+}
+
+func evalArgs(r *R, env *Env, list *Node) *Val {
+  var a *Val = mkArr(r, 4)
+  while list != nilNode() && !r.err {
+    push(r, a, eval(r, env, list))
+    list = list.next
+  }
+  return a
+}
+
+func countList(n *Node) i64 {
+  var c i64 = 0
+  while n != nilNode() {
+    c = c + 1
+    n = n.next
+  }
+  return c
+}
+
+func arity(r *R, line i64, given i64, want i64) bool {
+  if given == want {
+    return true
+  }
+  var b *ovid/mem.Buf = ovid/mem.New(r.io, 64)
+  wlit(r, b, strptr("wrong number of arguments (given "))
+  wint(r, b, given)
+  wlit(r, b, strptr(", expected "))
+  wint(r, b, want)
+  wlit(r, b, strptr(") (ArgumentError)"))
+  ovid/mem.WByte(r.io, b, 0)
+  rerr(r, line, b.data)
+  return false
+}
+
+func callFn(r *R, f *Fn, args *Val, blk *Node, benv *Env, line i64) *Val {
+  if !arity(r, line, args.n, countList(f.params)) {
+    return r.nilv
+  }
+  if r.depth >= MAX_DEPTH {
+    rerr(r, line, strptr("stack level too deep (SystemStackError)"))
+    return r.nilv
+  }
+  var env *Env = newEnv(r, 0 as *Env)
+  env.blk = blk
+  env.benv = benv
+  var p *Node = f.params
+  var i i64 = 0
+  while p != nilNode() {
+    defVar(r, env, p.p, p.n, at8(args, i))
+    p = p.next
+    i = i + 1
+  }
+  r.depth = r.depth + 1
+  var v *Val = evalBody(r, env, f.body)
+  r.depth = r.depth - 1
+  if r.ret {
+    r.ret = false
+    v = r.retv
+  }
+  return v
+}
+
+// callBlock runs blk in a new scope under env; missing params are nil.
+func callBlock(r *R, env *Env, blk *Node, args *Val) *Val {
+  var e *Env = newEnv(r, env)
+  var p *Node = blk.a
+  var i i64 = 0
+  if args.n == 1 && at8(args, 0).kind == V_ARR && countList(p) > 1 {
+    args = at8(args, 0)
+  }
+  while p != nilNode() {
+    var v *Val = r.nilv
+    if i < args.n {
+      v = at8(args, i)
+    }
+    defVar(r, e, p.p, p.n, v)
+    p = p.next
+    i = i + 1
+  }
+  var res *Val = evalBody(r, e, blk.b)
+  r.nxt = false
+  return res
+}
+
+// yield1 calls the block with a, and a second argument b unless it is 0.
+func yield2(r *R, env *Env, blk *Node, a *Val, b *Val) *Val {
+  var args *Val = mkArr(r, 2)
+  push(r, args, a)
+  if b != 0 as *Val {
+    push(r, args, b)
+  }
+  return callBlock(r, env, blk, args)
+}
+
+func yield1(r *R, env *Env, blk *Node, a *Val) *Val {
+  return yield2(r, env, blk, a, 0 as *Val)
+}
+
+// cut reports whether an iteration must end: break (consumed here),
+// return, or an error.
+func cut(r *R) bool {
+  if r.brk {
+    r.brk = false
+    return true
+  }
+  return r.ret || r.err
+}
+
+func nm(n *Node, lit i64) bool {
+  return eqz(n.p, n.n, lit)
+}
+
+func needBlock(r *R, n *Node) bool {
+  if n.c == nilNode() {
+    fail(r, n.line, strptr("no block given to '"), n.p, n.n, strptr("' (LocalJumpError)"))
+    return false
+  }
+  return true
+}
+
+func evalCall(r *R, env *Env, n *Node) *Val {
+  if n.a != nilNode() {
+    var rv *Val = eval(r, env, n.a)
+    if r.err {
+      return r.nilv
+    }
+    return method(r, env, n, rv, evalArgs(r, env, n.b))
+  }
+  var args *Val = evalArgs(r, env, n.b)
+  if r.err {
+    return r.nilv
+  }
+  if nm(n, strptr("puts")) {
+    if args.n == 0 {
+      ovid/mem.WByte(r.io, r.out, 10)
+    }
+    var i i64 = 0
+    while i < args.n {
+      puts(r, at8(args, i))
+      i = i + 1
+    }
+    if r.out.len > 4096 {
+      flush(r)
+    }
+    return r.nilv
+  } else if nm(n, strptr("print")) {
+    var j i64 = 0
+    while j < args.n {
+      tos(r, at8(args, j), r.out)
+      j = j + 1
+    }
+    return r.nilv
+  } else if nm(n, strptr("p")) {
+    var m i64 = 0
+    while m < args.n {
+      inspect(r, at8(args, m), r.out)
+      ovid/mem.WByte(r.io, r.out, 10)
+      m = m + 1
+    }
+    if args.n == 0 {
+      return r.nilv
+    } else if args.n == 1 {
+      return at8(args, 0)
+    }
+    return args
+  } else if nm(n, strptr("loop")) {
+    if !needBlock(r, n) {
+      return r.nilv
+    }
+    var going bool = true
+    while going {
+      yield2(r, env, n.c, r.nilv, 0 as *Val)
+      going = !cut(r)
+    }
+    return r.nilv
+  } else if nm(n, strptr("block_given?")) {
+    return mkBool(r, rootEnv(env).blk != nilNode())
+  } else if nm(n, strptr("require")) || nm(n, strptr("require_relative")) {
+    return r.truev
+  }
+  var f *Fn = findFn(r, n.p, n.n)
+  if f != 0 as *Fn {
+    return callFn(r, f, args, n.c, env, n.line)
+  }
+  if n.kind == N_VAR {
+    return fail(r, n.line, strptr("undefined local variable or method '"), n.p, n.n, strptr("' for main (NameError)"))
+  }
+  return fail(r, n.line, strptr("undefined method '"), n.p, n.n, strptr("' for main (NoMethodError)"))
+}
+
+func puts(r *R, v *Val) i64 {
+  if v.kind == V_ARR {
+    var i i64 = 0
+    while i < v.n {
+      puts(r, at8(v, i))
+      i = i + 1
+    }
+    return 0
+  }
+  tos(r, v, r.out)
+  if r.out.len == 0 || load8((r.out.data + r.out.len) - 1) != 10 || v.kind != V_STR || v.n == 0 {
+    ovid/mem.WByte(r.io, r.out, 10)
+  }
+  return 0
+}
+
+func floorDiv(a i64, b i64) i64 {
+  var q i64 = a / b
+  if (a % b) != 0 && ((a < 0) != (b < 0)) {
+    q = q - 1
+  }
+  return q
+}
+
+func floorMod(a i64, b i64) i64 {
+  var m i64 = a % b
+  if m != 0 && ((m < 0) != (b < 0)) {
+    m = m + b
+  }
+  return m
+}
+
+func binErr(r *R, op i64, a *Val, b *Val, line i64) *Val {
+  var m *ovid/mem.Buf = ovid/mem.New(r.io, 64)
+  wlit(r, m, typeName(b))
+  wlit(r, m, strptr(" can't be coerced into "))
+  wlit(r, m, typeName(a))
+  wlit(r, m, strptr(" (TypeError)"))
+  ovid/mem.WByte(r.io, m, 0)
+  rerr(r, line, m.data)
+  return r.nilv
+}
+
+func evalBin(r *R, op i64, a *Val, b *Val, line i64) *Val {
+  if r.err {
+    return r.nilv
+  }
+  if op == OP_EQ {
+    return mkBool(r, valEq(a, b))
+  } else if op == OP_NE {
+    return mkBool(r, !valEq(a, b))
+  } else if op == OP_LT {
+    return mkBool(r, cmpv(r, a, b, line) < 0)
+  } else if op == OP_LE {
+    return mkBool(r, cmpv(r, a, b, line) <= 0)
+  } else if op == OP_GT {
+    return mkBool(r, cmpv(r, a, b, line) > 0)
+  } else if op == OP_GE {
+    return mkBool(r, cmpv(r, a, b, line) >= 0)
+  }
+  if a.kind == V_INT && b.kind == V_INT {
+    var x i64 = a.i
+    var y i64 = b.i
+    if op == OP_ADD {
+      return mkInt(r, x + y)
+    } else if op == OP_SUB {
+      return mkInt(r, x - y)
+    } else if op == OP_MUL {
+      return mkInt(r, x * y)
+    } else if op == OP_DIV || op == OP_MOD {
+      if y == 0 {
+        rerr(r, line, strptr("divided by 0 (ZeroDivisionError)"))
+        return r.nilv
+      }
+      if op == OP_DIV {
+        return mkInt(r, floorDiv(x, y))
+      }
+      return mkInt(r, floorMod(x, y))
+    } else if op == OP_SHL {
+      return mkInt(r, x << y)
+    } else if op == OP_POW {
+      var p i64 = 1
+      while y > 0 {
+        p = p * x
+        y = y - 1
+      }
+      return mkInt(r, p)
+    }
+  }
+  if a.kind == V_STR {
+    if (op == OP_ADD || op == OP_SHL) && b.kind == V_STR {
+      var s *ovid/mem.Buf = ovid/mem.New(r.io, a.n + b.n)
+      ovid/mem.WBytes(r.io, s, a.p, a.n)
+      ovid/mem.WBytes(r.io, s, b.p, b.n)
+      if op == OP_SHL {
+        a.p = s.data
+        a.n = s.len
+        return a
+      }
+      return bufStr(r, s)
+    } else if op == OP_MUL && b.kind == V_INT {
+      var t *ovid/mem.Buf = ovid/mem.New(r.io, a.n * b.i + 1)
+      var i i64 = 0
+      while i < b.i {
+        ovid/mem.WBytes(r.io, t, a.p, a.n)
+        i = i + 1
+      }
+      return bufStr(r, t)
+    } else if op == OP_MOD {
+      // "%d items" % n: each %d or %s takes the next value
+      var f *ovid/mem.Buf = ovid/mem.New(r.io, a.n + 16)
+      var vals *Val = b
+      if b.kind != V_ARR {
+        vals = mkArr(r, 1)
+        push(r, vals, b)
+      }
+      var j i64 = 0
+      var k i64 = 0
+      while j < a.n {
+        var c i64 = load8(a.p + j)
+        if c == 37 && (j + 1) < a.n && (load8(a.p + j + 1) == 100 || load8(a.p + j + 1) == 115) && k < vals.n {
+          tos(r, at8(vals, k), f)
+          k = k + 1
+          j = j + 2
+        } else {
+          ovid/mem.WByte(r.io, f, c)
+          j = j + 1
+        }
+      }
+      return bufStr(r, f)
+    }
+  }
+  if a.kind == V_ARR {
+    if op == OP_SHL {
+      return push(r, a, b)
+    } else if op == OP_ADD && b.kind == V_ARR {
+      var c2 *Val = mkArr(r, a.n + b.n)
+      var m i64 = 0
+      while m < a.n {
+        push(r, c2, at8(a, m))
+        m = m + 1
+      }
+      m = 0
+      while m < b.n {
+        push(r, c2, at8(b, m))
+        m = m + 1
+      }
+      return c2
+    }
+  }
+  return binErr(r, op, a, b, line)
+}
