@@ -41,7 +41,9 @@ rowid alias), and whole-number reals stored as integers in REAL columns.
   (their defaults are not filled in), and a table-level `PRIMARY KEY(col)`
   is not recognized as a rowid alias.
 - Not hardened: a corrupt file can make it read out of bounds and crash.
-- The whole file is read into memory, and nothing is freed.
+- The file is mapped read-only (`ovid/io.MapFile`), so a lookup reads only
+  the pages it visits; the mapping, and a row copied out of its overflow
+  pages, are never freed.
 - No writing of any kind.
 
 ## Benchmark

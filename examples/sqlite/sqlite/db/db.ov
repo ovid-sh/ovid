@@ -10,9 +10,11 @@ const ErrEncoding i64 = 3
 const ErrCorrupt i64 = 4
 const ErrNotTable i64 = 5
 
-// DB is a SQLite database file read whole into memory. Nothing is locked
-// and the -wal file is not read: wal says the file is in WAL mode, where
-// the newest rows may not be in it yet.
+// DB is a SQLite database file mapped into memory (ovid/io.MapFile): a
+// page is read from the file when the b-tree code first touches it, so a
+// lookup reads the few pages it visits and not the whole file. Nothing is
+// locked and the -wal file is not read: wal says the file is in WAL mode,
+// where the newest rows may not be in it yet.
 type DB struct {
   data i64
   size i64
@@ -28,21 +30,21 @@ type Rd struct {
   p i64
 }
 
-// ErrStr is the NUL-terminated message for an error code.
-func ErrStr(code i64) i64 {
+// ErrStr is the message for an error code.
+func ErrStr(code i64) bytes {
   if code == ErrOpen {
-    return strptr("cannot read the file")
+    return "cannot read the file"
   }
   if code == ErrNotDB {
-    return strptr("not a SQLite 3 database")
+    return "not a SQLite 3 database"
   }
   if code == ErrEncoding {
-    return strptr("text encoding is not UTF-8")
+    return "text encoding is not UTF-8"
   }
   if code == ErrNotTable {
-    return strptr("not a rowid table (WITHOUT ROWID and virtual tables are not supported)")
+    return "not a rowid table (WITHOUT ROWID and virtual tables are not supported)"
   }
-  return strptr("database is malformed")
+  return "database is malformed"
 }
 
 // Be16 is the big-endian 16-bit unsigned value at p.
@@ -74,22 +76,34 @@ func Varint(r *Rd) i64 {
   return v
 }
 
-// Open reads the database at path (pathn bytes). Check err on the result.
-func Open(io *ovid/io.Cap, path i64, pathn i64) *DB {
+// Open maps the database at path. Check err on the result.
+func Open(io *ovid/io.Cap, path bytes) *DB {
   var db *DB = ovid/io.Alloc(io, sizeof(DB)) as *DB
-  var pp i64 = ovid/io.Alloc(io, 8)
-  var nn i64 = ovid/io.Alloc(io, 8)
-  if ovid/io.ReadFile(io, path, pathn, pp, nn) != 0 {
+  var f *ovid/io.File, e i64 = ovid/io.Open(io, path, ovid/io.O_RDONLY, 0)
+  if e != 0 {
     db.err = ErrOpen
     return db
   }
-  db.data = load64(pp)
-  db.size = load64(nn)
+  var st i64 = ovid/io.Alloc(io, 256)
+  if ovid/io.Fstat(f, st) != 0 {
+    ovid/io.Close(f)
+    db.err = ErrOpen
+    return db
+  }
+  db.size = load64(st + 48)
+  // The mapping outlives the handle, so the file is closed at once.
+  var m bytes, me i64 = ovid/io.MapFile(f, db.size)
+  ovid/io.Close(f)
+  if me != 0 {
+    db.err = ErrOpen
+    return db
+  }
+  db.data = ptr(m)
   // A zero-length file is an empty database.
   if db.size == 0 {
     return db
   }
-  if db.size < 100 || !ovid/mem.Eq(db.data, 15, strptr("SQLite format 3"), 15) || load8(db.data + 15) != 0 {
+  if db.size < 100 || !ovid/mem.Eq(bytes(db.data, 15), "SQLite format 3") || load8(db.data + 15) != 0 {
     db.err = ErrNotDB
     return db
   }
@@ -200,7 +214,7 @@ func payloadAt(c *Cursor, p i64, n i64) i64 {
     local = m
   }
   var buf i64 = ovid/io.Alloc(c.io, n)
-  ovid/mem.Copy(buf, p, local)
+  ovid/mem.CopyN(buf, p, local)
   var got i64 = local
   var ovf i64 = Be32(p + local)
   while got < n && ovf >= 1 && ovf <= c.db.npages {
@@ -209,7 +223,7 @@ func payloadAt(c *Cursor, p i64, n i64) i64 {
     if take > (n - got) {
       take = n - got
     }
-    ovid/mem.Copy(buf + got, a + 4, take)
+    ovid/mem.CopyN(buf + got, a + 4, take)
     got = got + take
     ovf = Be32(a)
   }

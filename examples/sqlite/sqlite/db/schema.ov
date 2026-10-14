@@ -35,7 +35,7 @@ func Tables(io *ovid/io.Cap, c *Cursor) *Table {
     var col i64 = 0
     while RecNext(rec) {
       if col == 0 {
-        isTable = rec.kind == KText && ovid/mem.Eq(rec.ptr, rec.len, strptr("table"), strlen("table"))
+        isTable = rec.kind == KText && ovid/mem.Eq(bytes(rec.ptr, rec.len), "table")
       } else if col == 1 {
         t.name = rec.ptr
         t.namen = rec.len

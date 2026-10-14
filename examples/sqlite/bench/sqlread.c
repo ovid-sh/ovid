@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -42,18 +43,19 @@ static i64 CLen(i64 p) {
   return i;
 }
 
-static i64 ReadFile(i64 path, i64 outp, i64 outn) {
+/* MapFile maps the file read-only, as ovid/io.MapFile does: pages are read
+   when first touched. */
+static i64 MapFile(i64 path, i64 outp, i64 outn) {
   int fd = open((char *)path, O_RDONLY);
   if (fd < 0) return -1;
   struct stat st;
   if (fstat(fd, &st) < 0) { close(fd); return -1; }
   i64 sz = st.st_size;
-  i64 buf = Alloc(sz + 1);
-  i64 got = 0;
-  while (got < sz) {
-    i64 r = read(fd, (void *)(buf + got), sz - got);
-    if (r <= 0) { close(fd); return -1; }
-    got = got + r;
+  i64 buf = 0;
+  if (sz > 0) {
+    void *m = mmap(0, sz, PROT_READ, MAP_PRIVATE, fd, 0);
+    if (m == MAP_FAILED) { close(fd); return -1; }
+    buf = (i64)m;
   }
   close(fd);
   store64(outp, buf);
@@ -161,7 +163,7 @@ static DB *Open(i64 path) {
   DB *db = (DB *)Alloc(sizeof(DB));
   i64 pp = Alloc(8);
   i64 nn = Alloc(8);
-  if (ReadFile(path, pp, nn) != 0) { db->err = ErrOpen; return db; }
+  if (MapFile(path, pp, nn) != 0) { db->err = ErrOpen; return db; }
   db->data = load64(pp);
   db->size = load64(nn);
   if (db->size == 0) return db;
