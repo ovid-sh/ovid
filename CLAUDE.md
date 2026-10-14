@@ -17,6 +17,7 @@ go vet ./...
 go test ./...                           # everything, a few seconds (most of it internal/tool)
 go test ./internal/tool -run TestCorpus                 # the tests/ corpus
 go test ./internal/tool -run TestCorpusRun/run/hello    # one corpus case
+go test ./internal/tool -run TestCorpusWasm             # the run/ corpus as wasm, under node
 go test ./internal/tool -run TestSelfHost               # Go and Ovid compilers agree byte for byte
 go test ./internal/tool -run 'TestProgChecks|TestProgTests'   # prog/ checks, and its Ovid tests pass
 

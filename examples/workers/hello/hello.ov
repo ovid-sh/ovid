@@ -1,0 +1,33 @@
+package hello
+
+import ovid/io
+import ovid/http
+
+// handle is the whole program: with no main, the toolchain writes the
+// stdio host around it, and on a Worker standard input is the request.
+func handle(io *ovid/io.Cap, req *ovid/http.Request, res *ovid/http.Response) i64 {
+  if ovid/http.PathIs(req, strptr("/"), strlen("/")) {
+    ovid/http.SetHeader(io, res, strptr("Content-Type"), strlen("Content-Type"), strptr("text/plain; charset=utf-8"), strlen("text/plain; charset=utf-8"))
+    ovid/http.Write(io, res, strptr("hello, world from Ovid\n"), strlen("hello, world from Ovid\n"))
+    return 0
+  }
+  if ovid/http.PathIs(req, strptr("/hello"), strlen("/hello")) {
+    ovid/http.SetHeader(io, res, strptr("Content-Type"), strlen("Content-Type"), strptr("application/json"), strlen("application/json"))
+    ovid/http.Write(io, res, strptr("{\"hello\":\""), strlen("{\"hello\":\""))
+    var q i64 = ovid/http.QueryLen(req)
+    if q > 0 {
+      ovid/http.Write(io, res, ovid/http.Query(req), q)
+    } else {
+      ovid/http.Write(io, res, strptr("world"), strlen("world"))
+    }
+    ovid/http.Write(io, res, strptr("\",\"method\":\""), strlen("\",\"method\":\""))
+    ovid/http.Write(io, res, ovid/http.Method(req), ovid/http.MethodLen(req))
+    ovid/http.Write(io, res, strptr("\",\"body_bytes\":"), strlen("\",\"body_bytes\":"))
+    ovid/http.WriteInt(io, res, ovid/http.BodyLen(req))
+    ovid/http.Write(io, res, strptr("}\n"), strlen("}\n"))
+    return 0
+  }
+  ovid/http.SetStatus(res, 404)
+  ovid/http.Write(io, res, strptr("not found\n"), strlen("not found\n"))
+  return 0
+}

@@ -185,6 +185,70 @@ func TestCorpusRun(t *testing.T) {
 	}
 }
 
+// wasmSkip are the tests/run cases the wasm target cannot pass, and why:
+// what they test is the native host, not the code generated.
+var wasmSkip = map[string]string{
+	"run/io_errors":  "opens files: the wasm host has no file system",
+	"run/heap_reset": "needs 100 MiB to fit the first heap region, which is 128 MiB natively and wasm.HeapSize under wasm",
+}
+
+// TestCorpusWasm builds every program of tests/run with --target wasm and
+// runs it with node under internal/wasm/host.mjs, the host the Workers
+// example uses, checking its exit code and stdout as TestCorpusRun does.
+// Without node it skips, unless OVID_WASM_NODE is set (CI sets it), so a
+// runner that loses node fails rather than passing quietly.
+func TestCorpusWasm(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		if os.Getenv("OVID_WASM_NODE") != "" {
+			t.Fatal("OVID_WASM_NODE is set but node is not on PATH")
+		}
+		t.Skip("node not on PATH: the wasm corpus needs it to run the modules")
+	}
+	runner := filepath.Join(repo(t), "internal", "wasm", "run.mjs")
+	for _, c := range corpus(t, "run") {
+		t.Run(c.name, func(t *testing.T) {
+			if why, ok := wasmSkip[c.name]; ok {
+				t.Skip(why)
+			}
+			want, err := c.runWant()
+			if err != nil {
+				t.Fatal(err)
+			}
+			mod := filepath.Join(t.TempDir(), "prog.wasm")
+			var b bytes.Buffer
+			if code := BuildTarget(c.root, mod, "wasm", &b); code != 0 {
+				t.Fatalf("tests/%s does not build for wasm:\n%s", c.name, b.String())
+			}
+			var stdout, stderr bytes.Buffer
+			cmd := exec.Command(node, append([]string{runner, mod}, want.args...)...)
+			cmd.Stdin = strings.NewReader(want.stdin)
+			cmd.Stdout, cmd.Stderr = &stdout, &stderr
+			exit := 0
+			if err := cmd.Run(); err != nil {
+				ee, ok := err.(*exec.ExitError)
+				if !ok {
+					t.Fatal(err)
+				}
+				exit = ee.ExitCode()
+			}
+			var diff []string
+			if exit != want.exit {
+				diff = append(diff, fmt.Sprintf("exit: want %d, got %d", want.exit, exit))
+			}
+			if stdout.String() != want.stdout {
+				diff = append(diff, fmt.Sprintf("stdout: want %q, got %q", want.stdout, stdout.String()))
+			}
+			if len(diff) > 0 {
+				if stderr.Len() > 0 {
+					diff = append(diff, fmt.Sprintf("stderr: %q", stderr.String()))
+				}
+				t.Fatalf("tests/%s (wasm):\n  %s", c.name, strings.Join(diff, "\n  "))
+			}
+		})
+	}
+}
+
 // wantErr is one `// error: code [col] [expected="..."] [got="..."]
 // [hint="..."] [message="..."]` comment: a diagnostic with that code is
 // expected on the comment's own line, with those fields when they are
