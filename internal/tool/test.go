@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -15,7 +14,12 @@ import (
 	"ovid/internal/module"
 )
 
-const testTimeout = 10 * time.Second
+// testTimeout is how long one test may run. A variable so that a test of
+// this package can shorten it.
+var testTimeout = 10 * time.Second
+
+// maxTestOutput is how much of a test's output its record keeps.
+const maxTestOutput = 4000
 
 const testPkg = "ovid/testmain"
 
@@ -30,6 +34,23 @@ type testFn struct {
 // (io *ovid/io.Cap) i64. Zero passes; anything else fails. Each test runs in
 // its own process so a crash only fails that test.
 func Test(dir, filter string, list bool, w io.Writer) int {
+	return TestWith(dir, TestOpts{Filter: filter, List: list}, w)
+}
+
+// TestOpts changes how test runs the tests.
+type TestOpts struct {
+	Filter string // only tests whose name or id contains it
+	List   bool   // name the tests and run none
+	// NoConfine runs the tests with the caller's own rights. By default, on
+	// Linux x86-64, each runs under a seccomp filter of the program's own
+	// system calls and, where the kernel has Landlock, a file system it can
+	// write only in one fresh directory, its working directory.
+	NoConfine bool
+}
+
+// TestWith is Test with options.
+func TestWith(dir string, o TestOpts, w io.Writer) int {
+	filter, list := o.Filter, o.List
 	m, err := load(dir)
 	if err != nil {
 		return fail(w, "load", err.Error(), "")
@@ -54,16 +75,13 @@ func Test(dir, filter string, list bool, w io.Writer) int {
 			if !isTest(fn) {
 				// Outside _test.ov files a Test-named helper (asm's TestRaxRax,
 				// the x86 TEST instruction) is not meant as a test.
-				l := m.Index[fn.ID]
-				if l == nil || !strings.HasSuffix(m.Files[l.Span.File].Abs, "_test.ov") {
+				if !strings.HasSuffix(m.Files[fn.Span.File].Abs, "_test.ov") {
 					continue
 				}
 				d := map[string]any{"fact": "error", "code": "bad_test", "id": fn.ID,
 					"message": fn.Name + " starts with Test but is not func(io *ovid/io.Cap) i64; skipped", "got": sig}
-				if l := m.Index[fn.ID]; l != nil {
-					file, a, _, _ := m.Where(l.Span)
-					d["file"], d["line"] = file, a.Line
-				}
+				file, a, _, _ := m.Where(fn.Span)
+				d["file"], d["line"] = file, a.Line
 				emit(w, d)
 				continue
 			}
@@ -79,66 +97,112 @@ func Test(dir, filter string, list bool, w io.Writer) int {
 	if list {
 		for _, t := range tests {
 			r := map[string]any{"fact": "test", "id": t.id}
-			if l := m.Index[t.id]; l != nil {
-				file, a, _, _ := m.Where(l.Span)
-				r["file"], r["line"] = file, a.Line
-			}
+			file, a, _, _ := m.Where(t.span)
+			r["file"], r["line"] = file, a.Line
 			emit(w, r)
 		}
 		emit(w, map[string]any{"ok": true, "count": len(tests)})
 		return ExitOK
 	}
 	prog := testProgram(m.Prog, tests)
-	tmpd, err := os.MkdirTemp("", "ovid-test-")
-	if err != nil {
-		return fail(w, "write", err.Error(), "")
-	}
-	defer os.RemoveAll(tmpd)
-	bin := filepath.Join(tmpd, "test")
-	exe, marks, err := compile.CompileMap(prog)
-	if err == nil {
-		err = os.WriteFile(bin, exe, 0o755)
-	}
+	out, err := compile.CompileAll(prog)
 	if err != nil {
 		return fail(w, "compile", err.Error(), "")
 	}
-	outPath := filepath.Join(tmpd, "out")
+	exe, marks := out.Bin, out.Marks
+	var confine *confineSpec
+	if !o.NoConfine && confineSupported {
+		confine = newConfine(out.Syscalls, writableDir(), "test")
+		// Whatever happens next, an empty writable directory is not left.
+		defer confine.keepWritable()
+		if err := confine.unenforceable(); err != nil {
+			return fail(w, "run", err.Error(), tmpHint+"; or --no-confine")
+		}
+	}
+	// A missing temporary directory is not fatal yet: stage may still hold
+	// the program in memory.
+	tmpd, terr := os.MkdirTemp("", "ovid-test-")
+	if terr == nil {
+		defer os.RemoveAll(tmpd)
+	}
+	// fd 3 is the returned mark; the program, if held in memory, is fd 4.
+	st, err := stage(exe, tmpd, "test", returnedFD+1)
+	if terr != nil && err != nil {
+		err = terr
+	}
+	if err != nil {
+		return fail(w, "run", err.Error(), tmpHint)
+	}
+	defer st.done()
 	passed, failed := 0, 0
 	for k, t := range tests {
 		args := make([]string, k+1)
 		for i := range args {
 			args[i] = "t"
 		}
-		of, err := os.Create(outPath)
+		// Output and the returned mark come back through pipes, cut at what
+		// the record needs: a test may write to either without end.
+		oc, err := newPipeCapture(maxTestOutput + 1)
 		if err != nil {
-			return fail(w, "write", err.Error(), "")
+			return fail(w, "run", err.Error(), "")
+		}
+		rc, err := newPipeCapture(1)
+		if err != nil {
+			oc.finish()
+			return fail(w, "run", err.Error(), "")
 		}
 		t0 := time.Now()
-		pr := runProc(bin, args, procIO{stdout: of, stderr: of}, testTimeout)
-		ms := time.Since(t0).Milliseconds()
-		of.Close()
-		out, _ := os.ReadFile(outPath)
-		r := map[string]any{"fact": "test", "id": t.id, "ms": ms}
-		if l := m.Index[t.id]; l != nil {
-			file, a, _, _ := m.Where(l.Span)
-			r["file"], r["line"] = file, a.Line
+		pio := procIO{stdout: oc.w, stderr: oc.w, extra: []*os.File{rc.w}, argv0: "test", confine: confine}
+		if st.extra != nil {
+			pio.extra = append(pio.extra, st.extra)
 		}
+		pr := runProc(st.path, args, pio, testTimeout)
+		ms := time.Since(t0).Milliseconds()
+		out, outBytes := oc.finish()
+		outTail := oc.tail
+		_, retBytes := rc.finish()
+		if pr.err != nil {
+			// The program could not be started: that is the environment's
+			// doing and the same for every test, so it is one failure of
+			// the request, not a failed test.
+			return fail(w, "run", pr.err.Error(), tmpHint)
+		}
+		returned := retBytes > 0
+		r := map[string]any{"fact": "test", "id": t.id, "ms": ms}
+		file, a, _, _ := m.Where(t.span)
+		r["file"], r["line"] = file, a.Line
 		code := pr.code
-		ok := pr.err == nil && pr.exited && code == 0
+		// A test passes by returning 0: one that ended the program
+		// (ovid/io.Exit) skipped what came after the call, whatever code
+		// it gave.
+		ok := pr.exited && code == 0 && returned
 		switch {
-		case pr.err != nil:
-			r["error"] = pr.err.Error()
 		case pr.timedOut:
 			r["signal"] = "timeout"
 			r["hint"] = fmt.Sprintf("killed after %s", testTimeout)
 		case !pr.exited:
 			code = -1
-			describeCrash(m, marks, pr, r)
+			describeCrash(m, exe, marks, pr, confine != nil, r)
+		}
+		// The runtime ends a program it could not get memory for with this
+		// code, and says so. The test did not return it: the wrapper marks
+		// every return. Any other exit without the mark is the test's own
+		// ovid/io.Exit.
+		// The message is the last thing the program wrote, so it is in the
+		// output's tail even when the output was cut.
+		oom := pr.exited && code == compile.ExitOOM && !returned && strings.HasSuffix(string(outTail), "out of memory\n")
+		exited := pr.exited && !returned && !oom
+		if oom {
+			r["error"] = "out_of_memory"
+			r["hint"] = "the kernel refused the program memory: an Alloc too large to map, or a host or limit too small for the heap's first 128 MiB region"
+		} else if exited {
+			r["error"] = "exited"
+			r["hint"] = "the test ended the program (ovid/io.Exit) instead of returning; a test passes only by returning 0"
 		}
 		r["ok"] = ok
 		if !ok {
 			r["exit"] = code
-			if r["signal"] == nil {
+			if r["signal"] == nil && !oom && !exited {
 				if rs := returnsOf(m, t.id, code); len(rs) > 0 {
 					r["returned_by"] = rs
 				}
@@ -149,29 +213,69 @@ func Test(dir, filter string, list bool, w io.Writer) int {
 		}
 		if len(out) > 0 {
 			s := string(out)
-			if len(s) > 4000 {
-				s = s[:4000] + "...(truncated)"
+			if len(s) > maxTestOutput {
+				s = s[:maxTestOutput] + "...(truncated)"
+				r["output_bytes"] = outBytes
 			}
 			r["output"] = s
 		}
 		emit(w, r)
 	}
-	emit(w, map[string]any{"fact": "summary", "ok": failed == 0, "passed": passed, "failed": failed})
-	if failed > 0 {
+	sum := map[string]any{"fact": "summary", "ok": failed == 0, "passed": passed, "failed": failed}
+	if confine != nil {
+		sum["confined"] = confine.applied()
+		if dir := confine.keepWritable(); dir != "" {
+			sum["writable"] = dir
+		}
+	}
+	// A test is a program that can write files, its own module's among
+	// them. What was tested is then no longer what is on disk.
+	changed := moduleChanged(m, sum)
+	if changed {
+		sum["ok"] = false
+	}
+	emit(w, sum)
+	if failed > 0 || changed {
 		return ExitFail
 	}
 	return ExitOK
 }
 
+// moduleChanged reports whether the module on disk differs from m, which
+// was loaded before a program was run, and if so records in r which files,
+// and the revision before and, when the module still loads, after.
+func moduleChanged(m *module.Module, r map[string]any) bool {
+	files, err := m.ChangedOnDisk()
+	if len(files) == 0 && err == nil {
+		return false
+	}
+	if files == nil {
+		files = []string{}
+	}
+	r["module_changed"], r["changed_files"], r["revision_before"] = true, files, m.Revision()
+	if err != nil {
+		// The directory could not be read through, so nothing shows the
+		// module is unchanged: say it changed, and why the list is short.
+		r["scan_error"] = err.Error()
+	}
+	// Read again as m was (run leaves out the test files), or the two
+	// revisions would cover different files. Left out if it no longer loads.
+	if now, err := m.Reload(); err == nil {
+		r["revision_after"] = now.Revision()
+	}
+	r["hint"] = "the module on disk is no longer the one that was loaded: the program wrote to it, or it was edited meanwhile; look at changed_files before relying on this result"
+	return true
+}
+
 // isTest reports whether fn has a test's signature, func(io *ovid/io.Cap) i64.
 func isTest(fn *ir.Func) bool {
-	return strings.HasPrefix(fn.Name, "Test") && len(fn.Params) == 1 && fn.Params[0].Type == "*ovid/io.Cap" && fn.Result == "i64"
+	return strings.HasPrefix(fn.Name, "Test") && len(fn.Params) == 1 && fn.Params[0].Type == "*ovid/io.Cap" && fn.Result == "i64" && fn.Result2 == ""
 }
 
 // returnsOf finds the return statements in a test that could have produced
 // exit code: those returning that literal, else every non-literal return.
 func returnsOf(m *module.Module, id string, code int) []map[string]any {
-	l := m.Index[id]
+	l := m.Index()[id]
 	if l == nil {
 		return nil
 	}
@@ -205,6 +309,11 @@ func returnsOf(m *module.Module, id string, code int) []map[string]any {
 	return out
 }
 
+// returnedFD is where the test wrapper writes one byte when a test returns,
+// so an exit code that came from the test's own return can be told from the
+// same code set by the runtime (out of memory).
+const returnedFD = 3
+
 // testProgram adds a package whose main runs test k when it gets k+1 args.
 func testProgram(p *ir.Program, tests []testFn) *ir.Program {
 	n := 0
@@ -215,7 +324,8 @@ func testProgram(p *ir.Program, tests []testFn) *ir.Program {
 	pkg := ir.Package{ID: "pkg:" + testPkg, Path: testPkg}
 	imported := map[string]bool{"ovid/io": true}
 	pkg.Imports = append(pkg.Imports, ir.Import{ID: "im:" + testPkg + ":ovid/io", Path: "ovid/io"})
-	var body []*ir.Node
+	body := []*ir.Node{{ID: id("st"), Op: "var", Name: "r", Type: "i64",
+		Val: &ir.Node{ID: id("ex"), Op: "int", ValK: 1, Int: 0}}}
 	for k, t := range tests {
 		if !imported[t.pkg] {
 			imported[t.pkg] = true
@@ -226,8 +336,20 @@ func testProgram(p *ir.Program, tests []testFn) *ir.Program {
 			Right: &ir.Node{ID: id("ex"), Op: "int", ValK: 1, Int: int64(k + 2)}}
 		call := &ir.Node{ID: id("ex"), Op: "call", Pkg: t.pkg, Func: t.name,
 			Args: []*ir.Node{{ID: id("ex"), Op: "name", Name: "io"}}}
-		body = append(body, &ir.Node{ID: id("st"), Op: "if", Cond: cond,
-			Then: []*ir.Node{{ID: id("st"), Op: "return", Val: call}}})
+		// r = T(io); write(returnedFD, "r", 1); return r. The wrapper
+		// is the toolchain's and is not checked, so it makes the system
+		// call itself: ovid/io has no func that takes a bare descriptor.
+		zero := func() *ir.Node { return &ir.Node{ID: id("ex"), Op: "int", ValK: 1, Int: 0} }
+		mark := &ir.Node{ID: id("ex"), Op: "syscall", Args: []*ir.Node{
+			{ID: id("ex"), Op: "int", ValK: 1, Int: 1},
+			{ID: id("ex"), Op: "int", ValK: 1, Int: returnedFD},
+			{ID: id("ex"), Op: "strptr", ValK: 3, Str: "r"},
+			{ID: id("ex"), Op: "int", ValK: 1, Int: 1},
+			zero(), zero(), zero()}}
+		body = append(body, &ir.Node{ID: id("st"), Op: "if", Cond: cond, Then: []*ir.Node{
+			{ID: id("st"), Op: "assign", Name: "r", Val: call},
+			{ID: id("st"), Op: "expr", Val: mark},
+			{ID: id("st"), Op: "return", Val: &ir.Node{ID: id("ex"), Op: "name", Name: "r"}}}})
 	}
 	body = append(body, &ir.Node{ID: id("st"), Op: "return", Val: &ir.Node{ID: id("ex"), Op: "int", ValK: 1, Int: 99}})
 	pkg.Funcs = []ir.Func{{ID: "fn:" + testPkg + ".main", Name: "main",

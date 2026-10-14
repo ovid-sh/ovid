@@ -94,6 +94,7 @@ func (c *corpusCase) sortedFiles() []string {
 type runWant struct {
 	exit   int
 	stdout string
+	stdin  string
 	args   []string
 }
 
@@ -124,6 +125,12 @@ func (c *corpusCase) runWant() (runWant, error) {
 					return w, fmt.Errorf("%s: stdout wants a quoted string, got %s", at, v)
 				}
 				w.stdout += s
+			} else if v, ok := directive(line, "stdin"); ok {
+				s, err := strconv.Unquote(v)
+				if err != nil {
+					return w, fmt.Errorf("%s: stdin wants a quoted string, got %s", at, v)
+				}
+				w.stdin += s
 			} else if v, ok := directive(line, "args"); ok {
 				w.args = append(w.args, strings.Fields(v)...)
 			}
@@ -151,6 +158,7 @@ func TestCorpusRun(t *testing.T) {
 			}
 			var stdout, stderr bytes.Buffer
 			cmd := exec.Command(bin, want.args...)
+			cmd.Stdin = strings.NewReader(want.stdin)
 			cmd.Stdout, cmd.Stderr = &stdout, &stderr
 			exit := 0
 			if err := cmd.Run(); err != nil {
@@ -178,21 +186,22 @@ func TestCorpusRun(t *testing.T) {
 }
 
 // wantErr is one `// error: code [col] [expected="..."] [got="..."]
-// [hint="..."]` comment: a diagnostic with that code is expected on the
-// comment's own line, with those fields when they are given.
+// [hint="..."] [message="..."]` comment: a diagnostic with that code is
+// expected on the comment's own line, with those fields when they are
+// given.
 type wantErr struct {
 	file  string // module-relative
 	line  int
 	col   int // 0: any
 	code  string
-	attrs map[string]string // expected, got, hint
+	attrs map[string]string // expected, got, hint, message
 	text  string            // the comment after "// error: ", for messages
 }
 
 var (
 	// errDirective matches all of what follows one "// error:".
-	errDirective = regexp.MustCompile(`^ ([a-z_]+)(?: (\d+))?((?: (?:expected|got|hint)="(?:[^"\\]|\\.)*")*)\s*$`)
-	errAttr      = regexp.MustCompile(` (expected|got|hint)=("(?:[^"\\]|\\.)*")`)
+	errDirective = regexp.MustCompile(`^ ([a-z_]+)(?: (\d+))?((?: (?:expected|got|hint|message)="(?:[^"\\]|\\.)*")*)\s*$`)
+	errAttr      = regexp.MustCompile(` (expected|got|hint|message)=("(?:[^"\\]|\\.)*")`)
 )
 
 func (c *corpusCase) wantErrs() ([]wantErr, error) {
@@ -204,7 +213,7 @@ func (c *corpusCase) wantErrs() ([]wantErr, error) {
 			for _, seg := range strings.Split(line, "// error:")[1:] {
 				m := errDirective.FindStringSubmatch(seg)
 				if m == nil {
-					return nil, fmt.Errorf("%s:%d: malformed comment `// error:%s`; want: code [col] [expected=\"...\"] [got=\"...\"] [hint=\"...\"]",
+					return nil, fmt.Errorf("%s:%d: malformed comment `// error:%s`; want: code [col] [expected=\"...\"] [got=\"...\"] [hint=\"...\"] [message=\"...\"]",
 						c.shown[rel], i+1, strings.TrimRight(seg, " "))
 				}
 				col, _ := strconv.Atoi(m[2])
@@ -224,6 +233,50 @@ func (c *corpusCase) wantErrs() ([]wantErr, error) {
 	return ws, nil
 }
 
+// diag is one reported error, its file made module-relative.
+type diag struct {
+	Fact, Code, Message, File string
+	Line, Col                 int
+	Expected, Got, Hint       string
+}
+
+// attrs is d's optional fields, written as a comment gives them.
+func attrs(d diag) string {
+	s := ""
+	for _, kv := range [][2]string{{"expected", d.Expected}, {"got", d.Got}, {"hint", d.Hint}} {
+		if kv[1] != "" {
+			s += fmt.Sprintf(" %s=%q", kv[0], kv[1])
+		}
+	}
+	return s
+}
+
+// diags reads the errors out of a check's JSON lines.
+func (c *corpusCase) diags(t *testing.T, out string) []diag {
+	t.Helper()
+	var got []diag
+	for _, ln := range strings.Split(strings.TrimSpace(out), "\n") {
+		var d diag
+		if err := json.Unmarshal([]byte(ln), &d); err != nil {
+			t.Fatalf("not JSON: %q", ln)
+		}
+		if d.Fact == "truncated" {
+			t.Fatalf("tests/%s: more than %d errors", c.name, maxErrors)
+		}
+		if d.Fact == "error" {
+			// Diagnostics name files relative to the working
+			// directory; make them module-relative like wants.
+			if abs, err := filepath.Abs(d.File); err == nil {
+				if rel, err := filepath.Rel(c.root, abs); err == nil && c.files[filepath.ToSlash(rel)] != "" {
+					d.File = filepath.ToSlash(rel)
+				}
+			}
+			got = append(got, d)
+		}
+	}
+	return got
+}
+
 // TestCorpusFail checks every program of tests/fail: the diagnostics must be
 // exactly the ones its "// error:" comments name.
 func TestCorpusFail(t *testing.T) {
@@ -238,41 +291,7 @@ func TestCorpusFail(t *testing.T) {
 			}
 			var b bytes.Buffer
 			Check(c.root, false, &b)
-			type diag struct {
-				Fact, Code, Message, File string
-				Line, Col                 int
-				Expected, Got, Hint       string
-			}
-			// attrs is d's optional fields, written as a comment gives them.
-			attrs := func(d diag) string {
-				s := ""
-				for _, kv := range [][2]string{{"expected", d.Expected}, {"got", d.Got}, {"hint", d.Hint}} {
-					if kv[1] != "" {
-						s += fmt.Sprintf(" %s=%q", kv[0], kv[1])
-					}
-				}
-				return s
-			}
-			var got []diag
-			for _, ln := range strings.Split(strings.TrimSpace(b.String()), "\n") {
-				var d diag
-				if err := json.Unmarshal([]byte(ln), &d); err != nil {
-					t.Fatalf("not JSON: %q", ln)
-				}
-				if d.Fact == "truncated" {
-					t.Fatalf("tests/%s: more than %d errors", c.name, maxErrors)
-				}
-				if d.Fact == "error" {
-					// Diagnostics name files relative to the working
-					// directory; make them module-relative like wants.
-					if abs, err := filepath.Abs(d.File); err == nil {
-						if rel, err := filepath.Rel(c.root, abs); err == nil && c.files[filepath.ToSlash(rel)] != "" {
-							d.File = filepath.ToSlash(rel)
-						}
-					}
-					got = append(got, d)
-				}
-			}
+			got := c.diags(t, b.String())
 			var diff []string
 			met := make([]bool, len(wants))
 			for _, d := range got {
@@ -284,7 +303,7 @@ func TestCorpusFail(t *testing.T) {
 					here := d.Line == 0 || (d.Line == w.line && d.File == w.file)
 					same := true
 					for k, v := range w.attrs {
-						same = same && v == map[string]string{"expected": d.Expected, "got": d.Got, "hint": d.Hint}[k]
+						same = same && v == map[string]string{"expected": d.Expected, "got": d.Got, "hint": d.Hint, "message": d.Message}[k]
 					}
 					if !met[i] && d.Code == w.code && here && same && (w.col == 0 || d.Line == 0 || d.Col == w.col) {
 						met[i], found = true, true
@@ -308,18 +327,18 @@ func TestCorpusFail(t *testing.T) {
 }
 
 // TestCorpusDirectives: a run case with a second exit is refused, while
-// stdout and args add up across lines.
+// stdout, stdin, and args add up across lines.
 func TestCorpusDirectives(t *testing.T) {
 	c := corpusCase{
-		files: map[string]string{"demo/main.ov": "// exit: 1\n// stdout: \"a\"\n// stdout: \"b\\n\"\n// args: x\n// args: y z\n"},
+		files: map[string]string{"demo/main.ov": "// exit: 1\n// stdout: \"a\"\n// stdout: \"b\\n\"\n// args: x\n// args: y z\n// stdin: \"p\\r\\n\"\n// stdin: \"q\"\n"},
 		shown: map[string]string{"demo/main.ov": "run/d.ov"},
 	}
 	w, err := c.runWant()
-	if err != nil || w.exit != 1 || w.stdout != "ab\n" || strings.Join(w.args, ",") != "x,y,z" {
-		t.Fatalf("want exit 1, stdout \"ab\\n\", args x,y,z; got %+v, %v", w, err)
+	if err != nil || w.exit != 1 || w.stdout != "ab\n" || strings.Join(w.args, ",") != "x,y,z" || w.stdin != "p\r\nq" {
+		t.Fatalf("want exit 1, stdout \"ab\\n\", args x,y,z, stdin \"p\\r\\nq\"; got %+v, %v", w, err)
 	}
 	c.files["demo/main.ov"] += "// exit: 2\n"
-	if _, err := c.runWant(); err == nil || err.Error() != "run/d.ov:6: a second exit, after run/d.ov:1" {
+	if _, err := c.runWant(); err == nil || err.Error() != "run/d.ov:8: a second exit, after run/d.ov:1" {
 		t.Fatalf("second exit: %v", err)
 	}
 }

@@ -1,0 +1,746 @@
+package ovid/http
+
+import ovid/io
+import ovid/mem
+
+// A program that serves is a handler: it is given a request and fills in
+// a response, and never sees a listener or a connection (#127). The host
+// around it is a few lines of main. The stdio host reads requests one
+// after another from standard input and writes each response to standard
+// output, and between two of them gives back the heap the last one used:
+//
+//   func main(io *ovid/io.Cap) i64 {
+//     var s *ovid/http.Stdio = ovid/http.NewStdio(io)
+//     var m *ovid/io.HeapMark = ovid/io.MarkHeap(io)
+//     var req *ovid/http.Request = ovid/http.NextStdio(io, s)
+//     while req != 0 as *ovid/http.Request {
+//       var res *ovid/http.Response = ovid/http.NewResponse(io)
+//       var result i64 = 0
+//       if ovid/http.Err(req) == 0 {
+//         result = handle(io, req, res)
+//       }
+//       if ovid/http.WriteStdio(io, req, res, result) != 0 {
+//         return 1
+//       }
+//       ovid/io.ResetHeap(io, m)
+//       req = ovid/http.NextStdio(io, s)
+//     }
+//     return 0
+//   }
+//
+// Bodies are buffered: the whole request is read before the handler runs,
+// and the response is held until it returns.
+
+// Request is an HTTP request. Read it through the funcs below, not its
+// fields. The method, target, header lines, and body are bytes; the
+// header lines are "Name: value\r\n" each, as they arrived.
+type Request struct {
+  method bytes
+  target bytes
+  hdr bytes
+  body bytes
+  err i64
+}
+
+// Response is what the handler fills in. The host writes the framing
+// (status line, Content-Length); the handler sets the rest.
+type Response struct {
+  status i64
+  hdr *ovid/mem.Buf
+  body *ovid/mem.Buf
+}
+
+// Err values: why a request could not be read. The stdio host answers
+// each with the status named.
+const ERR_SYNTAX i64 = 1
+const ERR_TOO_LARGE i64 = 2
+const ERR_UNSUPPORTED i64 = 3
+
+// MAX_REQUEST is the most bytes a request read from standard input takes,
+// head and body together.
+const MAX_REQUEST i64 = 8 << 20
+
+// Stdio reads requests from standard input. Its buffer holds, from start
+// to len, the request being served and what was read past it; outside
+// that range it is all zeros. The request being served takes used bytes;
+// scan is how far the search for the end of a head has looked; in is
+// standard input.
+type Stdio struct {
+  in *ovid/io.File
+  buf i64
+  start i64
+  len i64
+  used i64
+  scan i64
+  eof i64
+  done bool
+}
+
+// Method is the request method ("GET").
+func Method(r *Request) bytes {
+  return r.method
+}
+
+// MethodIs reports whether the method is lit:
+// ovid/http.MethodIs(req, "GET").
+func MethodIs(r *Request, lit bytes) bool {
+  return ovid/mem.Eq(r.method, lit)
+}
+
+// Path is the request target up to "?", not percent-decoded.
+func Path(r *Request) bytes {
+  var i i64 = 0
+  while i < len(r.target) && r.target[i] != 63 {
+    i = i + 1
+  }
+  return r.target[0:i]
+}
+
+// PathIs reports whether the path is lit.
+func PathIs(r *Request, lit bytes) bool {
+  return ovid/mem.Eq(Path(r), lit)
+}
+
+// Query is what follows "?" in the target, or empty.
+func Query(r *Request) bytes {
+  var p i64 = len(Path(r))
+  if p < len(r.target) {
+    return r.target[p + 1:len(r.target)]
+  }
+  return r.target[p:p]
+}
+
+// Body is the request body.
+func Body(r *Request) bytes {
+  return r.body
+}
+
+// Err is 0 for a request that was read whole, else an ERR_ value. The
+// other funcs of a request with an error see empty values.
+func Err(r *Request) i64 {
+  return r.err
+}
+
+// Header is the value of the first header named name (any case), with
+// surrounding blanks removed, or empty when there is none; HasHeader
+// tells the two apart.
+func Header(r *Request, name bytes) bytes {
+  return headerIn(r.hdr, name)
+}
+
+func HasHeader(r *Request, name bytes) bool {
+  return findHeader(r.hdr, name) >= 0
+}
+
+// NewRequest is a request with no headers and no body, made by hand: a
+// test hands it to the handler directly, with no host and no network.
+func NewRequest(io *ovid/io.Cap, method bytes, target bytes) *Request {
+  var r *Request = ovid/io.Alloc(io, sizeof(Request)) as *Request
+  r.method = copyOf(io, method)
+  r.target = copyOf(io, target)
+  r.hdr = ovid/io.AllocBytes(io, 0)
+  r.body = ovid/io.AllocBytes(io, 0)
+  return r
+}
+
+// AddHeader appends a header to a request made with NewRequest. It
+// returns 0, or -1 (and adds nothing) when the name or value is not one
+// a header can carry.
+func AddHeader(io *ovid/io.Cap, r *Request, name bytes, val bytes) i64 {
+  if !validName(name) || !validValue(val) {
+    return -1
+  }
+  var b *ovid/mem.Buf = ovid/mem.New(io, (len(r.hdr) + len(name)) + (len(val) + 4))
+  ovid/mem.WBytes(io, b, r.hdr)
+  putHeader(io, b, name, val)
+  r.hdr = ovid/mem.Bytes(b)
+  return 0
+}
+
+// SetBody replaces the body of a request made with NewRequest.
+func SetBody(io *ovid/io.Cap, r *Request, body bytes) i64 {
+  r.body = copyOf(io, body)
+  return 0
+}
+
+// NewResponse is an empty response with status 200.
+func NewResponse(io *ovid/io.Cap) *Response {
+  var res *Response = ovid/io.Alloc(io, sizeof(Response)) as *Response
+  res.status = 200
+  res.hdr = ovid/mem.New(io, 64)
+  res.body = ovid/mem.New(io, 256)
+  return res
+}
+
+// SetStatus sets the status code. It returns 0, or -1 (and changes
+// nothing) for a code outside 100 to 599.
+func SetStatus(res *Response, code i64) i64 {
+  if code < 100 || code > 599 {
+    return -1
+  }
+  res.status = code
+  return 0
+}
+
+// SetHeader adds a header to the response. It returns 0, or -1 (and adds
+// nothing) when the name or value is not one a header can carry: an empty
+// name, a byte outside a name's token characters, a control byte other
+// than tab (CR and LF among them) or DEL in the value. Content-Length and
+// Transfer-Encoding frame the body, which is the host's to do, so they
+// are refused too.
+func SetHeader(io *ovid/io.Cap, res *Response, name bytes, val bytes) i64 {
+  if !validName(name) || !validValue(val) {
+    return -1
+  }
+  if lowerEq(name, "content-length") || lowerEq(name, "transfer-encoding") {
+    return -1
+  }
+  putHeader(io, res.hdr, name, val)
+  return 0
+}
+
+// Write appends b to the response body and returns 0.
+func Write(io *ovid/io.Cap, res *Response, b bytes) i64 {
+  return ovid/mem.WBytes(io, res.body, b)
+}
+
+// WriteInt appends v in decimal to the response body and returns 0.
+func WriteInt(io *ovid/io.Cap, res *Response, v i64) i64 {
+  var d i64 = ovid/io.Alloc(io, 56)
+  return ovid/mem.WBytes(io, res.body, bytes(d, ovid/mem.FormatI64(d, v)))
+}
+
+// Status is the response's status code.
+func Status(res *Response) i64 {
+  return res.status
+}
+
+// Sent is the response body so far. A test reads what the handler wrote
+// through it.
+func Sent(res *Response) bytes {
+  return ovid/mem.Bytes(res.body)
+}
+
+// SentHeader and HasSentHeader are Header and HasHeader for the headers
+// the handler set.
+func SentHeader(res *Response, name bytes) bytes {
+  return headerIn(ovid/mem.Bytes(res.hdr), name)
+}
+
+func HasSentHeader(res *Response, name bytes) bool {
+  return findHeader(ovid/mem.Bytes(res.hdr), name) >= 0
+}
+
+// NewStdio is a reader of the requests on standard input. Make it before
+// any heap mark: its buffer must outlive every reset.
+func NewStdio(io *ovid/io.Cap) *Stdio {
+  var s *Stdio = ovid/io.Alloc(io, sizeof(Stdio)) as *Stdio
+  s.in = ovid/io.Stdin(io)
+  // One byte past MAX_REQUEST tells a head of exactly the limit from one
+  // over it, and no read goes past it. The pages are not touched until a
+  // request reaches them.
+  s.buf = ovid/io.Alloc(io, MAX_REQUEST + 1)
+  return s
+}
+
+// NextStdio reads the next HTTP/1.1 request from standard input: the
+// request line and header lines, each ending in CRLF, an empty line, then
+// a body of Content-Length bytes, or none without it. What follows is the
+// next request. At the end of the input it returns 0. A request that
+// cannot be read comes back with Err set, its handler should not run, and
+// it is the last: the requests after it cannot be told apart. The request
+// points into the reader's buffer until the next call, which drops it and
+// zeroes the bytes it took.
+func NextStdio(io *ovid/io.Cap, s *Stdio) *Request {
+  if s.done {
+    return 0 as *Request
+  }
+  if s.used > 0 {
+    zero(s.buf + s.start, s.used)
+    s.start = s.start + s.used
+    s.used = 0
+    s.scan = 0
+  }
+  var max i64 = MAX_REQUEST + 1
+  var h i64 = headEnd(s)
+  while h < 0 && (s.len - s.start) < max && s.eof == 0 {
+    fill(s, max)
+    h = headEnd(s)
+  }
+  if h < 0 && s.len == s.start && s.eof == 1 {
+    s.done = true
+    return 0 as *Request
+  }
+  var r *Request = ovid/io.Alloc(io, sizeof(Request)) as *Request
+  s.done = true
+  if h < 0 {
+    // The input ended, or could not be read, inside a head; or the head
+    // is longer than a request may be.
+    r.err = ERR_SYNTAX
+    if (s.len - s.start) >= max {
+      r.err = ERR_TOO_LARGE
+    }
+    return r
+  }
+  var bl i64 = bodyLen(bytes(s.buf + s.start, h))
+  if bl == -2 || (bl >= 0 && (h + bl) > MAX_REQUEST) {
+    r.err = ERR_TOO_LARGE
+    return r
+  }
+  if bl < 0 {
+    if Parse(r, bytes(s.buf + s.start, h)) == 0 {
+      r.err = ERR_SYNTAX
+    }
+    return r
+  }
+  while (s.len - s.start) < (h + bl) && s.eof == 0 {
+    fill(s, h + bl)
+  }
+  if (s.len - s.start) < (h + bl) {
+    r.err = ERR_SYNTAX
+    return r
+  }
+  s.used = h + bl
+  // From s.start again: fill may have moved the request to the front of
+  // the buffer.
+  s.done = Parse(r, bytes(s.buf + s.start, h + bl)) != 0
+  return r
+}
+
+// ReadStdio is the first request NextStdio reads; what follows it is
+// ignored. Empty input is a request with Err set, not 0.
+func ReadStdio(io *ovid/io.Cap) *Request {
+  var r *Request = NextStdio(io, NewStdio(io))
+  if r == 0 as *Request {
+    r = ovid/io.Alloc(io, sizeof(Request)) as *Request
+    r.err = ERR_SYNTAX
+  }
+  return r
+}
+
+// fill reads more of standard input into s, up to want bytes from start.
+// When the buffer has no room for them, what is left of it moves to the
+// front first, and the bytes it leaves are zeroed. At the end of the input
+// s.eof is 1, and 2 when it could not be read.
+func fill(s *Stdio, want i64) i64 {
+  if (s.start + want) > (MAX_REQUEST + 1) {
+    var rest i64 = s.len - s.start
+    ovid/mem.CopyN(s.buf, s.buf + s.start, rest)
+    zero(s.buf + rest, s.start)
+    s.len = rest
+    s.start = 0
+  }
+  var n i64, e i64 = ovid/io.Read(s.in, bytes(s.buf + s.len, (s.start + want) - s.len))
+  if e != 0 {
+    s.eof = 2
+    return 0
+  }
+  if n > 0 {
+    s.len = s.len + n
+  } else {
+    s.eof = 1
+  }
+  return n
+}
+
+// headEnd is the offset from start just past the empty line that ends the
+// head there, or -1 when it has not been read yet. A search resumes where
+// the last one stopped.
+func headEnd(s *Stdio) i64 {
+  var p bytes = bytes(s.buf + s.start, s.len - s.start)
+  var i i64 = s.scan
+  while (i + 3) < len(p) {
+    if p[i] == 13 && p[i + 1] == 10 && p[i + 2] == 13 && p[i + 3] == 10 {
+      return i + 4
+    }
+    i = i + 1
+  }
+  s.scan = i
+  return -1
+}
+
+// bodyLen is the Content-Length of the head, 0 without one, -2 when it
+// is more than MAX_REQUEST, and -1 when it is not a number or the head is
+// not one Parse would take.
+func bodyLen(head bytes) i64 {
+  var eol i64 = lineEnd(head, 0)
+  if eol < 0 {
+    return -1
+  }
+  var hs i64 = eol + 2
+  if (len(head) - 2) <= hs {
+    return 0
+  }
+  var h bytes = head[hs:len(head) - 2]
+  var cl i64 = findHeader(h, "content-length")
+  if cl < 0 {
+    return 0
+  }
+  return parseLen(value(h, cl))
+}
+
+// zero clears the n bytes at p.
+func zero(p i64, n i64) i64 {
+  var i i64 = 0
+  while i < n {
+    store8(p + i, 0)
+    i = i + 1
+  }
+  return 0
+}
+
+// Parse fills r from a whole request and returns 0; r points into those
+// bytes afterwards. For bytes that are not a request it returns an ERR_
+// value, which Err reports too, and r is left empty.
+func Parse(r *Request, req bytes) i64 {
+  var e i64 = parse(r, req)
+  if e != 0 {
+    var none bytes = req[0:0]
+    r.method = none
+    r.target = none
+    r.hdr = none
+    r.body = none
+  }
+  r.err = e
+  return e
+}
+
+func parse(r *Request, p bytes) i64 {
+  var eol i64 = lineEnd(p, 0)
+  if eol < 0 {
+    return ERR_SYNTAX
+  }
+  // METHOD SP target SP HTTP/1.x
+  var sp1 i64 = 0
+  while sp1 < eol && tchar(p[sp1]) {
+    sp1 = sp1 + 1
+  }
+  if sp1 == 0 || sp1 >= eol || p[sp1] != 32 {
+    return ERR_SYNTAX
+  }
+  var sp2 i64 = sp1 + 1
+  while sp2 < eol && p[sp2] > 32 && p[sp2] < 127 {
+    sp2 = sp2 + 1
+  }
+  if sp2 == (sp1 + 1) || sp2 >= eol || p[sp2] != 32 {
+    return ERR_SYNTAX
+  }
+  var version bytes = p[sp2 + 1:eol]
+  if !ovid/mem.Eq(version, "HTTP/1.1") && !ovid/mem.Eq(version, "HTTP/1.0") {
+    return ERR_SYNTAX
+  }
+  // Header lines up to the empty one. Each is "name:" then a value with
+  // no control byte but tab; a line starting with a blank (obsolete
+  // folding) is refused.
+  var hs i64 = eol + 2
+  var at i64 = hs
+  var end i64 = lineEnd(p, at)
+  while end > at {
+    var c i64 = at
+    while c < end && tchar(p[c]) {
+      c = c + 1
+    }
+    if c == at || c >= end || p[c] != 58 {
+      return ERR_SYNTAX
+    }
+    if !validValue(p[c + 1:end]) {
+      return ERR_SYNTAX
+    }
+    at = end + 2
+    end = lineEnd(p, at)
+  }
+  if end < 0 {
+    return ERR_SYNTAX
+  }
+  r.method = p[0:sp1]
+  r.target = p[sp1 + 1:sp2]
+  r.hdr = p[hs:at]
+  var bs i64 = at + 2
+  if findHeader(r.hdr, "transfer-encoding") >= 0 {
+    return ERR_UNSUPPORTED
+  }
+  var cl i64 = findHeader(r.hdr, "content-length")
+  if cl < 0 {
+    r.body = p[bs:len(p)]
+    return 0
+  }
+  // A second Content-Length is refused, even an equal one.
+  var after i64 = cl
+  while r.hdr[after] != 10 {
+    after = after + 1
+  }
+  after = after + 1
+  if findHeader(r.hdr[after:len(r.hdr)], "content-length") >= 0 {
+    return ERR_SYNTAX
+  }
+  var bl i64 = parseLen(value(r.hdr, cl))
+  if bl < 0 || bl > (len(p) - bs) {
+    return ERR_SYNTAX
+  }
+  r.body = p[bs:bs + bl]
+  return 0
+}
+
+// WriteStdio writes the response to standard output and returns the exit
+// code for main: 0 when it was written, 1 when it could not be. A request
+// with an error is answered with its status (400, 413, or 501), and a
+// handler result other than 0 with 500; both drop what the handler wrote.
+func WriteStdio(io *ovid/io.Cap, req *Request, res *Response, result i64) i64 {
+  var b *ovid/mem.Buf = Format(io, req, res, result)
+  if ovid/io.Write(ovid/io.Stdout(io), ovid/mem.Bytes(b)) != 0 {
+    return 1
+  }
+  return 0
+}
+
+// Format is the bytes WriteStdio writes. A 1xx, 204, 205, or 304
+// response, and the response to a HEAD request, is written without what
+// the handler wrote to its body: a 205 says Content-Length 0, and a HEAD
+// response the length the body would have had.
+func Format(io *ovid/io.Cap, req *Request, res *Response, result i64) *ovid/mem.Buf {
+  var status i64 = res.status
+  var hdr *ovid/mem.Buf = res.hdr
+  var body *ovid/mem.Buf = res.body
+  if req.err != 0 || result != 0 {
+    status = 500
+    if req.err == ERR_SYNTAX {
+      status = 400
+    } else if req.err == ERR_TOO_LARGE {
+      status = 413
+    } else if req.err == ERR_UNSUPPORTED {
+      status = 501
+    }
+    hdr = ovid/mem.New(io, 8)
+    body = ovid/mem.New(io, 8)
+  }
+  if status == 205 {
+    body = ovid/mem.New(io, 8)
+  }
+  var b *ovid/mem.Buf = ovid/mem.New(io, (hdr.len + body.len) + 128)
+  var d i64 = ovid/io.Alloc(io, 56)
+  ovid/mem.WBytes(io, b, "HTTP/1.1 ")
+  ovid/mem.WBytes(io, b, bytes(d, ovid/mem.FormatI64(d, status)))
+  ovid/mem.WByte(io, b, 32)
+  reason(io, b, status)
+  ovid/mem.WBytes(io, b, "\r\n")
+  ovid/mem.WBytes(io, b, ovid/mem.Bytes(hdr))
+  // A 1xx, 204, or 304 response has no body and no Content-Length.
+  if status < 200 || status == 204 || status == 304 {
+    ovid/mem.WBytes(io, b, "\r\n")
+    return b
+  }
+  ovid/mem.WBytes(io, b, "Content-Length: ")
+  ovid/mem.WBytes(io, b, bytes(d, ovid/mem.FormatI64(d, body.len)))
+  ovid/mem.WBytes(io, b, "\r\n\r\n")
+  if req.err == 0 && MethodIs(req, "HEAD") {
+    return b
+  }
+  ovid/mem.WBytes(io, b, ovid/mem.Bytes(body))
+  return b
+}
+
+// reason appends the reason phrase of a common status, or nothing: the
+// phrase may be empty.
+func reason(io *ovid/io.Cap, b *ovid/mem.Buf, s i64) i64 {
+  if s == 200 {
+    return ovid/mem.WBytes(io, b, "OK")
+  } else if s == 201 {
+    return ovid/mem.WBytes(io, b, "Created")
+  } else if s == 204 {
+    return ovid/mem.WBytes(io, b, "No Content")
+  } else if s == 205 {
+    return ovid/mem.WBytes(io, b, "Reset Content")
+  } else if s == 301 {
+    return ovid/mem.WBytes(io, b, "Moved Permanently")
+  } else if s == 302 {
+    return ovid/mem.WBytes(io, b, "Found")
+  } else if s == 304 {
+    return ovid/mem.WBytes(io, b, "Not Modified")
+  } else if s == 400 {
+    return ovid/mem.WBytes(io, b, "Bad Request")
+  } else if s == 403 {
+    return ovid/mem.WBytes(io, b, "Forbidden")
+  } else if s == 404 {
+    return ovid/mem.WBytes(io, b, "Not Found")
+  } else if s == 405 {
+    return ovid/mem.WBytes(io, b, "Method Not Allowed")
+  } else if s == 413 {
+    return ovid/mem.WBytes(io, b, "Content Too Large")
+  } else if s == 500 {
+    return ovid/mem.WBytes(io, b, "Internal Server Error")
+  } else if s == 501 {
+    return ovid/mem.WBytes(io, b, "Not Implemented")
+  }
+  return 0
+}
+
+// lineEnd is the offset of the CRLF that ends the line starting at off,
+// or -1 when there is none. A bare CR or LF in the line is -1 too.
+func lineEnd(p bytes, off i64) i64 {
+  var i i64 = off
+  while (i + 1) < len(p) {
+    var c i64 = p[i]
+    if c == 13 {
+      if p[i + 1] == 10 {
+        return i
+      }
+      return -1
+    }
+    if c == 10 {
+      return -1
+    }
+    i = i + 1
+  }
+  return -1
+}
+
+// findHeader is the offset of the header line named name (any case) among
+// the "Name: value\r\n" lines h, or -1.
+func findHeader(h bytes, name bytes) i64 {
+  var at i64 = 0
+  while at < len(h) {
+    var c i64 = at
+    while c < len(h) && h[c] != 58 {
+      c = c + 1
+    }
+    if lowerEq(h[at:c], name) {
+      return at
+    }
+    while at < len(h) && h[at] != 10 {
+      at = at + 1
+    }
+    at = at + 1
+  }
+  return -1
+}
+
+// headerIn is the value of the header named name among the lines h, or
+// empty.
+func headerIn(h bytes, name bytes) bytes {
+  var at i64 = findHeader(h, name)
+  if at < 0 {
+    return h[0:0]
+  }
+  return value(h, at)
+}
+
+// value is the value of the header line at off among the lines h: past
+// the colon and any blanks, before any trailing blanks and the CRLF.
+func value(h bytes, off i64) bytes {
+  var i i64 = off
+  while i < len(h) && h[i] != 58 {
+    i = i + 1
+  }
+  i = i + 1
+  while i < len(h) && (h[i] == 32 || h[i] == 9) {
+    i = i + 1
+  }
+  var e i64 = i
+  while e < len(h) && h[e] != 13 {
+    e = e + 1
+  }
+  while e > i && (h[e - 1] == 32 || h[e - 1] == 9) {
+    e = e - 1
+  }
+  return h[i:e]
+}
+
+// putHeader appends "name: value\r\n" to b.
+func putHeader(io *ovid/io.Cap, b *ovid/mem.Buf, name bytes, val bytes) i64 {
+  ovid/mem.WBytes(io, b, name)
+  ovid/mem.WBytes(io, b, ": ")
+  ovid/mem.WBytes(io, b, val)
+  return ovid/mem.WBytes(io, b, "\r\n")
+}
+
+// lowerEq compares a with b, ignoring the case of ASCII letters.
+func lowerEq(a bytes, b bytes) bool {
+  if len(a) != len(b) {
+    return false
+  }
+  var i i64 = 0
+  while i < len(a) {
+    if lower(a[i]) != lower(b[i]) {
+      return false
+    }
+    i = i + 1
+  }
+  return true
+}
+
+func lower(c i64) i64 {
+  if c >= 65 && c <= 90 {
+    return c + 32
+  }
+  return c
+}
+
+// tchar reports whether c may appear in a token (a method or header
+// name): letters, digits, and !#$%&'*+-.^_`|~.
+func tchar(c i64) bool {
+  if (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) {
+    return true
+  }
+  return c == 33 || c == 35 || c == 36 || c == 37 || c == 38 || c == 39 || c == 42 || c == 43 || c == 45 || c == 46 || c == 94 || c == 95 || c == 96 || c == 124 || c == 126
+}
+
+func validName(name bytes) bool {
+  if len(name) <= 0 {
+    return false
+  }
+  var i i64 = 0
+  while i < len(name) {
+    if !tchar(name[i]) {
+      return false
+    }
+    i = i + 1
+  }
+  return true
+}
+
+// validValue reports whether v can be a field value: visible ASCII,
+// space, tab, and bytes from 0x80 up. Every other control byte (CR, LF,
+// and NUL among them) and DEL are refused.
+func validValue(v bytes) bool {
+  var i i64 = 0
+  while i < len(v) {
+    var c i64 = v[i]
+    if (c < 32 && c != 9) || c == 127 {
+      return false
+    }
+    i = i + 1
+  }
+  return true
+}
+
+// parseLen is the decimal number in s, -1 when it is not all digits, or
+// -2 when the number is past MAX_REQUEST.
+func parseLen(s bytes) i64 {
+  if len(s) <= 0 {
+    return -1
+  }
+  var v i64 = 0
+  var i i64 = 0
+  while i < len(s) {
+    var c i64 = s[i]
+    if c < 48 || c > 57 {
+      return -1
+    }
+    // Past the limit v stops growing, so it cannot overflow.
+    if v <= MAX_REQUEST {
+      v = (v * 10) + (c - 48)
+    }
+    i = i + 1
+  }
+  if v > MAX_REQUEST {
+    return -2
+  }
+  return v
+}
+
+// copyOf is a copy of b in fresh memory, NUL-terminated past the end.
+func copyOf(io *ovid/io.Cap, b bytes) bytes {
+  var d bytes = ovid/io.AllocBytes(io, len(b) + 1)
+  ovid/mem.Copy(d, b)
+  return d[0:len(b)]
+}

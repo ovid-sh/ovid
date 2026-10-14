@@ -1,0 +1,14 @@
+// stdin: "GET / HTTP/1.1\r\n\r\n"
+// stdout: "HTTP/1.1 200 OK\r\nContent-Length: 1\r\n\r\n7"
+package demo
+
+import ovid/io
+import ovid/http
+import ovid/servemain
+
+// The stdio host written around handle joins this package, so it does
+// not collide with ovid/servemain, nor with that package's main.
+func handle(io *ovid/io.Cap, req *ovid/http.Request, res *ovid/http.Response) i64 {
+  ovid/http.WriteInt(io, res, ovid/servemain.main(io))
+  return 0
+}

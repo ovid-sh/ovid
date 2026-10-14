@@ -4,20 +4,27 @@ package check
 
 import (
 	"fmt"
+	"io/fs"
+	"path"
+	"slices"
 	"sort"
 	"strings"
 
 	"ovid/internal/ir"
+	"ovid/std"
 )
 
-// Issue is one error. ID names the node; the caller maps it to a location.
+// Issue is one error. ID names the node; the caller maps it to a location,
+// unless At gives one: a repeated decl shares its id with the first, so the
+// id would point there.
 type Issue struct {
-	Code     string `json:"code"`
-	ID       string `json:"id,omitempty"`
-	Message  string `json:"message"`
-	Expected string `json:"expected,omitempty"`
-	Got      string `json:"got,omitempty"`
-	Hint     string `json:"hint,omitempty"`
+	Code     string   `json:"code"`
+	ID       string   `json:"id,omitempty"`
+	At       *ir.Span `json:"-"`
+	Message  string   `json:"message"`
+	Expected string   `json:"expected,omitempty"`
+	Got      string   `json:"got,omitempty"`
+	Hint     string   `json:"hint,omitempty"`
 }
 
 // Fact is a declaration-level fact (types, layouts, signatures).
@@ -28,17 +35,33 @@ type Result struct {
 	Facts  []Fact
 	// Types maps expression ids to their checked type.
 	Types map[string]string
+	// Uses lists every name the checker resolved to a declaration, in the
+	// order it checked them.
+	Uses  []Use
 	Funcs int
+}
+
+// Use is one name in source that resolves to a declaration. Span is the name
+// token alone (T in *path.T, F in path.F(), x in p.x), so a rename of Target
+// rewrites exactly Span.
+type Use struct {
+	Target string  // the declaration: fn:, ty:, fld:, cn:, pa:, or a var's st: id
+	ID     string  // the node that spells it: an expression, statement, field, param, or func
+	Kind   string  // call, field, setfield, name, assign, type, result
+	In     string  // the type or func the use sits in
+	Span   ir.Span // the name token
 }
 
 type sig struct {
 	params []string
 	names  []string
 	result string
+	two    bool // the func also returns an error code (i64)
 	id     string
 }
 
 type checker struct {
+	loops    int // the whiles the statement being checked is in
 	r        *Result
 	pkgs     map[string]*ir.Package
 	sigs     map[string]sig
@@ -46,9 +69,30 @@ type checker struct {
 	fn       *ir.Func
 	imported map[string]bool
 	res      string
+	two      bool              // the func being checked returns two results
+	recv     bool              // the call being checked is received by a var2 or assign2
+	dup      map[*ir.Func]bool // funcs whose name was already declared
+	dupName  map[string]bool   // those funcs, as pkg.Name
+	lean     bool              // record no Types and no Uses
 }
 
 func (c *checker) issue(is Issue) { c.r.Issues = append(c.r.Issues, is) }
+
+func (c *checker) use(target, id, kind, in string, sp ir.Span) {
+	if c.lean {
+		return
+	}
+	c.r.Uses = append(c.r.Uses, Use{Target: target, ID: id, Kind: kind, In: in, Span: sp})
+}
+
+// useType records a use of the struct type t resolves to, if it is one.
+func (c *checker) useType(t, id, kind, in string, sp ir.Span) {
+	t = strings.TrimPrefix(t, "*")
+	if t == "" || t == "i64" || t == "bool" || t == "bytes" || t == "invalid" {
+		return
+	}
+	c.use("ty:"+t, id, kind, in, sp)
+}
 
 func (c *checker) err(id, code, msg string) {
 	c.issue(Issue{Code: code, ID: id, Message: msg})
@@ -58,10 +102,18 @@ func (c *checker) mismatch(id, what, got, want string) {
 	c.issue(Issue{Code: "type_mismatch", ID: id, Message: fmt.Sprintf("%s: got %s, want %s", what, got, want), Expected: want, Got: got})
 }
 
-// Run checks p.
-func Run(p *ir.Program) *Result {
+// Run checks p and records, besides the issues, the type of every
+// expression and every use the checker resolved.
+func Run(p *ir.Program) *Result { return run(p, false) }
+
+// Errors checks p for its issues only: Types and Uses stay empty. That is
+// all check, build, run, test, and an edit's before and after need, and the
+// two tables are a seventh of a checked module's memory.
+func Errors(p *ir.Program) *Result { return run(p, true) }
+
+func run(p *ir.Program, lean bool) *Result {
 	r := &Result{Types: map[string]string{}}
-	c := &checker{r: r, pkgs: map[string]*ir.Package{}, sigs: map[string]sig{}}
+	c := &checker{r: r, pkgs: map[string]*ir.Package{}, sigs: map[string]sig{}, dup: map[*ir.Func]bool{}, dupName: map[string]bool{}, lean: lean}
 	if strings.TrimSpace(p.Module) == "" {
 		c.err("", "bad_module", "ovid.mod has no module line")
 	}
@@ -87,15 +139,49 @@ func Run(p *ir.Program) *Result {
 	for i := range p.Packages {
 		pkg := &p.Packages[i]
 		c.pkg = pkg
-		seen := map[string]string{}
-		decl := func(id, name string) {
-			claim(id)
-			if prev, ok := seen[name]; ok {
-				c.err(id, "duplicate_name", fmt.Sprintf("%s is already declared in package %s (%s)", name, pkg.Path, prev))
-			}
-			seen[name] = id
+		// first is the decl of each name that comes first in the source,
+		// whatever its kind: consts, types, and funcs share the names.
+		type firstDecl struct {
+			id string
+			at ir.Span
 		}
+		first := map[string]firstDecl{}
+		note := func(id, name string, at ir.Span) {
+			f, ok := first[name]
+			if !ok || at.File < f.at.File || (at.File == f.at.File && at.Off < f.at.Off) {
+				first[name] = firstDecl{id, at}
+			}
+		}
+		for _, cn := range pkg.Consts {
+			note(cn.ID, cn.Name, cn.Span)
+		}
+		for _, t := range pkg.Types {
+			note(t.ID, t.Name, t.Span)
+		}
+		for fi := range pkg.Funcs {
+			note(pkg.Funcs[fi].ID, pkg.Funcs[fi].Name, pkg.Funcs[fi].Span)
+		}
+		// decl reports whether this is the first decl of name in the
+		// package. A later one gets one error, at that decl, and nothing
+		// else about it is checked: its id may be the first decl's, so its
+		// fields, params, and statements could be reported at the wrong
+		// place.
+		decl := func(id, name string, at ir.Span) bool {
+			if f := first[name]; f.at != at {
+				c.issue(Issue{Code: "duplicate_name", ID: id, At: &at,
+					Message: fmt.Sprintf("%s is already declared in package %s (%s)", name, pkg.Path, f.id)})
+				return false
+			}
+			claim(id)
+			return true
+		}
+		iseen := map[string]bool{}
 		for _, im := range pkg.Imports {
+			if iseen[im.Path] {
+				c.issue(Issue{Code: "duplicate_name", ID: im.ID, At: &im.Span, Message: im.Path + " is imported twice"})
+				continue
+			}
+			iseen[im.Path] = true
 			claim(im.ID)
 			if im.Path == pkg.Path {
 				c.err(im.ID, "import_self", "package "+pkg.Path+" imports itself")
@@ -105,41 +191,68 @@ func Run(p *ir.Program) *Result {
 			}
 		}
 		for _, cn := range pkg.Consts {
-			decl(cn.ID, cn.Name)
+			// The consts its value names, folded by the parser, are uses.
+			for _, u := range cn.Uses {
+				c.use("cn:"+pkg.Path+"."+u.Name, cn.ID, "name", cn.ID, u.Span)
+			}
+			if !decl(cn.ID, cn.Name, cn.Span) {
+				continue
+			}
+			if cn.Table {
+				c.r.Facts = append(c.r.Facts, Fact{"fact": "table", "id": cn.ID, "len": len(cn.Values)})
+				continue
+			}
 			c.r.Facts = append(c.r.Facts, Fact{"fact": "const", "id": cn.ID, "value": cn.Value})
 			if cn.Type != "i64" {
 				c.err(cn.ID, "bad_type", "const must be i64")
 			}
 		}
 		for _, t := range pkg.Types {
-			decl(t.ID, t.Name)
-			c.r.Facts = append(c.r.Facts, Fact{"fact": "type", "id": t.ID, "fields": len(t.Fields), "size": len(t.Fields) * 8})
+			if !decl(t.ID, t.Name, t.Span) {
+				continue
+			}
+			c.r.Facts = append(c.r.Facts, Fact{"fact": "type", "id": t.ID, "fields": len(t.Fields), "size": SizeOf(t.Fields)})
 			fseen := map[string]bool{}
-			for i, f := range t.Fields {
-				claim(f.ID)
+			off := 0
+			for _, f := range t.Fields {
 				if fseen[f.Name] {
-					c.err(f.ID, "duplicate_name", "field "+f.Name+" is declared twice")
+					c.issue(Issue{Code: "duplicate_name", ID: f.ID, At: &f.Span, Message: "field " + f.Name + " is declared twice"})
+					continue
 				}
+				claim(f.ID)
 				fseen[f.Name] = true
 				ft, err := c.resolve(f.Type)
-				c.r.Facts = append(c.r.Facts, Fact{"fact": "field", "id": f.ID, "type": ft, "offset": i * 8})
+				c.r.Facts = append(c.r.Facts, Fact{"fact": "field", "id": f.ID, "type": ft, "offset": off})
+				off += fieldSize(f.Type)
 				if err != nil {
 					c.err(f.ID, "bad_type", err.Error())
 				} else if !scalar(ft) {
 					c.err(f.ID, "struct_value", "field must be i64, bool, or a pointer; write *"+ft)
 				}
+				c.useType(ft, f.ID, "type", t.ID, f.TypeSpan)
 			}
 		}
 		for fi := range pkg.Funcs {
 			fn := &pkg.Funcs[fi]
-			decl(fn.ID, fn.Name)
+			if !decl(fn.ID, fn.Name, fn.Span) {
+				c.dup[fn] = true
+				c.dupName[pkg.Path+"."+fn.Name] = true
+				continue
+			}
 			c.r.Funcs++
-			if len(fn.Params) > 6 {
-				c.err(fn.ID, "arity", fmt.Sprintf("%s has %d parameters; at most 6", fn.Name, len(fn.Params)))
+			// A bytes param is two words, and six words go in registers.
+			if w := paramWords(fn.Params); w > 6 {
+				c.issue(Issue{Code: "arity", ID: fn.ID, Message: fmt.Sprintf("%s has %d parameter words; at most 6", fn.Name, w),
+					Hint: "a bytes param counts two; pass a struct pointer for the rest"})
 			}
 			var ps, names []string
+			pseen := map[string]bool{}
 			for _, pa := range fn.Params {
-				claim(pa.ID)
+				// A repeated param is reported by checkBody.
+				if !pseen[pa.Name] {
+					claim(pa.ID)
+				}
+				pseen[pa.Name] = true
 				pt, err := c.resolve(pa.Type)
 				if err != nil {
 					c.err(pa.ID, "bad_type", err.Error())
@@ -147,6 +260,7 @@ func Run(p *ir.Program) *Result {
 				} else if !scalar(pt) {
 					c.err(pa.ID, "struct_value", "parameter must be i64, bool, or a pointer; write *"+pt)
 				}
+				c.useType(pt, pa.ID, "type", fn.ID, pa.TypeSpan)
 				ps = append(ps, pt)
 				names = append(names, pa.Name)
 			}
@@ -157,7 +271,8 @@ func Run(p *ir.Program) *Result {
 			} else if !scalar(rt) {
 				c.err(fn.ID, "struct_value", "result must be i64, bool, or a pointer; write *"+rt)
 			}
-			c.sigs[pkg.Path+"."+fn.Name] = sig{params: ps, names: names, result: rt, id: fn.ID}
+			c.useType(rt, fn.ID, "result", fn.ID, fn.ResultSpan)
+			c.sigs[pkg.Path+"."+fn.Name] = sig{params: ps, names: names, result: rt, two: fn.Result2 != "", id: fn.ID}
 			c.r.Facts = append(c.r.Facts, Fact{"fact": "func", "id": fn.ID, "sig": Signature(pkg.Path, fn)})
 			for _, st := range fn.Body {
 				st.Walk(func(n *ir.Node) { claim(n.ID) })
@@ -165,6 +280,7 @@ func Run(p *ir.Program) *Result {
 		}
 	}
 
+	c.checkCycles(p)
 	c.checkEntry(p)
 
 	for i := range p.Packages {
@@ -175,14 +291,194 @@ func Run(p *ir.Program) *Result {
 			c.imported[im.Path] = true
 		}
 		for fi := range pkg.Funcs {
-			c.checkBody(&pkg.Funcs[fi])
+			if !c.dup[&pkg.Funcs[fi]] {
+				c.checkBody(&pkg.Funcs[fi])
+			}
 		}
 	}
 	return r
 }
 
-// StdHint lists the packages the toolchain ships.
-var StdHint = []string{"ovid/io", "ovid/mem"}
+// StdHint lists the packages the toolchain ships: every directory of the
+// embedded std that holds a .ov file.
+var StdHint = stdPackages()
+
+func stdPackages() []string {
+	var pkgs []string
+	fs.WalkDir(std.FS, ".", func(p string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() && strings.HasSuffix(p, ".ov") {
+			if dir := path.Dir(p); !slices.Contains(pkgs, dir) {
+				pkgs = append(pkgs, dir)
+			}
+		}
+		return nil
+	})
+	sort.Strings(pkgs)
+	return pkgs
+}
+
+// checkCycles reports import_cycle once for each cycle whose lexically
+// least package is root: at the first import of root, in source order,
+// that leads back to root through packages whose paths sort after it.
+// Packages must form a DAG, so that each can be checked and compiled once
+// its imports are.
+//
+// The root walk below costs up to the whole graph per root, so it runs
+// only where it can report: a cycle lies entirely within one strongly
+// connected component of the import graph, so a root alone in its
+// component (a self-import is import_self's, not a cycle) reports
+// nothing, and the walk from a root never needs a package outside the
+// root's component. A package the walk could enter from the root that
+// is outside the component cannot reach the root, nor, since everything
+// that reaches the root's component reaches the root, any package in
+// it: walking into it only marks packages the walk never needs, so
+// skipping it changes neither whether the walk returns true nor the path
+// it finds. The components are found once, in time linear in the
+// packages and imports, so a valid module costs that and nothing more.
+// It returns the steps taken (component edges plus walk imports), which
+// a test bounds.
+func (c *checker) checkCycles(p *ir.Program) int {
+	// The graph's nodes are the packages c.pkgs resolves paths to; a
+	// repeated package's other copies are roots only, walked unpruned.
+	idx := map[string]int{}
+	var nodes []*ir.Package
+	for i := range p.Packages {
+		if pkg := &p.Packages[i]; c.pkgs[pkg.Path] == pkg {
+			idx[pkg.Path] = len(nodes)
+			nodes = append(nodes, pkg)
+		}
+	}
+	comp, size, steps := sccs(nodes, idx)
+	for i := range p.Packages {
+		root := &p.Packages[i]
+		in := -1
+		if c.pkgs[root.Path] == root {
+			in = comp[idx[root.Path]]
+			if size[in] == 1 {
+				continue
+			}
+		}
+		steps += c.checkCycle(root, func(path string) bool { return in < 0 || comp[idx[path]] == in })
+	}
+	return steps
+}
+
+// sccs numbers the strongly connected components of the import graph on
+// nodes (imports of unknown packages dropped) with Tarjan's algorithm,
+// iteratively so a long import chain cannot exhaust the stack. It returns
+// each node's component, each component's size, and the edges followed.
+func sccs(nodes []*ir.Package, idx map[string]int) (comp, size []int, steps int) {
+	n := len(nodes)
+	adj := make([][]int, n)
+	for v, pkg := range nodes {
+		for _, im := range pkg.Imports {
+			if w, ok := idx[im.Path]; ok {
+				adj[v] = append(adj[v], w)
+			}
+		}
+	}
+	order := make([]int, n) // 1 + the visit number; 0 is unvisited
+	low := make([]int, n)
+	on := make([]bool, n)
+	comp = make([]int, n)
+	var stack []int
+	type frame struct{ v, e int }
+	var call []frame
+	visited := 0
+	visit := func(v int) {
+		visited++
+		order[v], low[v] = visited, visited
+		stack = append(stack, v)
+		on[v] = true
+		call = append(call, frame{v, 0})
+	}
+	for s := range nodes {
+		if order[s] != 0 {
+			continue
+		}
+		visit(s)
+		for len(call) > 0 {
+			f := &call[len(call)-1]
+			v := f.v
+			if f.e < len(adj[v]) {
+				w := adj[v][f.e]
+				f.e++
+				steps++
+				if order[w] == 0 {
+					visit(w)
+				} else if on[w] && order[w] < low[v] {
+					low[v] = order[w]
+				}
+				continue
+			}
+			call = call[:len(call)-1]
+			if len(call) > 0 {
+				if u := call[len(call)-1].v; low[v] < low[u] {
+					low[u] = low[v]
+				}
+			}
+			if low[v] == order[v] {
+				k, cnt := len(size), 0
+				for {
+					w := stack[len(stack)-1]
+					stack = stack[:len(stack)-1]
+					on[w] = false
+					comp[w] = k
+					cnt++
+					if w == v {
+						break
+					}
+				}
+				size = append(size, cnt)
+			}
+		}
+	}
+	return comp, size, steps
+}
+
+// checkCycle reports root's cycle, if it has one, walking imports in
+// source order, so it finds the same cycle path whatever order the
+// packages were loaded in; keep says which packages the walk may enter.
+// It returns the imports it looked at.
+func (c *checker) checkCycle(root *ir.Package, keep func(path string) bool) int {
+	seen := map[string]bool{}
+	steps := 0
+	var path []string
+	var walk func(pkg *ir.Package) bool
+	walk = func(pkg *ir.Package) bool {
+		if seen[pkg.Path] {
+			return false
+		}
+		seen[pkg.Path] = true
+		path = append(path, pkg.Path)
+		for _, im := range pkg.Imports {
+			steps++
+			if im.Path == root.Path {
+				path = append(path, root.Path)
+				return true
+			}
+			if next, ok := c.pkgs[im.Path]; ok && im.Path > root.Path && keep(im.Path) && walk(next) {
+				return true
+			}
+		}
+		path = path[:len(path)-1]
+		return false
+	}
+	for _, im := range root.Imports {
+		steps++
+		next, ok := c.pkgs[im.Path]
+		if !ok || im.Path <= root.Path || !keep(im.Path) {
+			continue
+		}
+		path = []string{root.Path}
+		if walk(next) {
+			c.issue(Issue{Code: "import_cycle", ID: im.ID, Message: "import cycle: " + strings.Join(path, " -> "),
+				Hint: "packages may not import each other, directly or through others; move what they share into a package both import"})
+			return steps
+		}
+	}
+	return steps
+}
 
 func (c *checker) checkEntry(p *ir.Program) {
 	ep, ok := c.pkgs[p.Entry]
@@ -192,23 +488,47 @@ func (c *checker) checkEntry(p *ir.Program) {
 	}
 	var main *ir.Func
 	for i := range ep.Funcs {
-		if ep.Funcs[i].Name == "main" {
+		// A repeated main is already reported and not checked further.
+		if ep.Funcs[i].Name == "main" && !c.dup[&ep.Funcs[i]] {
 			main = &ep.Funcs[i]
 		}
 	}
 	want := "func main(io *ovid/io.Cap) i64"
 	if main == nil {
-		c.issue(Issue{Code: "bad_main", ID: ep.ID, Message: "entry package has no main", Expected: want})
-		return
-	}
-	c.pkg = ep
-	pt := ""
-	if len(main.Params) == 1 {
-		pt, _ = c.resolve(main.Params[0].Type)
-	}
-	res, _ := c.resolve(main.Result)
-	if len(main.Params) != 1 || pt != "*ovid/io.Cap" || res != "i64" {
-		c.issue(Issue{Code: "bad_main", ID: main.ID, Message: "main has the wrong signature", Expected: want, Got: Signature(ep.Path, main)})
+		// With no main, a handle is the entry: build writes the stdio host
+		// around it (tool.serveProgram).
+		var handle *ir.Func
+		for i := range ep.Funcs {
+			if ep.Funcs[i].Name == "handle" && !c.dup[&ep.Funcs[i]] {
+				handle = &ep.Funcs[i]
+			}
+		}
+		if handle == nil {
+			c.issue(Issue{Code: "bad_main", ID: ep.ID, Message: "entry package has no main", Expected: want})
+			return
+		}
+		c.pkg = ep
+		hw := "func handle(io *ovid/io.Cap, req *ovid/http.Request, res *ovid/http.Response) i64"
+		ok := len(handle.Params) == 3
+		for i, t := range []string{"*ovid/io.Cap", "*ovid/http.Request", "*ovid/http.Response"} {
+			if ok {
+				pt, _ := c.resolve(handle.Params[i].Type)
+				ok = pt == t
+			}
+		}
+		if res, _ := c.resolve(handle.Result); !ok || res != "i64" || handle.Result2 != "" {
+			c.issue(Issue{Code: "bad_handler", ID: handle.ID, Message: "handle has the wrong signature", Expected: hw, Got: Signature(ep.Path, handle)})
+		}
+	} else {
+		c.pkg = ep
+		pt := ""
+		if len(main.Params) == 1 {
+			pt, _ = c.resolve(main.Params[0].Type)
+		}
+		res, _ := c.resolve(main.Result)
+		if len(main.Params) != 1 || pt != "*ovid/io.Cap" || res != "i64" || main.Result2 != "" {
+			c.issue(Issue{Code: "bad_main", ID: main.ID, Message: "main has the wrong signature", Expected: want, Got: Signature(ep.Path, main)})
+		}
 	}
 	if io, ok := c.pkgs["ovid/io"]; ok {
 		var capTy *ir.TypeDecl
@@ -221,16 +541,45 @@ func (c *checker) checkEntry(p *ir.Program) {
 			c.err(io.ID, "bad_abi", "ovid/io has no type Cap")
 			return
 		}
-		need := []string{"argc", "argv", "heap", "used", "size"}
+		need := []string{"argc", "argv", "heap", "used", "size", "maps"}
 		for i, n := range need {
 			if i >= len(capTy.Fields) || capTy.Fields[i].Name != n || capTy.Fields[i].Type != "i64" {
-				c.issue(Issue{Code: "bad_abi", ID: capTy.ID, Message: "the runtime fills Cap's first five fields", Expected: "argc, argv, heap, used, size (all i64, in order)"})
+				c.issue(Issue{Code: "bad_abi", ID: capTy.ID, Message: "the runtime fills Cap's first six fields", Expected: "argc, argv, heap, used, size, maps (all i64, in order)"})
 				return
 			}
 		}
 	} else {
 		c.issue(Issue{Code: "bad_abi", Message: "missing package ovid/io", Hint: "import ovid/io; the toolchain ships it"})
 	}
+}
+
+// SizeOf is the byte size of a struct with the fields fs: 8 per field,
+// 16 for a bytes, which the lowering splits in two.
+func SizeOf(fs []ir.Field) int {
+	n := 0
+	for _, f := range fs {
+		n += fieldSize(f.Type)
+	}
+	return n
+}
+
+func fieldSize(t string) int {
+	if t == "bytes" {
+		return 16
+	}
+	return 8
+}
+
+// paramWords counts the register words of params: two for a bytes.
+func paramWords(ps []ir.Param) int {
+	w := 0
+	for _, pa := range ps {
+		w++
+		if pa.Type == "bytes" {
+			w++
+		}
+	}
+	return w
 }
 
 // Signature renders fn the way it is written in source.
@@ -248,6 +597,10 @@ func Signature(pkg string, fn *ir.Func) string {
 		b.WriteString(ShowType(pkg, pa.Type))
 	}
 	b.WriteString(") ")
+	if fn.Result2 != "" {
+		b.WriteString("(" + ShowType(pkg, fn.Result) + ", " + fn.Result2 + ")")
+		return b.String()
+	}
 	b.WriteString(ShowType(pkg, fn.Result))
 	return b.String()
 }
@@ -262,7 +615,7 @@ func ShowType(pkg, t string) string {
 }
 
 func scalar(t string) bool {
-	return t == "i64" || t == "bool" || strings.HasPrefix(t, "*") || t == "invalid"
+	return t == "i64" || t == "bool" || t == "bytes" || strings.HasPrefix(t, "*") || t == "invalid"
 }
 
 // resolve turns a source type into its full form (i64, bool, pkg.T, *pkg.T).
@@ -271,12 +624,12 @@ func (c *checker) resolve(t string) (string, error) {
 }
 
 func Resolve(pkg *ir.Package, t string, pkgs map[string]*ir.Package) (string, error) {
-	if t == "i64" || t == "bool" {
+	if t == "i64" || t == "bool" || t == "bytes" {
 		return t, nil
 	}
 	star := strings.HasPrefix(t, "*")
 	t = strings.TrimPrefix(t, "*")
-	if t == "i64" || t == "bool" {
+	if t == "i64" || t == "bool" || t == "bytes" {
 		return "", fmt.Errorf("cannot point at %s; use i64 for a raw address", t)
 	}
 	tpkg, name := pkg.Path, t
@@ -310,16 +663,32 @@ func Resolve(pkg *ir.Package, t string, pkgs map[string]*ir.Package) (string, er
 
 type env struct {
 	vars map[string]string
+	ids  map[string]string // name -> the pa: or st: id that declared it
 	up   *env
 }
 
+func newEnv(up *env) *env {
+	return &env{vars: map[string]string{}, ids: map[string]string{}, up: up}
+}
+
 func (e *env) get(name string) (string, bool) {
+	t, _, ok := e.lookup(name)
+	return t, ok
+}
+
+// lookup returns a local's type and the id of its declaration.
+func (e *env) lookup(name string) (string, string, bool) {
 	for ; e != nil; e = e.up {
 		if t, ok := e.vars[name]; ok {
-			return t, true
+			return t, e.ids[name], true
 		}
 	}
-	return "", false
+	return "", "", false
+}
+
+func (e *env) bind(name, t, id string) {
+	e.vars[name] = t
+	e.ids[name] = id
 }
 
 func (e *env) names() []string {
@@ -334,21 +703,22 @@ func (e *env) names() []string {
 
 func (c *checker) checkBody(fn *ir.Func) {
 	c.fn = fn
-	e := &env{vars: map[string]string{}}
+	e := newEnv(nil)
 	for _, pa := range fn.Params {
 		if _, ok := e.vars[pa.Name]; ok {
-			c.err(pa.ID, "duplicate_name", "parameter "+pa.Name+" is declared twice")
+			c.issue(Issue{Code: "duplicate_name", ID: pa.ID, At: &pa.Span, Message: "parameter " + pa.Name + " is declared twice"})
 		}
 		t, err := c.resolve(pa.Type)
 		if err != nil {
 			t = "invalid"
 		}
-		e.vars[pa.Name] = t
+		e.bind(pa.Name, t, pa.ID)
 	}
 	c.res, _ = c.resolve(fn.Result)
 	if c.res == "" {
 		c.res = "invalid"
 	}
+	c.two = fn.Result2 != ""
 	c.stmts(e, fn.Body)
 	if !pathsReturn(fn.Body) {
 		c.issue(Issue{Code: "missing_return", ID: fn.ID, Message: fn.Name + ": not every path ends in return",
@@ -388,6 +758,7 @@ func (c *checker) stmt(e *env, s *ir.Node) {
 		} else if !scalar(t) {
 			c.err(s.ID, "struct_value", "local must be i64, bool, or a pointer; write *"+t)
 		}
+		c.useType(t, s.ID, "type", c.fn.ID, s.TypeSpan)
 		if _, ok := e.get(s.Name); ok {
 			c.err(s.ID, "duplicate_name", s.Name+" is already declared in this function; assign with `"+s.Name+" = ...` instead")
 		}
@@ -397,25 +768,107 @@ func (c *checker) stmt(e *env, s *ir.Node) {
 				c.mismatch(s.Val.ID, "var "+s.Name, vt, t)
 			}
 		}
-		e.vars[s.Name] = t
+		e.bind(s.Name, t, s.ID)
 	case "assign":
-		t, ok := e.get(s.Name)
+		t, id, ok := e.lookup(s.Name)
 		if !ok {
 			c.unknownName(s.ID, s.Name, e)
 			t = "invalid"
+		} else {
+			c.use(id, s.ID, "assign", c.fn.ID, s.NameSpan)
 		}
 		vt := c.expr(e, s.Val)
 		if vt != t && vt != "invalid" && t != "invalid" {
 			c.mismatch(s.Val.ID, "assign to "+s.Name, vt, t)
 		}
+	case "var2", "assign2":
+		// Each name's type: declared (var2) or the local's (assign2); "_"
+		// takes anything. The call's results must match them in order.
+		ts := [2]string{}
+		for i, name := range []string{s.Name, s.Two.Name} {
+			if name == "_" {
+				ts[i] = "_"
+				continue
+			}
+			if i == 1 && name == s.Name {
+				c.err(s.ID, "duplicate_name", name+" receives both results; give the error code its own name, or _")
+			}
+			if s.Op == "var2" {
+				typ, sp := s.Type, s.TypeSpan
+				if i == 1 {
+					typ, sp = s.Two.Type, s.Two.TypeSpan
+				}
+				t, err := c.resolve(typ)
+				if err != nil {
+					c.err(s.ID, "bad_type", err.Error())
+					t = "invalid"
+				} else if !scalar(t) {
+					c.err(s.ID, "struct_value", "local must be i64, bool, or a pointer; write *"+t)
+				}
+				c.useType(t, s.ID, "type", c.fn.ID, sp)
+				if _, ok := e.get(name); ok {
+					c.err(s.ID, "duplicate_name", name+" is already declared in this function; assign with `"+name+" = ...` instead")
+				}
+				ts[i] = t
+			} else {
+				sp := s.NameSpan
+				if i == 1 {
+					sp = s.Two.NameSpan
+				}
+				t, id, ok := e.lookup(name)
+				if !ok {
+					c.unknownName(s.ID, name, e)
+					t = "invalid"
+				} else {
+					c.use(id, s.ID, "assign", c.fn.ID, sp)
+				}
+				ts[i] = t
+			}
+		}
+		// Only a call that is the whole value is received; a two-result
+		// call nested in an expression is used as one value.
+		sg, direct := c.callSig(s.Val)
+		c.recv = direct && sg.two
+		vt := c.expr(e, s.Val)
+		c.recv = false
+		if !direct || !sg.two {
+			if vt != "invalid" {
+				c.issue(Issue{Code: "arity", ID: s.Val.ID, Message: "two names receive one value",
+					Expected: "a call to a func with two results", Got: "one value",
+					Hint: "only a func declared (T, i64) returns two results"})
+			}
+		} else {
+			for i, want := range []string{sg.result, "i64"} {
+				if ts[i] != "_" && ts[i] != "invalid" && want != "invalid" && ts[i] != want {
+					c.mismatch(s.Val.ID, []string{"first", "second"}[i]+" result into "+[]string{s.Name, s.Two.Name}[i], want, ts[i])
+				}
+			}
+		}
+		if s.Op == "var2" {
+			for i, name := range []string{s.Name, s.Two.Name} {
+				if name != "_" {
+					e.bind(name, ts[i], s.ID)
+				}
+			}
+		}
 	case "setfield":
 		bt := c.expr(e, s.Base)
-		ft := c.field(s.ID, bt, s.Name)
+		ft := c.field(s, bt)
 		vt := c.expr(e, s.Val)
 		if vt != ft && vt != "invalid" && ft != "invalid" {
 			c.mismatch(s.Val.ID, "field "+s.Name, vt, ft)
 		}
-	case "store8", "store64":
+	case "setbyte":
+		if t := c.expr(e, s.Base); s.Base.Op != "byte" && t != "invalid" {
+			c.issue(Issue{Code: "bad_type", ID: s.Base.ID, Message: "only a byte of a bytes can be assigned", Got: t,
+				Hint: "b[i] = v with b a bytes; a table is read-only"})
+		}
+		c.want(e, s.Val, "i64", "stored byte")
+	case "store8", "store16", "store32", "store64":
+		if s.Addr == nil {
+			c.builtinArity(e, s, 2)
+			return
+		}
 		at := c.expr(e, s.Addr)
 		vt := c.expr(e, s.Val)
 		if at != "i64" && at != "invalid" {
@@ -431,21 +884,48 @@ func (c *checker) stmt(e *env, s *ir.Node) {
 			c.mismatch(s.ID, "return", "nothing", c.res)
 			return
 		}
+		// return f(...) forwards both results of a two-result call.
+		forward := false
+		if sg, ok := c.callSig(s.Val); ok && sg.two && c.two && s.Val2 == nil {
+			c.recv, forward = true, true
+		}
 		vt := c.expr(e, s.Val)
 		if vt != c.res && vt != "invalid" && c.res != "invalid" {
 			c.mismatch(s.Val.ID, "return value of "+c.fn.Name, vt, c.res)
+		}
+		if forward {
+			return
+		}
+		if s.Val2 != nil && !c.two {
+			c.issue(Issue{Code: "arity", ID: s.ID, Message: c.fn.Name + " returns one value", Expected: "1", Got: "2",
+				Hint: "declare the func (" + c.fn.Result + ", i64) to return an error code too"})
+		} else if s.Val2 == nil && c.two {
+			c.issue(Issue{Code: "arity", ID: s.ID, Message: c.fn.Name + " returns a value and an error code", Expected: "2", Got: "1",
+				Hint: "write return v, 0 on success and return 0, code on failure"})
+		}
+		if s.Val2 != nil {
+			if et := c.expr(e, s.Val2); et != "i64" && et != "invalid" {
+				c.mismatch(s.Val2.ID, "error code returned by "+c.fn.Name, et, "i64")
+			}
 		}
 	case "if":
 		if ct := c.expr(e, s.Cond); ct != "bool" && ct != "invalid" {
 			c.mismatch(s.Cond.ID, "if condition", ct, "bool")
 		}
-		c.stmts(&env{vars: map[string]string{}, up: e}, s.Then)
-		c.stmts(&env{vars: map[string]string{}, up: e}, s.Else)
+		c.stmts(newEnv(e), s.Then)
+		c.stmts(newEnv(e), s.Else)
 	case "while":
 		if ct := c.expr(e, s.Cond); ct != "bool" && ct != "invalid" {
 			c.mismatch(s.Cond.ID, "while condition", ct, "bool")
 		}
-		c.stmts(&env{vars: map[string]string{}, up: e}, s.Body)
+		c.loops++
+		c.stmts(newEnv(e), s.Body)
+		c.loops--
+	case "break", "continue":
+		// They end or restart the innermost while, so there must be one.
+		if c.loops == 0 {
+			c.err(s.ID, "outside_loop", s.Op+" is not inside a while")
+		}
 	default:
 		c.err(s.ID, "bad_op", "unknown statement op "+s.Op)
 	}
@@ -458,9 +938,6 @@ func (c *checker) unknownName(id, name string, e *env) {
 	}
 	is := Issue{Code: "unknown_name", ID: id, Message: "undefined: " + name}
 	switch name {
-	case "break", "continue":
-		is.Message = "there is no " + name
-		is.Hint = "loop on a flag instead: var more bool = true; while more { ... more = false }"
 	case "nil", "null":
 		is.Hint = "a null pointer is 0 as *T: var z i64 = 0, then z as *T"
 	default:
@@ -471,14 +948,29 @@ func (c *checker) unknownName(id, name string, e *env) {
 	c.issue(is)
 }
 
-func (c *checker) field(id, bt, name string) string {
+// field checks n.Name on a value of type bt, for a field or setfield node.
+// opaque reports whether t is a pointer to one of ovid/io's types seen from
+// outside ovid/io. Those types are handles on what the program may do
+// (allocate, read arguments, and whatever the library adds), and a handle is
+// only worth something if it cannot be forged or taken apart: so outside
+// ovid/io one cannot be made by a cast or turned into an address by one,
+// and its fields cannot be read or written.
+func (c *checker) opaque(t string) bool {
+	return strings.HasPrefix(t, "*ovid/io.") && !(c.pkg.Path == "ovid/io" && c.pkg.Sys)
+}
+
+func (c *checker) field(n *ir.Node, bt string) string {
 	if bt == "invalid" {
 		return "invalid"
 	}
-	ft, fields, err := FieldType(bt, name, c.pkgs)
+	if c.opaque(bt) {
+		c.issue(Issue{Code: "opaque_type", ID: n.ID, Message: "the fields of " + bt + " belong to ovid/io", Hint: "call an ovid/io func instead"})
+		return "invalid"
+	}
+	ft, fields, err := FieldType(bt, n.Name, c.pkgs)
 	if err != nil {
-		is := Issue{Code: "unknown_field", ID: id, Message: err.Error()}
-		if s := Suggest(name, fields); s != "" {
+		is := Issue{Code: "unknown_field", ID: n.ID, Message: err.Error()}
+		if s := Suggest(n.Name, fields); s != "" {
 			is.Hint = "did you mean " + s + "?"
 		} else if len(fields) > 0 {
 			is.Hint = "fields: " + strings.Join(fields, ", ")
@@ -486,6 +978,7 @@ func (c *checker) field(id, bt, name string) string {
 		c.issue(is)
 		return "invalid"
 	}
+	c.use("fld:"+strings.TrimPrefix(bt, "*")+"."+n.Name, n.ID, n.Op, c.fn.ID, n.NameSpan)
 	return ft
 }
 
@@ -495,7 +988,9 @@ func (c *checker) expr(e *env, n *ir.Node) string {
 		return "invalid"
 	}
 	t := c.expr0(e, n)
-	c.r.Types[n.ID] = t
+	if !c.lean {
+		c.r.Types[n.ID] = t
+	}
 	return t
 }
 
@@ -523,19 +1018,99 @@ func (c *checker) expr0(e *env, n *ir.Node) string {
 		if n.Pkg != "" && n.Pkg != c.pkg.Path {
 			return c.pkgConst(n)
 		}
-		if t, ok := e.get(n.Name); ok {
+		if t, id, ok := e.lookup(n.Name); ok {
+			c.use(id, n.ID, "name", c.fn.ID, n.NameSpan)
 			return t
 		}
-		for _, cn := range c.pkg.Consts {
-			if cn.Name == n.Name {
+		for i := range c.pkg.Consts {
+			if cn := &c.pkg.Consts[i]; cn.Name == n.Name {
+				c.use(cn.ID, n.ID, "name", c.fn.ID, n.NameSpan)
+				if cn.Table {
+					c.tableAsValue(n, cn)
+					return "invalid"
+				}
 				return "i64"
 			}
 		}
 		c.unknownName(n.ID, n.Name, e)
 		return "invalid"
+	case "str":
+		return "bytes"
+	case "bytes":
+		if n.Left == nil {
+			return c.builtinArity(e, n, 2)
+		}
+		c.want(e, n.Left, "i64", "address of bytes")
+		c.want(e, n.Right, "i64", "length of bytes")
+		return "bytes"
+	case "ptr":
+		if n.Arg == nil {
+			return c.builtinArity(e, n, 1)
+		}
+		c.want(e, n.Arg, "bytes", "operand of ptr")
+		return "i64"
+	case "byte":
+		c.want(e, n.Base, "bytes", "indexed value")
+		c.want(e, n.Arg, "i64", "index")
+		return "i64"
+	case "slice":
+		c.want(e, n.Base, "bytes", "sliced value")
+		c.want(e, n.Left, "i64", "low bound")
+		c.want(e, n.Right, "i64", "high bound")
+		return "bytes"
+	case "blen":
+		c.want(e, n.Base, "bytes", "operand of len")
+		return "i64"
+	case "index", "len":
+		// A param or local of the name shadows a table, as it does a const.
+		var cn *ir.Const
+		if t, id, ok := e.lookup(n.Name); ok && n.Pkg == "" && t == "bytes" {
+			// b[i] or len(b) on a bytes local: the node becomes the bytes
+			// form, with the parsed name node as its base.
+			c.use(id, n.ID, "name", c.fn.ID, n.NameSpan)
+			if !c.lean && n.Base != nil {
+				// The base is an expression show lists; its type, without
+				// a second use of the local.
+				c.r.Types[n.Base.ID] = "bytes"
+			}
+			if n.Op == "index" {
+				n.Op = "byte"
+				c.want(e, n.Arg, "i64", "index")
+				return "i64"
+			}
+			n.Op = "blen"
+			return "i64"
+		} else if _, id, ok := e.lookup(n.Name); ok && n.Pkg == "" {
+			c.use(id, n.ID, "name", c.fn.ID, n.NameSpan)
+			c.issue(Issue{Code: "bad_type", ID: n.ID, Message: n.Name + " is a variable, not a table",
+				Hint: "only a const declared [N]i64 can be indexed or measured"})
+		} else {
+			cn = c.table(n)
+		}
+		if n.Op == "index" {
+			c.want(e, n.Arg, "i64", "index of "+n.Name)
+		}
+		if cn == nil {
+			return "invalid"
+		}
+		if !c.lean && n.Base != nil {
+			// The base is an expression show lists: the table's type.
+			c.r.Types[n.Base.ID] = fmt.Sprintf("[%d]i64", len(cn.Values))
+		}
+		return "i64"
 	case "add", "sub", "mul", "div", "mod", "and", "or", "xor", "shl", "shr":
 		c.want(e, n.Left, "i64", "left of "+opText[n.Op])
 		c.want(e, n.Right, "i64", "right of "+opText[n.Op])
+		return "i64"
+	case "ushr", "umulhi", "udiv", "urem", "ult":
+		if n.Left == nil {
+			return c.builtinArity(e, n, 2)
+		}
+		c.want(e, n.Left, "i64", "argument 1 of "+n.Op)
+		c.want(e, n.Right, "i64", "argument 2 of "+n.Op)
+		if n.Op == "ult" {
+			return "bool"
+		}
 		return "i64"
 	case "lt", "le", "gt", "ge":
 		c.want(e, n.Left, "i64", "left of "+opText[n.Op])
@@ -546,6 +1121,8 @@ func (c *checker) expr0(e *env, n *ir.Node) string {
 		rt := c.expr(e, n.Right)
 		if lt != rt && lt != "invalid" && rt != "invalid" {
 			c.mismatch(n.Right.ID, "right of "+opText[n.Op], rt, lt)
+		} else if lt == "bytes" {
+			c.issue(Issue{Code: "bad_type", ID: n.ID, Message: "bytes cannot be compared with " + opText[n.Op], Hint: "ovid/mem.Eq(a, b) compares the bytes"})
 		}
 		return "bool"
 	case "land", "lor":
@@ -564,7 +1141,18 @@ func (c *checker) expr0(e *env, n *ir.Node) string {
 			c.err(n.ID, "bad_type", err.Error())
 			return "invalid"
 		}
+		c.useType(t, n.ID, "type", c.fn.ID, n.TypeSpan)
+		if c.opaque(t) {
+			c.issue(Issue{Code: "opaque_type", ID: n.ID, Message: "a " + t + " cannot be made by a cast", Hint: "ovid/io's types are handles: get one from main or from an ovid/io func"})
+		}
 		src := c.expr(e, n.Arg)
+		if t == "bytes" || src == "bytes" {
+			c.issue(Issue{Code: "bad_type", ID: n.ID, Message: "a bytes cannot be cast; it is an address and a length", Hint: "bytes(p, n) makes one; b[i] and len(b) read it"})
+			return t
+		}
+		if c.opaque(src) {
+			c.issue(Issue{Code: "opaque_type", ID: n.ID, Message: "a " + src + " cannot be cast: it is not an address to compute with", Hint: "ovid/io's types are handles: ask an ovid/io func about one"})
+		}
 		if src != "invalid" && !scalar(t) {
 			c.mismatch(n.ID, "cast", src, "i64, bool, or a pointer type")
 		}
@@ -574,16 +1162,24 @@ func (c *checker) expr0(e *env, n *ir.Node) string {
 			c.issue(Issue{Code: "bad_type", ID: n.ID, Message: "sizeof(" + n.Type + ") is always 8", Hint: "write 8; sizeof takes a struct type"})
 			return "i64"
 		}
-		if _, err := c.resolve(n.Type); err != nil {
+		if n.Type == "bytes" {
+			c.issue(Issue{Code: "bad_type", ID: n.ID, Message: "sizeof(bytes) is always 16", Hint: "write 16; sizeof takes a struct type"})
+			return "i64"
+		}
+		if t, err := c.resolve(n.Type); err != nil {
 			c.err(n.ID, "bad_type", err.Error())
+		} else {
+			c.useType(t, n.ID, "type", c.fn.ID, n.TypeSpan)
 		}
 		return "i64"
 	case "field":
-		return c.field(n.ID, c.expr(e, n.Base), n.Name)
+		return c.field(n, c.expr(e, n.Base))
 	case "call":
 		return c.call(e, n)
 	case "syscall":
-		if c.pkg.Path != "ovid/io" {
+		// The path alone is not enough: the package must be the one the
+		// toolchain ships, which a module cannot supply.
+		if c.pkg.Path != "ovid/io" || !c.pkg.Sys {
 			c.issue(Issue{Code: "syscall_forbidden", ID: n.ID, Message: "syscall is only valid in package ovid/io", Hint: "call an ovid/io function instead"})
 		}
 		if len(n.Args) != 7 {
@@ -593,24 +1189,105 @@ func (c *checker) expr0(e *env, n *ir.Node) string {
 			c.want(e, a, "i64", fmt.Sprintf("syscall argument %d", i+1))
 		}
 		return "i64"
-	case "load8", "load32", "load64":
+	case "load8", "load16", "load32", "load64":
+		if n.Arg == nil {
+			return c.builtinArity(e, n, 1)
+		}
 		c.want(e, n.Arg, "i64", n.Op+" address")
+		return "i64"
+	case "bswap16", "bswap32", "bswap64":
+		if n.Arg == nil {
+			return c.builtinArity(e, n, 1)
+		}
+		c.want(e, n.Arg, "i64", "operand of "+n.Op)
 		return "i64"
 	}
 	c.err(n.ID, "bad_op", "unknown expression op "+n.Op)
 	return "invalid"
 }
 
+// builtinForm is each builtin's form, the hint when it is called with
+// the wrong number of arguments.
+var builtinForm = map[string]string{
+	"load8": "load8(addr) i64", "load16": "load16(addr) i64", "load32": "load32(addr) i64", "load64": "load64(addr) i64",
+	"store8": "store8(addr, v)", "store16": "store16(addr, v)", "store32": "store32(addr, v)", "store64": "store64(addr, v)",
+	"bswap16": "bswap16(x) i64", "bswap32": "bswap32(x) i64", "bswap64": "bswap64(x) i64",
+	"ushr": "ushr(x, n) i64", "umulhi": "umulhi(a, b) i64", "udiv": "udiv(a, b) i64", "urem": "urem(a, b) i64", "ult": "ult(a, b) bool",
+	"bytes": "bytes(p, n) bytes", "ptr": "ptr(b) i64",
+}
+
+// builtinArity reports builtin n called with other than want arguments,
+// which the parser left under Args, checks those, and returns the
+// builtin's result type so nothing else is reported for the call.
+func (c *checker) builtinArity(e *env, n *ir.Node, want int) string {
+	s := "s"
+	if want == 1 {
+		s = ""
+	}
+	c.issue(Issue{Code: "arity", ID: n.ID, Message: fmt.Sprintf("%s takes %d argument%s, got %d", n.Op, want, s, len(n.Args)),
+		Expected: fmt.Sprint(want), Got: fmt.Sprint(len(n.Args)), Hint: builtinForm[n.Op]})
+	for _, a := range n.Args {
+		c.expr(e, a)
+	}
+	if n.Op == "ult" {
+		return "bool"
+	}
+	if n.Op == "bytes" {
+		return "bytes"
+	}
+	return "i64"
+}
+
 // pkgConst checks a reference to another package's const, path.Name.
+// tableAsValue reports a table used where a value is wanted.
+func (c *checker) tableAsValue(n *ir.Node, cn *ir.Const) {
+	c.issue(Issue{Code: "bad_type", ID: n.ID, Message: cn.Name + " is a table, not a value",
+		Hint: "read an element with " + cn.Name + "[i], or its length with len(" + cn.Name + ")"})
+}
+
+// table resolves the table an index or len node names, in this package or
+// the one it spells, reporting an unknown name or a const that is no table.
+func (c *checker) table(n *ir.Node) *ir.Const {
+	path := n.Pkg
+	if path == "" {
+		path = c.pkg.Path
+	}
+	pk := c.pkgs[path]
+	if pk != nil {
+		for i := range pk.Consts {
+			if cn := &pk.Consts[i]; cn.Name == n.Name {
+				c.use(cn.ID, n.ID, "name", c.fn.ID, n.NameSpan)
+				if !cn.Table {
+					c.issue(Issue{Code: "bad_type", ID: n.ID, Message: cn.Name + " is a const, not a table",
+						Hint: "only a const declared [N]i64 can be indexed or measured"})
+					return nil
+				}
+				return cn
+			}
+		}
+	}
+	is := Issue{Code: "unknown_name", ID: n.ID, Message: "undefined table " + path + "." + n.Name}
+	if pk == nil {
+		is.Hint = "there is no package " + path
+	}
+	c.issue(is)
+	return nil
+}
+
 func (c *checker) pkgConst(n *ir.Node) string {
 	pk := c.pkgs[n.Pkg]
 	var cands []string
 	if pk != nil {
-		for _, cn := range pk.Consts {
-			if cn.Name == n.Name {
+		for i := range pk.Consts {
+			if cn := &pk.Consts[i]; cn.Name == n.Name {
+				c.use(cn.ID, n.ID, "name", c.fn.ID, n.NameSpan)
+				if cn.Table {
+					c.tableAsValue(n, cn)
+					return "invalid"
+				}
 				return "i64"
 			}
-			cands = append(cands, cn.Name)
+			cands = append(cands, pk.Consts[i].Name)
 		}
 	}
 	is := Issue{Code: "unknown_name", ID: n.ID, Message: "undefined const " + n.Pkg + "." + n.Name}
@@ -627,13 +1304,31 @@ func (c *checker) pkgConst(n *ir.Node) string {
 
 func (c *checker) call(e *env, n *ir.Node) string {
 	path := n.Pkg
+	missing := false
 	if path == "" {
 		path = c.pkg.Path
 	} else if path != c.pkg.Path && !c.imported[path] {
+		missing = true
 		c.issue(Issue{Code: "missing_import", ID: n.ID, Message: "call to " + path + "." + n.Func + " but " + path + " is not imported",
 			Hint: "add `import " + path + "` after the package line"})
 	}
 	sg, ok := c.sigs[path+"."+n.Func]
+	if !ok && c.dupName[path+"."+n.Func] {
+		// The only func of this name repeats a const or type. That is
+		// reported there, and a call to it is not checked.
+		for _, a := range n.Args {
+			c.expr(e, a)
+		}
+		return "invalid"
+	}
+	if !ok && missing && c.pkgs[path] == nil {
+		// A package nothing imports is not loaded, so whether it has the
+		// func is unknown; the missing import is the whole report.
+		for _, a := range n.Args {
+			c.expr(e, a)
+		}
+		return "invalid"
+	}
 	if !ok {
 		var cands []string
 		if pk := c.pkgs[path]; pk != nil {
@@ -642,7 +1337,11 @@ func (c *checker) call(e *env, n *ir.Node) string {
 			}
 		}
 		is := Issue{Code: "unknown_name", ID: n.ID, Message: "undefined function " + path + "." + n.Func}
-		if s := Suggest(n.Func, cands); s != "" {
+		if other := c.elsewhere(path, n.Func); other != "" {
+			// The name exists one package over: the likelier slip, and
+			// its signature is the hint, as for a call that got there.
+			is.Hint = "did you mean " + other + "." + n.Func + "? " + c.sigText(other, n.Func)
+		} else if s := Suggest(n.Func, cands); s != "" {
 			is.Hint = "did you mean " + s + "?"
 		} else if c.pkgs[path] == nil {
 			is.Hint = "there is no package " + path
@@ -653,6 +1352,12 @@ func (c *checker) call(e *env, n *ir.Node) string {
 		}
 		return "invalid"
 	}
+	c.use(sg.id, n.ID, "call", c.fn.ID, n.NameSpan)
+	if sg.two && !c.recv {
+		c.issue(Issue{Code: "unused_result", ID: n.ID, Message: n.Func + " returns a value and an error code; only a var or an assignment of two names can receive them",
+			Hint: "var v " + sg.result + ", e i64 = " + n.Func + "(...), or _ for the one not needed"})
+	}
+	c.recv = false
 	if len(n.Args) != len(sg.params) {
 		c.issue(Issue{Code: "arity", ID: n.ID, Message: fmt.Sprintf("%s takes %d arguments, got %d", n.Func, len(sg.params), len(n.Args)),
 			Expected: fmt.Sprint(len(sg.params)), Got: fmt.Sprint(len(n.Args)), Hint: c.sigText(path, n.Func)})
@@ -666,6 +1371,38 @@ func (c *checker) call(e *env, n *ir.Node) string {
 		}
 	}
 	return sg.result
+}
+
+// callSig is the signature of the func a call node names, if it is a call
+// to a known func.
+func (c *checker) callSig(n *ir.Node) (sig, bool) {
+	if n == nil || n.Op != "call" {
+		return sig{}, false
+	}
+	path := n.Pkg
+	if path == "" {
+		path = c.pkg.Path
+	}
+	sg, ok := c.sigs[path+"."+n.Func]
+	return sg, ok
+}
+
+// elsewhere returns the path of a loaded package other than path that
+// declares a func named name, the lowest path when several do, or "".
+func (c *checker) elsewhere(path, name string) string {
+	found := ""
+	for p, pk := range c.pkgs {
+		if p == path || (found != "" && p > found) {
+			continue
+		}
+		for i := range pk.Funcs {
+			if pk.Funcs[i].Name == name {
+				found = p
+				break
+			}
+		}
+	}
+	return found
 }
 
 func (c *checker) sigText(path, name string) string {

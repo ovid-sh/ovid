@@ -12,9 +12,9 @@ import (
 
 var keywords = map[string]bool{
 	"package": true, "import": true, "const": true, "type": true, "struct": true, "func": true,
-	"var": true, "if": true, "else": true, "while": true, "return": true, "true": true, "false": true,
-	"as": true, "syscall": true, "load8": true, "load32": true, "load64": true, "store8": true,
-	"store64": true, "strptr": true, "strlen": true, "i64": true, "bool": true,
+	"var": true, "if": true, "else": true, "while": true, "break": true, "continue": true, "return": true, "true": true, "false": true,
+	"as": true, "syscall": true, "load8": true, "load16": true, "load32": true, "load64": true, "store8": true, "store16": true, "store32": true,
+	"store64": true, "bswap16": true, "bswap32": true, "bswap64": true, "ushr": true, "umulhi": true, "ult": true, "udiv": true, "urem": true, "strptr": true, "strlen": true, "i64": true, "bool": true,
 }
 
 func isIdent(s string) bool {
@@ -34,66 +34,15 @@ func identByte(c byte) bool {
 	return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
 }
 
-// tokens returns offsets of whole-word occurrences of name in src[lo:hi],
-// skipping string literals and comments.
-func tokens(src []byte, lo, hi int, name string) []int {
-	var out []int
-	for i := lo; i < hi; i++ {
-		c := src[i]
-		if c == '"' {
-			for i++; i < hi && src[i] != '"'; i++ {
-				if src[i] == '\\' {
-					i++
-				}
-			}
-			continue
-		}
-		if c == '/' && i+1 < hi && src[i+1] == '/' {
-			for i < hi && src[i] != '\n' {
-				i++
-			}
-			continue
-		}
-		if !identByte(c) || (i > 0 && identByte(src[i-1])) {
-			continue
-		}
-		j := i
-		for j < len(src) && identByte(src[j]) {
-			j++
-		}
-		if string(src[i:j]) == name && j <= hi {
-			out = append(out, i)
-		}
-		i = j - 1
-	}
-	return out
-}
-
-func prevByte(src []byte, off int) byte {
-	for off > 0 {
-		off--
-		if src[off] != ' ' && src[off] != '\t' {
-			return src[off]
-		}
-	}
-	return 0
-}
-
-func nextByte(src []byte, off int) byte {
-	for ; off < len(src); off++ {
-		if src[off] != ' ' && src[off] != '\t' {
-			return src[off]
-		}
-	}
-	return 0
-}
-
-// Rename renames a declaration and every use of it, token by token. It
-// refuses names that collide and changes that add check errors.
-func Rename(dir, q, to string, dryRun bool, w io.Writer) int {
-	unlock, err := lockModule(dir)
-	if err != nil {
-		return fail(w, "load", err.Error(), "")
+// Rename renames a declaration and every use the checker resolved to it,
+// rewriting those name tokens and, when the declaration's doc comment opens
+// with its name, that word too: a field, local, or other declaration
+// spelled the same, or any other mention in a comment or string, is left
+// alone. It refuses names that collide and changes that add check errors.
+func Rename(dir, q, to, name string, dryRun bool, w io.Writer) int {
+	unlock, code := lockModule(dir, w)
+	if unlock == nil {
+		return code
 	}
 	defer unlock()
 	m, err := load(dir)
@@ -111,6 +60,9 @@ func Rename(dir, q, to string, dryRun bool, w io.Writer) int {
 	if err != nil {
 		return fail(w, "not_found", err.Error(), "")
 	}
+	if sameID(locs) {
+		return failAmbiguousID(w, m, locs)
+	}
 	if len(locs) > 1 {
 		var ids []string
 		for _, l := range locs {
@@ -122,12 +74,21 @@ func Rename(dir, q, to string, dryRun bool, w io.Writer) int {
 	if m.IsStd(t.Span.File) {
 		return fail(w, "std", t.ID+" is in a shipped package", "")
 	}
+	var two *ir.Node // a var2 statement: name picks which of its locals
 	if t.Kind == "stmt" {
-		if n := t.Node.(*ir.Node); n.Op != "var" {
+		if n := t.Node.(*ir.Node); n.Op == "var2" {
+			two = n
+		} else if n.Op != "var" {
 			return fail(w, "unsupported", "rename works on funcs, types, fields, consts, params, and var statements; "+t.ID+" is a "+n.Op+" statement", "")
 		}
 	}
-	old := nameOf(t)
+	old, err := pickName(t, name)
+	if err != nil {
+		return fail(w, "not_found", err.Error(), "")
+	}
+	if two != nil && old == "" {
+		return fail(w, "unsupported", t.ID+" declares two locals, "+two.Name+" and "+two.Two.Name, "say which with --name "+two.Name+" or --name "+two.Two.Name)
+	}
 	if old == "" {
 		return fail(w, "unsupported", "rename works on funcs, types, fields, consts, params, and var statements, not "+t.Kind, "")
 	}
@@ -140,28 +101,41 @@ func Rename(dir, q, to string, dryRun bool, w io.Writer) int {
 	if t.Kind == "func" && t.Pkg == m.Entry && old == "main" {
 		return fail(w, "bad_name", "main is the entry point and cannot be renamed", "")
 	}
+	if servedHandle(m, t) {
+		return fail(w, "bad_name", "handle is the entry point (the package has no main) and cannot be renamed", "")
+	}
 	res := check.Run(m.Prog)
-	rs, err := findRefs(m, res, t)
+	rs, err := findRefs(m, res, t, name)
 	if err != nil {
 		return fail(w, "unsupported", err.Error(), "")
 	}
 	type at struct{ file, off int }
 	seen := map[at]bool{}
 	var sps []*splice
-	add := func(file int, offs []int) {
-		for _, off := range offs {
-			k := at{file, off}
-			if seen[k] {
-				continue
-			}
-			seen[k] = true
-			sps = append(sps, &splice{abs: m.Files[file].Abs, off: off, end: off + len(old), text: to})
+	add := func(sp ir.Span) {
+		k := at{sp.File, sp.Off}
+		if seen[k] || sp.End > len(m.Files[sp.File].Src) || string(m.Files[sp.File].Src[sp.Off:sp.End]) != old {
+			return
 		}
+		seen[k] = true
+		sps = append(sps, &splice{abs: m.Files[sp.File].Abs, off: sp.Off, end: sp.End, text: to})
 	}
-	// The declaration's own name token.
-	add(t.Span.File, declToken(m, t, old))
+	// The declaration's own name token (of a var2, the one name picks).
+	if two != nil && old == two.Two.Name {
+		add(two.Two.NameSpan)
+	} else {
+		add(declSpan(t))
+	}
 	for _, r := range rs {
-		add(r.span.File, refToken(m, r, old))
+		add(r.tok)
+	}
+	// The first word of the decl's doc comment, when that is the name:
+	// "// Name does ..." is the convention, and a renamed decl whose
+	// comment still opens with the old name reads as a mistake.
+	doc := false
+	if sp, ok := docName(m, t, old); ok {
+		add(sp)
+		doc = true
 	}
 	for _, s := range sps {
 		if s.abs == "" {
@@ -169,7 +143,29 @@ func Rename(dir, q, to string, dryRun bool, w io.Writer) int {
 		}
 	}
 	return applySplices(w, dir, m, sps, nil, dryRun, guardNoWorse, false,
-		map[string]any{"from": t.ID, "to": to, "edits": len(sps), "refs": len(rs), "id": renamedID(t, old, to)})
+		map[string]any{"from": t.ID, "to": to, "edits": len(sps), "refs": len(rs), "id": renamedID(t, old, to), "doc": doc})
+}
+
+// docName is the span of the first word of l's doc comment, if l has one
+// and that word is name: the "// Name ..." convention.
+func docName(m *module.Module, l *module.Loc, name string) (ir.Span, bool) {
+	if l.Full.Off >= l.Span.Off {
+		return ir.Span{}, false
+	}
+	src := m.Files[l.Span.File].Src
+	i := l.Full.Off
+	if i+2 > len(src) || src[i] != '/' || src[i+1] != '/' {
+		return ir.Span{}, false
+	}
+	i += 2
+	for i < len(src) && (src[i] == ' ' || src[i] == '\t') {
+		i++
+	}
+	end := i + len(name)
+	if end > len(src) || string(src[i:end]) != name || (end < len(src) && identByte(src[end])) {
+		return ir.Span{}, false
+	}
+	return ir.Span{File: l.Span.File, Off: i, End: end}, true
 }
 
 func nameOf(l *module.Loc) string {
@@ -190,6 +186,25 @@ func nameOf(l *module.Loc) string {
 		}
 	}
 	return ""
+}
+
+// declSpan is the name token of a declaration.
+func declSpan(l *module.Loc) ir.Span {
+	switch n := l.Node.(type) {
+	case *ir.Func:
+		return n.NameSpan
+	case *ir.TypeDecl:
+		return n.NameSpan
+	case *ir.Const:
+		return n.NameSpan
+	case *ir.Field:
+		return n.NameSpan
+	case *ir.Param:
+		return n.NameSpan
+	case *ir.Node:
+		return n.NameSpan
+	}
+	return ir.Span{}
 }
 
 func renamedID(l *module.Loc, old, to string) string {
@@ -231,14 +246,14 @@ func collision(m *module.Module, t *module.Loc, to string) string {
 			}
 		}
 	case "field":
-		ty := m.Index[t.Decl].Node.(*ir.TypeDecl)
+		ty := m.Index()[t.Decl].Node.(*ir.TypeDecl)
 		for _, f := range ty.Fields {
 			if f.Name == to {
 				return f.ID
 			}
 		}
 	case "param", "stmt":
-		fn := m.Index[t.Decl].Node.(*ir.Func)
+		fn := m.Index()[t.Decl].Node.(*ir.Func)
 		if localNamed(fn, to) {
 			return "a param or local in " + fn.ID
 		}
@@ -249,71 +264,4 @@ func collision(m *module.Module, t *module.Loc, to string) string {
 		}
 	}
 	return ""
-}
-
-// declToken finds the name token in a declaration's own source.
-func declToken(m *module.Module, t *module.Loc, old string) []int {
-	src := m.Files[t.Span.File].Src
-	offs := tokens(src, t.Span.Off, t.Span.End, old)
-	if len(offs) == 0 {
-		return nil
-	}
-	switch t.Kind {
-	case "func", "type", "const", "stmt":
-		// The first token after the keyword.
-		return offs[:1]
-	}
-	// Fields and params start with their name.
-	if offs[0] == t.Span.Off {
-		return offs[:1]
-	}
-	return nil
-}
-
-// refToken finds the token a reference spells the name with.
-func refToken(m *module.Module, r ref, old string) []int {
-	src := m.Files[r.span.File].Src
-	offs := tokens(src, r.span.Off, r.span.End, old)
-	if len(offs) == 0 {
-		return nil
-	}
-	n, _ := m.Index[r.id].Node.(*ir.Node)
-	switch r.kind {
-	case "call":
-		for _, o := range offs {
-			if nextByte(src, o+len(old)) == '(' {
-				return []int{o}
-			}
-		}
-	case "field", "setfield":
-		lo := n.Base.Span.End
-		for _, o := range offs {
-			if o >= lo && prevByte(src, o) == '.' {
-				return []int{o}
-			}
-		}
-	case "name", "assign":
-		if n.Pkg != "" {
-			// path.Name: the name is the last token.
-			return offs[len(offs)-1:]
-		}
-		return offs[:1]
-	case "type", "result":
-		var out []int
-		for _, o := range offs {
-			if p := prevByte(src, o); p == '*' || p == '.' {
-				out = append(out, o)
-				continue
-			}
-			// An unstarred local type: `x T`. The first token of a param or
-			// field is its own name, so skip it.
-			if o != r.span.Off && !(n != nil && n.Op == "var" && o == offs[0] && n.Name == old) {
-				if nb := nextByte(src, o+len(old)); nb != '.' && nb != '(' {
-					out = append(out, o)
-				}
-			}
-		}
-		return out
-	}
-	return nil
 }

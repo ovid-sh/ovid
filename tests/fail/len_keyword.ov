@@ -1,0 +1,9 @@
+// len is a keyword only as len( with at most spaces and tabs between; a
+// variable may be named len, and anything else between makes it a name.
+package demo
+import ovid/io
+const T [1]i64 = {5}
+func main(io *ovid/io.Cap) i64 {
+  var len i64 = T[0] + len (T) + len	(T)
+  return len /* n */ (T) // error: unknown_name 10 // error: bad_type 23
+}

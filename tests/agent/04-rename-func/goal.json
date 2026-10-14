@@ -1,0 +1,14 @@
+{
+  "check": true,
+  "tests": ["TestArea"],
+  "inject": {
+    "geo/zz_goal_test.ov": "package geo\n\nimport ovid/io\nimport geo/shape\n\nfunc TestGoalRectArea(io *ovid/io.Cap) i64 {\n  var r *geo/shape.Room = geo/shape.NewRoom(io, 2, 9, 5)\n  if geo/shape.RectArea(6, 7) != 42 || r.Area != 5 || geo/shape.Planned(r) != 18 {\n    return 1\n  }\n  return 0\n}\n"
+  },
+  "runs": [{"stdout": "20 21 7\n"}],
+  "contains": [
+    {"re": "^func RectArea\\(w i64, h i64\\) i64"},
+    {"re": "^  Area i64$", "count": 1},
+    {"re": "\\.Area\\b[^(]", "count": 2}
+  ],
+  "lacks": [{"re": "\\bArea\\("}]
+}

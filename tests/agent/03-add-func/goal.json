@@ -1,0 +1,9 @@
+{
+  "check": true,
+  "tests": ["TestDiscount"],
+  "inject": {
+    "shop/zz_goal_test.ov": "package shop\n\nimport ovid/io\n\nfunc TestGoalDiscount(io *ovid/io.Cap) i64 {\n  if Discount(99) != 99 || Discount(100) != 90 || Discount(155) != 139 || Discount(0) != 0 {\n    return 1\n  }\n  return 0\n}\n"
+  },
+  "runs": [{"stdout": "108\n"}],
+  "contains": [{"re": "^func Discount\\(total i64\\) i64"}, {"re": "^func Total\\(\\) i64"}]
+}

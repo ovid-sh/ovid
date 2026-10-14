@@ -1,0 +1,7 @@
+{
+  "check": true,
+  "inject": {
+    "team/zz_goal_test.ov": "package team\n\nimport ovid/io\n\nfunc TestGoalScale(io *ovid/io.Cap) i64 {\n  if Scale(5) != 20 || Scale(0) != 0 || Scale(-2) != 0 || Scale(-1) != 0 || Scale(1) != 4 {\n    return 1\n  }\n  return 0\n}\n"
+  },
+  "runs": [{"stdout": "20 0\n"}]
+}

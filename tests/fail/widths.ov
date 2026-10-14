@@ -1,0 +1,8 @@
+package demo
+import ovid/io
+func main(io *ovid/io.Cap) i64 {
+  var p i64 = ovid/io.Alloc(io, 8)
+  store16(p, true) // error: type_mismatch 14 expected="i64" got="bool"
+  store32(true, 1) // error: type_mismatch 11 expected="i64" got="bool"
+  return bswap32(false) + load16(true) // error: type_mismatch 18 expected="i64" got="bool" // error: type_mismatch 34 expected="i64" got="bool"
+}

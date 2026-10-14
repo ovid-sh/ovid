@@ -1,0 +1,22 @@
+// Where an operator's type error is placed: at the operand that is wrong,
+// at the right side of a comparison whose sides differ, and at a condition
+// or a return value as a whole.
+package demo
+import ovid/io
+func F(n i64) i64 {
+  return n
+}
+func main(io *ovid/io.Cap) i64 {
+  var a i64 = true + 1 // error: type_mismatch 15 expected="i64" got="bool"
+  var b i64 = 1 - (2 < 3) // error: type_mismatch 20 expected="i64" got="bool"
+  var c bool = 1 == true // error: type_mismatch 21 expected="i64" got="bool"
+  var d bool = (a < b) && 1 // error: type_mismatch 27 expected="bool" got="i64"
+  var e bool = !(a + b) // error: type_mismatch 18 expected="bool" got="i64"
+  if F(a) + 1 { // error: type_mismatch 6 expected="bool" got="i64"
+    return 1
+  }
+  while a { // error: type_mismatch 9 expected="bool" got="i64"
+    return 2
+  }
+  return c || d || e // error: type_mismatch 10 expected="i64" got="bool"
+}

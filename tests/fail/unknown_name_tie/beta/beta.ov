@@ -1,0 +1,4 @@
+package beta
+func Twice(x i64) i64 {
+  return x + x
+}

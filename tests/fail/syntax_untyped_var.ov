@@ -1,0 +1,7 @@
+package demo
+// The Go habit var x = e: the message names the missing type and the
+// hint shows the form.
+func F() i64 {
+  var n = 3 // error: syntax 9 hint="every local is declared with its type: var n i64 = ..."
+  return n
+}

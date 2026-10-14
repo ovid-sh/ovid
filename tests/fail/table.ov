@@ -1,0 +1,12 @@
+package demo
+import ovid/io
+const T [2]i64 = {1, 2}
+const K i64 = 3
+func main(io *ovid/io.Cap) i64 {
+  var a i64 = T // error: bad_type 15
+  var b i64 = K[0] // error: bad_type 15
+  var c i64 = len(K) // error: bad_type 15
+  var d i64 = T[true] // error: type_mismatch 17 expected="i64" got="bool"
+  var e i64 = Nope[0] // error: unknown_name 15
+  return a + b + c + d + e
+}

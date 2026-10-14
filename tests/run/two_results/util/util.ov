@@ -1,0 +1,9 @@
+package util
+// Div returns a / b, or 0 and E_ZERO.
+const E_ZERO i64 = 7
+func Div(a i64, b i64) (i64, i64) {
+  if b == 0 {
+    return 0, E_ZERO
+  }
+  return a / b, 0
+}

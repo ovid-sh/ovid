@@ -1,0 +1,12 @@
+// A param or local named like a table shadows it, as it would a const.
+package demo
+import ovid/io
+const T [2]i64 = {1, 2}
+func F(T i64) i64 {
+  return T[0] // error: bad_type 10
+}
+func main(io *ovid/io.Cap) i64 {
+  var a i64 = T[1] + len(T)
+  var T bool = true
+  return a + len(T) + F(1) // error: bad_type 14
+}

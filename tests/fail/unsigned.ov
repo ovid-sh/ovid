@@ -1,0 +1,11 @@
+package demo
+import ovid/io
+func main(io *ovid/io.Cap) i64 {
+  var b bool = ult(1, 2)
+  var n i64 = ushr(true, 1) + udiv(1, b) // error: type_mismatch 20 expected="i64" got="bool" // error: type_mismatch 39 expected="i64" got="bool"
+  var m i64 = umulhi(b, n) + urem(n, b) // error: type_mismatch 22 expected="i64" got="bool" // error: type_mismatch 38 expected="i64" got="bool"
+  if ult(n, m) {
+    return 1
+  }
+  return 0
+}

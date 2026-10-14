@@ -1,0 +1,33 @@
+// x is a pointer in one block, a bool in a later sibling, and an i64 in
+// the last: each declaration keeps its own type, so x.a reads the struct
+// field even though the last x is an i64 (#20).
+// exit: 41
+package demo
+
+import ovid/io
+
+type T struct {
+  a i64
+  b i64
+}
+
+func main(io *ovid/io.Cap) i64 {
+  var r i64 = 0
+  if r == 0 {
+    var x *T = ovid/io.Alloc(io, sizeof(T)) as *T
+    x.a = 5
+    x.b = 6
+    r = x.a + x.b
+  }
+  if r == 11 {
+    var x bool = r == 11
+    if x {
+      r = r + 20
+    }
+  }
+  if r == 31 {
+    var x i64 = 10
+    r = r + x
+  }
+  return r
+}

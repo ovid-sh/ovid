@@ -1,0 +1,7 @@
+{
+  "check": true,
+  "inject": {
+    "price/zz_goal_test.ov": "package price\n\nimport ovid/io\n\nfunc TestGoalPrice(io *ovid/io.Cap) i64 {\n  if Price(0) != 0 || Price(-3) != 0 || Price(4) != 1000 {\n    return 1\n  }\n  if Price(10) != 2250 || Price(12) != 2700 {\n    return 2\n  }\n  return 0\n}\n"
+  },
+  "runs": [{"stdout": "750\n2700\n"}]
+}

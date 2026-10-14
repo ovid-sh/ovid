@@ -1,6 +1,7 @@
 package asm
 
 import (
+	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -119,5 +120,31 @@ func TestAddFrame(t *testing.T) {
 	_, code := runBin(t, bin)
 	if code != 42 {
 		t.Fatalf("exit %d", code)
+	}
+}
+
+// A scaled index, against objdump's reading of the same bytes.
+func TestScaledIndex(t *testing.T) {
+	var b Buf
+	b.LoadMem(64, RBX, R12|3<<4, 0)          // mov rax, [rbx+r12*8]
+	b.LoadMem(8, R13, RSI|1<<4, -120)        // movzx rax, byte [r13+rsi*2-0x78]
+	b.LoadMem(32, RAX, R9|2<<4, 4096)        // mov eax, [rax+r9*4+0x1000]
+	b.StoreMemReg(64, R10, R15, R14|3<<4, 8) // mov [r15+r14*8+0x8], r10
+	b.StoreMemReg(8, RSI, RDI, RBX|3<<4, 0)  // mov [rdi+rbx*8], sil
+	b.StoreMemImm(64, RAX, R8|3<<4, 16, -1)  // mov qword [rax+r8*8+0x10], -1
+	b.StoreMemImm(8, R12, RCX, 0, 7)         // mov byte [r12+rcx*1], 7
+	b.LoadMem(64, RSP, -1, 8)                // mov rax, [rsp+0x8]
+	want := []byte{
+		0x4a, 0x8b, 0x04, 0xe3,
+		0x49, 0x0f, 0xb6, 0x44, 0x75, 0x88,
+		0x42, 0x8b, 0x84, 0x88, 0x00, 0x10, 0x00, 0x00,
+		0x4f, 0x89, 0x54, 0xf7, 0x08,
+		0x40, 0x88, 0x34, 0xdf,
+		0x4a, 0xc7, 0x44, 0xc0, 0x10, 0xff, 0xff, 0xff, 0xff,
+		0x41, 0xc6, 0x04, 0x0c, 0x07,
+		0x48, 0x8b, 0x44, 0x24, 0x08,
+	}
+	if !bytes.Equal(b.Code, want) {
+		t.Fatalf("got % x\nwant % x", b.Code, want)
 	}
 }

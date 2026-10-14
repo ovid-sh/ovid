@@ -1,0 +1,28 @@
+// A block declares x and y and ends; the x and y declared after it are new
+// variables with their own types and values, and one declared without a
+// value is zero.
+// exit: 9
+package demo
+
+import ovid/io
+
+type T struct {
+  a i64
+}
+
+func main(io *ovid/io.Cap) i64 {
+  var r i64 = 0
+  if true {
+    var x *T = ovid/io.Alloc(io, sizeof(T)) as *T
+    x.a = 4
+    r = x.a
+    var y i64 = 77
+    r = r + y - 77
+  }
+  var y i64
+  var x i64 = 5
+  if y != 0 {
+    return 100
+  }
+  return r + x
+}

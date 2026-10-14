@@ -1,0 +1,8 @@
+{
+  "check": true,
+  "inject": {
+    "calc/zz_goal_test.ov": "package calc\n\nimport ovid/io\n\nfunc TestGoal(io *ovid/io.Cap) i64 {\n  if Mid(10, 20) != 15 || Mid(-7, 0) != -4 || Mid(5, 5) != 5 {\n    return 1\n  }\n  if Span(3, 11) != 9 || Span(4, 4) != 1 || Span(5, 4) != 0 {\n    return 2\n  }\n  return 0\n}\n"
+  },
+  "runs": [{"stdout": "15\n9\n"}],
+  "contains": [{"re": "^func Mid\\(lo i64, hi i64\\) i64"}, {"re": "^func Span\\(lo i64, hi i64\\) i64"}]
+}

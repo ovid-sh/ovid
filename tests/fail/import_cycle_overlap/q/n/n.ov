@@ -1,0 +1,8 @@
+package q/n
+import q/m
+func N() i64 {
+  return 3
+}
+func UsesM() i64 {
+  return q/m.M()
+}

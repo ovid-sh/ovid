@@ -1,0 +1,4 @@
+package alpha
+func Twice(v i64) i64 {
+  return v * 2
+}

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"os"
 	"path"
 	"path/filepath"
 	"sort"
@@ -21,9 +20,9 @@ import (
 // files gain the imports they now need. Like rename, it refuses a change
 // that adds check errors.
 func Move(dir, q, to, file string, dryRun bool, w io.Writer) int {
-	unlock, err := lockModule(dir)
-	if err != nil {
-		return fail(w, "load", err.Error(), "")
+	unlock, code := lockModule(dir, w)
+	if unlock == nil {
+		return code
 	}
 	defer unlock()
 	return move(dir, q, to, file, dryRun, w)
@@ -31,53 +30,77 @@ func Move(dir, q, to, file string, dryRun bool, w io.Writer) int {
 
 // move is Move with the module lock already held.
 func move(dir, q, to, file string, dryRun bool, w io.Writer) int {
-	m, err := load(dir)
+	p, code := planMove(dir, q, to, file, nil, w)
+	if p == nil {
+		return code
+	}
+	if !dryRun {
+		if code := commitFiles(w, p.m, p.loaded, p.overlay); code != ExitOK {
+			return code
+		}
+	}
+	return p.emit(w, dryRun)
+}
+
+// planMove plans the move of q to package to in memory, over the files in
+// base that earlier moves changed, and checks it. On failure it writes why
+// and returns a nil plan.
+func planMove(dir, q, to, file string, base map[string][]byte, w io.Writer) (*planned, int) {
+	if dir == "" {
+		dir = "."
+	}
+	m, err := module.LoadOverlay(dir, base)
 	if err != nil {
-		return fail(w, "load", err.Error(), "")
+		return nil, fail(w, "load", err.Error(), "")
 	}
 	if len(m.Errors) > 0 {
 		(&checked{m: m, diags: m.Errors}).writeDiags(w)
-		return fail(w, "syntax", "fix syntax errors first; move needs a parsed module", "")
+		return nil, fail(w, "syntax", "fix syntax errors first; move needs a parsed module", "")
 	}
 	locs, err := m.Lookup(q)
 	if err != nil {
-		return fail(w, "not_found", err.Error(), "")
+		return nil, fail(w, "not_found", err.Error(), "")
+	}
+	if sameID(locs) {
+		return nil, failAmbiguousID(w, m, locs)
 	}
 	if len(locs) > 1 {
 		var ids []string
 		for _, l := range locs {
 			ids = append(ids, l.ID)
 		}
-		return fail(w, "ambiguous", q+" names several declarations", "use a full id: "+strings.Join(ids, ", "))
+		return nil, fail(w, "ambiguous", q+" names several declarations", "use a full id: "+strings.Join(ids, ", "))
 	}
 	t := locs[0]
 	if t.Kind != "func" && t.Kind != "type" && t.Kind != "const" {
-		return fail(w, "unsupported", "move works on funcs, types, and consts; "+t.ID+" is a "+t.Kind, "")
+		return nil, fail(w, "unsupported", "move works on funcs, types, and consts; "+t.ID+" is a "+t.Kind, "")
 	}
 	to = strings.TrimPrefix(to, "pkg:")
 	from := t.Pkg
 	name := nameOf(t)
 	switch {
 	case m.IsStd(t.Span.File) || m.Std[to]:
-		return fail(w, "std", "shipped packages cannot be changed", "copy the package into the module first")
+		return nil, fail(w, "std", "shipped packages cannot be changed", "copy the package into the module first")
 	case to == from:
-		return fail(w, "bad_move", t.ID+" is already in "+to, "")
+		return nil, fail(w, "bad_move", t.ID+" is already in "+to, "")
 	case !isIdent(strings.ReplaceAll(to, "/", "_")):
-		return fail(w, "bad_name", fmt.Sprintf("%q is not a package path", to), "")
+		return nil, fail(w, "bad_name", fmt.Sprintf("%q is not a package path", to), "")
 	case t.Kind == "func" && from == m.Entry && name == "main":
-		return fail(w, "bad_move", "main must stay in the entry package", "")
+		return nil, fail(w, "bad_move", "main must stay in the entry package", "")
+	case servedHandle(m, t):
+		return nil, fail(w, "bad_move", "handle must stay in the entry package, which has no main", "")
 	}
 	dest := findPkg(m, to)
 	if dest != nil {
 		fake := &module.Loc{ID: t.ID, Kind: t.Kind, Pkg: to}
 		if c := collision(m, fake, name); c != "" {
-			return fail(w, "conflict", to+" already has "+c, "rename one of them first")
+			return nil, fail(w, "conflict", to+" already has "+c, "rename one of them first")
 		}
 	}
 
 	res := check.Run(m.Prog)
 	src := m.Files[t.Span.File].Src
-	lo := docStart(src, t.Span.Off)
+	lo := t.Full.Off
 	inMoved := func(fi, off int) bool { return fi == t.Span.File && off >= lo && off < t.Span.End }
 
 	// Each use is a qualifier change at a name token: the qualifier before
@@ -96,73 +119,72 @@ func move(dir, q, to, file string, dryRun bool, w io.Writer) int {
 		need[fi][p] = true
 	}
 	movedNeedsFrom := false
-	requalify := func(r ref, old, target string) {
-		fsrc := m.Files[r.span.File].Src
-		for _, o := range refToken(m, r, old) {
-			k := [2]int{r.span.File, o}
-			if seen[k] {
-				continue
+	requalify := func(r ref, target string) {
+		fi, o := r.tok.File, r.tok.Off
+		fsrc := m.Files[fi].Src
+		k := [2]int{fi, o}
+		if seen[k] {
+			return
+		}
+		seen[k] = true
+		moved := inMoved(fi, o)
+		here := filePkg(m, fi)
+		if moved {
+			here = to
+		}
+		want := ""
+		if here != target {
+			want = target + "."
+		}
+		qs := o
+		if o > 0 && fsrc[o-1] == '.' {
+			qs = o - 1
+			for qs > 0 && (identByte(fsrc[qs-1]) || fsrc[qs-1] == '/') {
+				qs--
 			}
-			seen[k] = true
-			moved := inMoved(r.span.File, o)
-			here := filePkg(m, r.span.File)
-			if moved {
-				here = to
+		}
+		if string(fsrc[qs:o]) == want {
+			return
+		}
+		qq := qual{fi, qs, o, want}
+		if moved {
+			inner = append(inner, qq)
+			if target == from {
+				movedNeedsFrom = true
 			}
-			want := ""
-			if here != target {
-				want = target + "."
-			}
-			qs := o
-			if o > 0 && fsrc[o-1] == '.' {
-				qs = o - 1
-				for qs > 0 && (identByte(fsrc[qs-1]) || fsrc[qs-1] == '/') {
-					qs--
-				}
-			}
-			if string(fsrc[qs:o]) == want {
-				continue
-			}
-			qq := qual{r.span.File, qs, o, want}
-			if moved {
-				inner = append(inner, qq)
-				if target == from {
-					movedNeedsFrom = true
-				}
-			} else {
-				outer = append(outer, qq)
-				if want != "" {
-					needImport(r.span.File, target)
-				}
+		} else {
+			outer = append(outer, qq)
+			if want != "" {
+				needImport(fi, target)
 			}
 		}
 	}
 
 	// Uses of the moved decl now point at its new package.
-	rs, err := findRefs(m, res, t)
+	rs, err := findRefs(m, res, t, "")
 	if err != nil {
-		return fail(w, "unsupported", err.Error(), "")
+		return nil, fail(w, "unsupported", err.Error(), "")
 	}
 	for _, r := range rs {
 		if m.IsStd(r.span.File) {
 			continue
 		}
-		requalify(r, name, to)
+		requalify(r, to)
 	}
 	// Inside the moved text, uses of its old and new neighbours change too.
 	for _, pk := range []string{from, to} {
-		for _, id := range m.Order {
-			l := m.Index[id]
+		for _, id := range m.Order() {
+			l := m.Index()[id]
 			if l.Pkg != pk || l.ID == t.ID || (l.Kind != "func" && l.Kind != "type" && l.Kind != "const") {
 				continue
 			}
-			lrs, err := findRefs(m, res, l)
+			lrs, err := findRefs(m, res, l, "")
 			if err != nil {
 				continue
 			}
 			for _, r := range lrs {
 				if inMoved(r.span.File, r.span.Off) {
-					requalify(r, nameOf(l), pk)
+					requalify(r, pk)
 				}
 			}
 		}
@@ -208,7 +230,7 @@ func move(dir, q, to, file string, dryRun bool, w io.Writer) int {
 	var destAbs string
 	if file != "" {
 		if filepath.ToSlash(filepath.Dir(file)) != to {
-			return fail(w, "bad_move", file+" is not in package directory "+to, "")
+			return nil, fail(w, "bad_move", file+" is not in package directory "+to, "")
 		}
 		destAbs = filepath.Join(m.Root, filepath.FromSlash(file))
 		for i, f := range m.Files {
@@ -283,34 +305,18 @@ func move(dir, q, to, file string, dryRun bool, w io.Writer) int {
 	}
 
 	newID := t.ID[:strings.Index(t.ID, ":")+1] + to + "." + name
-	return applySplices(w, dir, m, sps, nil, dryRun, guardNoWorse, false,
+	return planSplices(w, dir, m, base, sps, nil, guardNoWorse, false,
 		map[string]any{"from": t.ID, "to": newID, "file": rel(m, destAbs), "refs": len(rs), "edits": len(sps)})
 }
 
 // filePkg is the package a module file belongs to.
 func filePkg(m *module.Module, fi int) string {
-	for _, id := range m.Order {
-		if l := m.Index[id]; l.Span.File == fi {
+	for _, l := range m.Locs() {
+		if l.Span.File == fi {
 			return l.Pkg
 		}
 	}
 	return ""
-}
-
-// docStart is where the // comment block directly above off begins.
-func docStart(src []byte, off int) int {
-	start := lineBegin(src, off)
-	for start > 0 {
-		pl := lineBegin(src, start-1)
-		if !strings.HasPrefix(strings.TrimSpace(string(src[pl:start-1])), "//") {
-			break
-		}
-		start = pl
-	}
-	if start < off && strings.TrimSpace(string(src[start:off])) == "" {
-		return off
-	}
-	return start
 }
 
 // pkgsUsed lists the packages a decl's types, calls, and consts name.
@@ -327,7 +333,7 @@ func pkgsUsed(l *module.Loc) []string {
 		if n == nil {
 			return
 		}
-		if n.Op == "call" || n.Op == "name" {
+		if n.Op == "call" || n.Op == "name" || n.Op == "index" || n.Op == "len" {
 			p := n.Pkg
 			if p == "" && n.Op == "call" {
 				p = l.Pkg
@@ -336,7 +342,7 @@ func pkgsUsed(l *module.Loc) []string {
 				set[p] = true
 			}
 		}
-		if n.Op == "var" || n.Op == "cast" || n.Op == "sizeof" {
+		if n.Op == "var" || n.Op == "var2" || n.Op == "cast" || n.Op == "sizeof" {
 			typ(n.Type)
 		}
 		for _, c := range n.Children() {
@@ -364,91 +370,61 @@ func pkgsUsed(l *module.Loc) []string {
 	return out
 }
 
-// MoveMany moves several decls to one package in order. Either all of them
-// move or the module's .ov files are put back as they were; dry-run moves
-// for real and then restores, so later moves see earlier ones.
+// MoveMany moves several decls to one package in order, all or none.
+// Each move is planned in memory over the ones before it, so later moves
+// see earlier ones, and checked; only when every one has passed are the
+// files they changed written, together, by one module.WriteFiles. A dry
+// run writes nothing at all.
 func MoveMany(dir string, qs []string, to, file string, dryRun bool, w io.Writer) int {
-	unlock, err := lockModule(dir)
-	if err != nil {
-		return fail(w, "load", err.Error(), "")
+	unlock, code := lockModule(dir, w)
+	if unlock == nil {
+		return code
 	}
 	defer unlock()
 	if len(qs) == 1 {
 		return move(dir, qs[0], to, file, dryRun, w)
 	}
-	m, err := load(dir)
-	if err != nil {
-		return fail(w, "load", err.Error(), "")
-	}
-	snap, err := snapshotOv(m.Root)
-	if err != nil {
-		return fail(w, "read", err.Error(), "")
-	}
+	base := map[string][]byte{}   // each changed file's source after the moves so far
+	loaded := map[string][]byte{} // and as it is on disk; a file the moves create has none
+	var plans []*planned
+	var receipts []bytes.Buffer // each move's diagnostics and receipt, in order
 	var moved []string
 	for _, q := range qs {
-		if code := move(dir, q, to, file, false, w); code != ExitOK {
-			if rerr := restoreOv(m.Root, snap); rerr != nil {
-				return fail(w, "restore", rerr.Error(), "the module may be half-moved; check git status")
-			}
+		p, code := planMove(dir, q, to, file, base, w)
+		if p == nil {
 			emit(w, map[string]any{"ok": false, "error": "rolled_back", "message": "move of " + q + " failed; no file was changed",
 				"moved_before_failure": moved})
 			return code
 		}
+		for abs, src := range p.overlay {
+			if _, again := base[abs]; !again {
+				// No earlier move changed it, so p read it from disk.
+				if was, ok := p.loaded[abs]; ok {
+					loaded[abs] = was
+				}
+			}
+			base[abs] = src
+		}
+		// Its receipt now, while the module it was checked in is here, so
+		// that the next move does not add a tree to the ones kept; it is
+		// printed once the files are written.
+		var out bytes.Buffer
+		p.emit(&out, dryRun)
+		p.after.m.Release()
+		p.after = nil
+		receipts = append(receipts, out)
+		plans = append(plans, p)
 		moved = append(moved, q)
 	}
-	if dryRun {
-		if err := restoreOv(m.Root, snap); err != nil {
-			return fail(w, "restore", err.Error(), "the module may be half-moved; check git status")
+	if !dryRun {
+		if code := commitFiles(w, plans[0].m, loaded, base); code != ExitOK {
+			return code
 		}
+	}
+	// Each move's receipt, then the whole one's.
+	for i := range receipts {
+		w.Write(receipts[i].Bytes())
 	}
 	emit(w, map[string]any{"ok": true, "moved": moved, "to": to, "written": !dryRun})
 	return ExitOK
-}
-
-// snapshotOv reads every .ov file under root.
-func snapshotOv(root string) (map[string][]byte, error) {
-	snap := map[string][]byte{}
-	err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if !d.IsDir() && strings.HasSuffix(p, ".ov") {
-			b, err := os.ReadFile(p)
-			if err != nil {
-				return err
-			}
-			snap[p] = b
-		}
-		return nil
-	})
-	return snap, err
-}
-
-// restoreOv puts root's .ov files back to snap, removing files (and the
-// directories they emptied) that were created since.
-func restoreOv(root string, snap map[string][]byte) error {
-	now, err := snapshotOv(root)
-	if err != nil {
-		return err
-	}
-	for p := range now {
-		if _, ok := snap[p]; !ok {
-			if err := os.Remove(p); err != nil {
-				return err
-			}
-			for d := filepath.Dir(p); d != root && strings.HasPrefix(d, root); d = filepath.Dir(d) {
-				if os.Remove(d) != nil {
-					break
-				}
-			}
-		}
-	}
-	for p, b := range snap {
-		if !bytes.Equal(now[p], b) {
-			if err := os.WriteFile(p, b, 0o644); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
 }

@@ -67,7 +67,12 @@ type Loc struct {
 	Decl   string // id of the enclosing top-level decl
 	Parent string // id of the parent node
 	Span   ir.Span
-	Node   any
+	// Full is Span widened to take in the doc comment of a func, type, or
+	// const (see DocStart): the text that show prints, a hash covers, and
+	// replace and delete swap or remove. For every other node it is Span.
+	Full ir.Span
+	Node any
+	decl *Loc // the copy of the enclosing decl this node is in
 }
 
 type Module struct {
@@ -80,10 +85,21 @@ type Module struct {
 	Std map[string]bool
 	// Errors are syntax and layout problems found while loading.
 	Errors []Diag
-	Index  map[string]*Loc
-	Order  []string
-	hashes map[string]string // full digests, filled on first Hash
-	modSrc []byte            // ovid.mod as read
+	// index, order, locs, copies, and byNode are built together on first
+	// use (Index): check, build, run, and test never need them, and they
+	// are a quarter of a loaded module's memory. index maps each id to its
+	// node, the first in load order when several share it (check reports
+	// the duplicate); order lists each id once; copies lists every node of
+	// an id that more than one node has, and locs every node.
+	index   map[string]*Loc
+	order   []string
+	locs    []*Loc
+	copies  map[string][]*Loc
+	byNode  map[any]*Loc
+	hashes  map[*Loc]string // full digests, filled a decl at a time as asked for
+	byDecl  map[*Loc][]*Loc // the statements and expressions of each decl, in order
+	modSrc  []byte          // ovid.mod as read
+	noTests bool            // loaded without its _test.ov files
 }
 
 // Diag is one error with its location resolved.
@@ -122,27 +138,34 @@ func Find(dir string) (string, error) {
 // Load reads the module rooted at (or above) dir.
 func Load(dir string) (*Module, error) { return LoadOverlay(dir, nil) }
 
+// LoadBuild is Load without the module's _test.ov files: the program that
+// build and run compile, so an error in a test cannot stop them.
+func LoadBuild(dir string) (*Module, error) { return load(dir, nil, true) }
+
 // LoadOverlay is Load with some files replaced by in-memory contents, keyed
 // by absolute path. Overlay files that do not exist on disk are added.
 func LoadOverlay(dir string, overlay map[string][]byte) (*Module, error) {
+	return load(dir, overlay, false)
+}
+
+func load(dir string, overlay map[string][]byte, noTests bool) (*Module, error) {
 	root, err := Find(dir)
 	if err != nil {
 		return nil, err
 	}
-	m := &Module{Root: root, Std: map[string]bool{}, Index: map[string]*Loc{}}
+	m := &Module{Root: root, Std: map[string]bool{}, noTests: noTests}
 	modSrc, err := os.ReadFile(filepath.Join(root, "ovid.mod"))
 	if err != nil {
 		return nil, err
 	}
 	m.modSrc = modSrc
-	var stdDir string
 	for _, ln := range strings.Split(string(modSrc), "\n") {
 		f := strings.Fields(ln)
 		if len(f) == 0 || strings.HasPrefix(f[0], "//") {
 			continue
 		}
 		if len(f) != 2 {
-			return nil, fmt.Errorf("ovid.mod: bad line %q; want `module <name>`, `entry <pkg>`, or `std <dir>`", ln)
+			return nil, fmt.Errorf("ovid.mod: bad line %q; want `module <name>` or `entry <pkg>`", ln)
 		}
 		switch f[0] {
 		case "module":
@@ -150,16 +173,12 @@ func LoadOverlay(dir string, overlay map[string][]byte) (*Module, error) {
 		case "entry":
 			m.Entry = f[1]
 		case "std":
-			stdDir = f[1]
-			if !filepath.IsAbs(stdDir) {
-				stdDir = filepath.Join(root, stdDir)
-			}
+			// A module once could name its own standard library here, and
+			// with it take the right to call syscall.
+			return nil, fmt.Errorf("ovid.mod: the std line is no longer supported: a module always uses the standard library built into ovid; delete the line")
 		default:
 			return nil, fmt.Errorf("ovid.mod: unknown directive %q", f[0])
 		}
-	}
-	if st, err := os.Stat(stdDir); stdDir != "" && (err != nil || !st.IsDir()) {
-		return nil, fmt.Errorf("ovid.mod: std directory %s does not exist; fix the path, or delete the std line to use the standard library built into ovid", stdDir)
 	}
 	m.Prog = &ir.Program{Module: m.Name, Entry: m.Entry}
 
@@ -175,21 +194,10 @@ func LoadOverlay(dir string, overlay map[string][]byte) (*Module, error) {
 		}
 		byPkg[pkg] = append(byPkg[pkg], &File{Path: rel, Abs: p, Src: src})
 	}
-	err = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			if p != root && (strings.HasPrefix(d.Name(), ".") || exists(filepath.Join(p, "ovid.mod"))) {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(p, ".ov") {
-			return nil
-		}
+	err = walkSources(root, noTests, func(p string) error {
 		src, ok := overlay[p]
 		if !ok {
+			var err error
 			if src, err = os.ReadFile(p); err != nil {
 				return err
 			}
@@ -212,7 +220,7 @@ func LoadOverlay(dir string, overlay map[string][]byte) (*Module, error) {
 	sort.Strings(paths)
 	have := map[string]bool{}
 	for _, pk := range paths {
-		m.addPackage(pk, byPkg[pk])
+		m.addPackage(pk, byPkg[pk], fromModule)
 		have[pk] = true
 	}
 
@@ -232,20 +240,103 @@ func LoadOverlay(dir string, overlay map[string][]byte) (*Module, error) {
 		}
 		sort.Strings(need)
 		for _, pk := range need {
-			files := stdFiles(stdDir, pk)
+			files := stdFiles(pk)
 			if len(files) == 0 {
 				continue
 			}
 			m.Std[pk] = true
-			m.addPackage(pk, files)
+			m.addPackage(pk, files, fromToolchain)
 		}
 	}
 	sort.SliceStable(m.Prog.Packages, func(i, j int) bool { return m.Prog.Packages[i].Path < m.Prog.Packages[j].Path })
 	for _, f := range m.Files {
 		m.Prog.Files = append(m.Prog.Files, f.Path)
 	}
-	m.index()
 	return m, nil
+}
+
+// walkSources calls fn with the absolute path of every source file of the
+// module at root: each .ov file, not in a dot directory and not under
+// another module, and not a _test.ov file when noTests.
+func walkSources(root string, noTests bool, fn func(abs string) error) error {
+	return filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if p != root && (strings.HasPrefix(d.Name(), ".") || exists(filepath.Join(p, "ovid.mod"))) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(p, ".ov") || noTests && strings.HasSuffix(p, "_test.ov") {
+			return nil
+		}
+		return fn(p)
+	})
+}
+
+// ChangedOnDisk lists the files of the module whose contents on disk differ
+// from what was loaded: a source file that changed, is gone, or is new, and
+// ovid.mod. The paths are as DisplayPath gives them, sorted. An empty
+// result with a nil error means the module on disk is still the one in m.
+// An error means the directory could not be read through, and the list is
+// only what was found before it: the module may have changed in ways it
+// does not show. Files of shipped packages are not compared.
+func (m *Module) ChangedOnDisk() ([]string, error) {
+	loaded := map[string]*File{}
+	for _, f := range m.Files {
+		if f.Abs != "" && !strings.HasPrefix(f.Path, "std:") {
+			loaded[f.Abs] = f
+		}
+	}
+	var out []string
+	walkErr := walkSources(m.Root, m.noTests, func(p string) error {
+		f, ok := loaded[p]
+		delete(loaded, p)
+		if src, err := os.ReadFile(p); !ok || err != nil || !bytes.Equal(src, f.Src) {
+			out = append(out, m.DisplayPath(&File{Abs: p}))
+		}
+		return nil
+	})
+	if walkErr == nil {
+		// Only a complete walk shows that a loaded file is gone.
+		for _, f := range loaded {
+			out = append(out, m.DisplayPath(f))
+		}
+	}
+	mod := filepath.Join(m.Root, "ovid.mod")
+	if src, err := os.ReadFile(mod); err != nil || !bytes.Equal(src, m.modSrc) {
+		out = append(out, m.DisplayPath(&File{Abs: mod}))
+	}
+	sort.Strings(out)
+	return out, walkErr
+}
+
+// Release drops the program tree, the index, and the digests: everything
+// but what names the module and its files (Root, Name, Entry, Files, and
+// the revision's inputs). An edit calls it once the plan is made and
+// before it loads the changed module, so that two trees are never held at
+// once; the module is good for DisplayPath and Revision afterwards, and
+// for nothing that looks at a node.
+func (m *Module) Release() {
+	m.Prog = nil
+	m.index, m.order, m.locs, m.copies, m.byNode, m.hashes, m.byDecl = nil, nil, nil, nil, nil, nil, nil
+}
+
+// Reload reads the module from disk again, the way m was read: without
+// its _test.ov files if m was loaded without them, so that the two have
+// revisions over the same set of files.
+//
+// It fails if m's ovid.mod is gone. Loading would then find the module
+// above, if m lies inside one, and answer for a different module.
+func (m *Module) Reload() (*Module, error) {
+	if root, err := Find(m.Root); err != nil {
+		return nil, err
+	} else if root != m.Root {
+		return nil, fmt.Errorf("%s is no longer a module: its ovid.mod is gone", m.Root)
+	}
+	return load(m.Root, nil, m.noTests)
 }
 
 func exists(p string) bool {
@@ -253,21 +344,9 @@ func exists(p string) bool {
 	return err == nil
 }
 
-func stdFiles(dir, pkg string) []*File {
+// stdFiles are the files of a package the toolchain ships, or none.
+func stdFiles(pkg string) []*File {
 	var out []*File
-	if dir != "" {
-		ents, _ := os.ReadDir(filepath.Join(dir, filepath.FromSlash(pkg)))
-		for _, e := range ents {
-			if !e.IsDir() && strings.HasSuffix(e.Name(), ".ov") {
-				p := filepath.Join(dir, filepath.FromSlash(pkg), e.Name())
-				src, err := os.ReadFile(p)
-				if err == nil {
-					out = append(out, &File{Path: "std:" + pkg + "/" + e.Name(), Abs: p, Src: src})
-				}
-			}
-		}
-		return out
-	}
 	ents, _ := fs.ReadDir(std.FS, pkg)
 	for _, e := range ents {
 		if !e.IsDir() && strings.HasSuffix(e.Name(), ".ov") {
@@ -280,7 +359,24 @@ func stdFiles(dir, pkg string) []*File {
 	return out
 }
 
-func (m *Module) addPackage(pkgPath string, files []*File) {
+// Where a package's files came from.
+const (
+	fromModule    = iota // the module's own directories
+	fromToolchain        // the standard library built into ovid
+)
+
+// shipped reports whether the toolchain ships a package of this path.
+func shipped(pkgPath string) bool {
+	ents, _ := fs.ReadDir(std.FS, pkgPath)
+	for _, e := range ents {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".ov") {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *Module) addPackage(pkgPath string, files []*File, from int) {
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	var merged *ir.Package
 	for _, f := range files {
@@ -293,7 +389,7 @@ func (m *Module) addPackage(pkgPath string, files []*File) {
 		}
 		pkg, perr := syntax.ParseFile(idx, f.Src)
 		if perr != nil {
-			hint := ""
+			hint := perr.Hint
 			if strings.HasPrefix(perr.Msg, "expected package") {
 				hint = "every .ov file starts with `package " + pkgPath + "` (its directory path), then its imports"
 			}
@@ -308,6 +404,13 @@ func (m *Module) addPackage(pkgPath string, files []*File) {
 		}
 		if merged == nil {
 			merged = pkg
+			merged.Sys = from == fromToolchain
+			if from == fromModule && shipped(pkgPath) {
+				// Once for the package, at its first file's package clause.
+				m.Errors = append(m.Errors, m.diagAt(idx, pkg.Span.Off, pkg.Span.End, "reserved_path",
+					"package "+pkgPath+" is one the toolchain ships; a module may not have its own",
+					"move these files to a package path of the module's own, and import "+pkgPath+" for the shipped one"))
+			}
 			continue
 		}
 		seen := map[string]bool{}
@@ -335,8 +438,24 @@ func (m *Module) diagAt(file, off, end int, code, msg, hint string) Diag {
 		Line: a.Line, Col: a.Col, EndLine: b.Line, EndCol: b.Col, Source: f.Line(a.Line)}
 }
 
-// DisplayPath is the path an agent can open: relative to the cwd when possible.
+// PathsEnv selects what the paths in records are relative to: unset or
+// "cwd", the working directory; "module", the module root.
+const PathsEnv = "OVID_PATHS"
+
+// DisplayPath is the path an agent can open: relative to the cwd when
+// possible. With OVID_PATHS=module it is relative to the module root
+// instead ("std:<path>" for a shipped package), so that copies of one
+// module report the same paths wherever they are and wherever ovid runs.
 func (m *Module) DisplayPath(f *File) string {
+	if os.Getenv(PathsEnv) == "module" {
+		if f.Path != "" {
+			return filepath.ToSlash(f.Path)
+		}
+		if rel, err := filepath.Rel(m.Root, f.Abs); err == nil {
+			return filepath.ToSlash(rel)
+		}
+		return f.Abs
+	}
 	if f.Abs == "" {
 		return f.Path
 	}
@@ -348,43 +467,110 @@ func (m *Module) DisplayPath(f *File) string {
 	return f.Abs
 }
 
-func (m *Module) add(l *Loc) {
+// add indexes l, a node of decl (nil for a package), and returns it.
+func (m *Module) add(l *Loc, decl *Loc) *Loc {
 	if l.ID == "" {
-		return
+		return l
 	}
-	if _, dup := m.Index[l.ID]; dup {
-		return
+	l.decl = decl
+	if decl == nil {
+		l.decl = l
 	}
-	m.Index[l.ID] = l
-	m.Order = append(m.Order, l.ID)
+	l.Full = l.Span
+	switch l.Kind {
+	case "func", "type", "const":
+		l.Full.Off = DocStart(m.Files[l.Span.File].Src, l.Span.Off)
+	}
+	m.locs = append(m.locs, l)
+	m.byNode[l.Node] = l
+	if first, dup := m.index[l.ID]; dup {
+		if m.copies[l.ID] == nil {
+			m.copies[l.ID] = []*Loc{first}
+		}
+		m.copies[l.ID] = append(m.copies[l.ID], l)
+		return l
+	}
+	m.index[l.ID] = l
+	m.order = append(m.order, l.ID)
+	return l
 }
 
-func (m *Module) index() {
+// Index maps every id of the module to its node and place. Where several
+// nodes share an id, the first in load order keeps it; Copies lists all.
+func (m *Module) Index() map[string]*Loc {
+	if m.index == nil {
+		m.index = map[string]*Loc{}
+		m.copies = map[string][]*Loc{}
+		m.byNode = map[any]*Loc{}
+		m.buildIndex()
+	}
+	return m.index
+}
+
+// Order lists the ids of Index in program order: packages by path, and
+// each decl before the nodes inside it.
+func (m *Module) Order() []string {
+	m.Index()
+	return m.order
+}
+
+// Copies lists every node with the given id in load order (by file, then
+// position): one for a well-formed module, several where declarations
+// share the id (check reports them), none for an unknown id.
+func (m *Module) Copies(id string) []*Loc {
+	idx := m.Index()
+	if c := m.copies[id]; c != nil {
+		return c
+	}
+	if l := idx[id]; l != nil {
+		return []*Loc{l}
+	}
+	return nil
+}
+
+// Locs lists every indexed node in load order, each copy of a duplicated
+// id included.
+func (m *Module) Locs() []*Loc {
+	m.Index()
+	return m.locs
+}
+
+// LocOf is the node indexed for an ir node (a *ir.Func, *ir.Node, ...).
+func (m *Module) LocOf(node any) *Loc {
+	m.Index()
+	return m.byNode[node]
+}
+
+// DeclLoc is the copy of the top-level decl that l is in (l itself for a
+// decl): the one whose hash a st:/ex: hash is bound to.
+func (m *Module) DeclLoc(l *Loc) *Loc { return l.decl }
+
+func (m *Module) buildIndex() {
 	for pi := range m.Prog.Packages {
 		pkg := &m.Prog.Packages[pi]
-		m.add(&Loc{ID: pkg.ID, Kind: "package", Pkg: pkg.Path, Span: pkg.Span, Node: pkg})
+		m.add(&Loc{ID: pkg.ID, Kind: "package", Pkg: pkg.Path, Span: pkg.Span, Node: pkg}, nil)
 		for i := range pkg.Imports {
 			im := &pkg.Imports[i]
-			m.add(&Loc{ID: im.ID, Kind: "import", Pkg: pkg.Path, Decl: im.ID, Parent: pkg.ID, Span: im.Span, Node: im})
+			m.add(&Loc{ID: im.ID, Kind: "import", Pkg: pkg.Path, Decl: im.ID, Parent: pkg.ID, Span: im.Span, Node: im}, nil)
 		}
 		for i := range pkg.Consts {
 			c := &pkg.Consts[i]
-			m.add(&Loc{ID: c.ID, Kind: "const", Pkg: pkg.Path, Decl: c.ID, Parent: pkg.ID, Span: c.Span, Node: c})
+			m.add(&Loc{ID: c.ID, Kind: "const", Pkg: pkg.Path, Decl: c.ID, Parent: pkg.ID, Span: c.Span, Node: c}, nil)
 		}
 		for i := range pkg.Types {
 			t := &pkg.Types[i]
-			m.add(&Loc{ID: t.ID, Kind: "type", Pkg: pkg.Path, Decl: t.ID, Parent: pkg.ID, Span: t.Span, Node: t})
+			tl := m.add(&Loc{ID: t.ID, Kind: "type", Pkg: pkg.Path, Decl: t.ID, Parent: pkg.ID, Span: t.Span, Node: t}, nil)
 			for j := range t.Fields {
 				f := &t.Fields[j]
-				m.add(&Loc{ID: f.ID, Kind: "field", Pkg: pkg.Path, Decl: t.ID, Parent: t.ID, Span: f.Span, Node: f})
+				m.add(&Loc{ID: f.ID, Kind: "field", Pkg: pkg.Path, Decl: t.ID, Parent: t.ID, Span: f.Span, Node: f}, tl)
 			}
 		}
 		for i := range pkg.Funcs {
 			fn := &pkg.Funcs[i]
-			m.add(&Loc{ID: fn.ID, Kind: "func", Pkg: pkg.Path, Decl: fn.ID, Parent: pkg.ID, Span: fn.Span, Node: fn})
+			fl := m.add(&Loc{ID: fn.ID, Kind: "func", Pkg: pkg.Path, Decl: fn.ID, Parent: pkg.ID, Span: fn.Span, Node: fn}, nil)
 			for j := range fn.Params {
 				pa := &fn.Params[j]
-				m.add(&Loc{ID: pa.ID, Kind: "param", Pkg: pkg.Path, Decl: fn.ID, Parent: fn.ID, Span: pa.Span, Node: pa})
+				m.add(&Loc{ID: pa.ID, Kind: "param", Pkg: pkg.Path, Decl: fn.ID, Parent: fn.ID, Span: pa.Span, Node: pa}, fl)
 			}
 			var walk func(n *ir.Node, parent string)
 			walk = func(n *ir.Node, parent string) {
@@ -392,7 +578,7 @@ func (m *Module) index() {
 				if ir.IsStmt(n.Op) {
 					kind = "stmt"
 				}
-				m.add(&Loc{ID: n.ID, Kind: kind, Pkg: pkg.Path, Decl: fn.ID, Parent: parent, Span: n.Span, Node: n})
+				m.add(&Loc{ID: n.ID, Kind: kind, Pkg: pkg.Path, Decl: fn.ID, Parent: parent, Span: n.Span, Node: n}, fl)
 				for _, c := range n.Children() {
 					walk(c, n.ID)
 				}
@@ -404,35 +590,62 @@ func (m *Module) index() {
 	}
 }
 
+// DocStart is where the doc comment of the decl at off begins: the first
+// non-blank byte of the unbroken run of // lines directly above the line
+// off is on. A blank line ends the run, so a comment separated from the
+// decl by one is not its doc comment. With no such lines it is off.
+func DocStart(src []byte, off int) int {
+	start := lineBegin(src, off)
+	if strings.TrimSpace(string(src[start:off])) != "" {
+		// Something precedes the decl on its line; it has no doc comment.
+		return off
+	}
+	doc := off
+	for start > 0 {
+		pl := lineBegin(src, start-1)
+		if !strings.HasPrefix(strings.TrimSpace(string(src[pl:start-1])), "//") {
+			break
+		}
+		start = pl
+		doc = pl
+		for src[doc] == ' ' || src[doc] == '\t' {
+			doc++
+		}
+	}
+	return doc
+}
+
+func lineBegin(src []byte, off int) int {
+	for off > 0 && src[off-1] != '\n' {
+		off--
+	}
+	return off
+}
+
 // Text returns the source text of a span.
 func (m *Module) Text(s ir.Span) string {
 	return string(m.Files[s.File].Src[s.Off:s.End])
 }
 
 // Hash is a short content hash of an id's source text. Edits that name it
-// are rejected when the text has changed. A declaration's text includes its
-// name, so its hash is the text's alone. A statement's or expression's also
-// covers the declaration it is in and which of the identical-text nodes
-// there it is, so a stale st:/ex: id that now lands on a text-identical
-// sibling does not match. It is a staleness check, not a cache key.
-func (m *Module) Hash(id string) string {
-	if m.hashes == nil {
-		m.hashes = map[string]string{}
-		seen := map[string]int{}
-		for _, oid := range m.Order {
-			l := m.Index[oid]
-			text := m.Text(l.Span)
-			in := text
-			if l.Kind == "stmt" || l.Kind == "expr" {
-				k := l.Kind + "\x00" + l.Decl + "\x00" + text
-				in = fmt.Sprintf("%s\x00%d", k, seen[k])
-				seen[k]++
-			}
-			sum := sha256.Sum256([]byte(in))
-			m.hashes[oid] = hex.EncodeToString(sum[:])
-		}
-	}
-	if h := m.hashes[id]; h != "" {
+// are rejected when the text has changed. A declaration's text (Full)
+// includes its name and its doc comment, so its hash is the text's alone.
+// A statement's or expression's id is a position, so its hash is bound to
+// the whole declaration it is in: it covers the decl's id and full text,
+// doc comment included, its own kind and text, and which
+// of the identical-text nodes there it is. Any change to that decl, even
+// one elsewhere in it, changes the hash of every statement in it, so a
+// stale st:/ex: id never matches, not even on a text-identical twin that
+// inherited its position; a change to another decl changes nothing. It is
+// a staleness check, not a cache key. Where several nodes share the id,
+// it is the first one's; LocHash gives each its own.
+func (m *Module) Hash(id string) string { return m.LocHash(m.Index()[id]) }
+
+// LocHash is Hash of one node, so of one copy of a duplicated id: copies
+// with different text have different hashes. A statement's is bound to
+// the copy of the decl it is in.
+func (m *Module) LocHash(l *Loc) string {
+	if h := m.LocDigest(l); h != "" {
 		return h[:12]
 	}
 	return ""
@@ -440,9 +653,55 @@ func (m *Module) Hash(id string) string {
 
 // Digest is the full sha256 that Hash prints the first 12 digits of. The
 // short form guards an edit; this one is wide enough to key a cache.
-func (m *Module) Digest(id string) string {
-	m.Hash(id)
-	return m.hashes[id]
+func (m *Module) Digest(id string) string { return m.LocDigest(m.Index()[id]) }
+
+// LocDigest is Digest of one node.
+func (m *Module) LocDigest(l *Loc) string {
+	if l == nil {
+		return ""
+	}
+	if h, ok := m.hashes[l]; ok {
+		return h
+	}
+	if m.hashes == nil {
+		m.hashes = map[*Loc]string{}
+	}
+	if l.Kind != "stmt" && l.Kind != "expr" {
+		// A decl, param, field, import, or package: its text alone.
+		sum := sha256.Sum256([]byte(m.Text(l.Full)))
+		m.hashes[l] = hex.EncodeToString(sum[:])
+		return m.hashes[l]
+	}
+	// A statement or expression: its digest covers its decl's and which of
+	// the identical-text nodes of that decl it is, so the decl's nodes are
+	// done together, and only that decl's. show of one func, or an edit's
+	// receipt, used to hash every node of the module for this.
+	d := l.decl
+	declDigest := m.LocDigest(d)
+	seen := map[string]int{}
+	for _, o := range m.declNodes(d) {
+		text := m.Text(o.Full)
+		k := o.Kind + "\x00" + o.Decl + "\x00" + text
+		in := fmt.Sprintf("%s\x00%d\x00%s", k, seen[k], declDigest)
+		seen[k]++
+		sum := sha256.Sum256([]byte(in))
+		m.hashes[o] = hex.EncodeToString(sum[:])
+	}
+	return m.hashes[l]
+}
+
+// declNodes are the statements and expressions inside the decl d, in the
+// order of Locs; the lists are built once, for every decl.
+func (m *Module) declNodes(d *Loc) []*Loc {
+	if m.byDecl == nil {
+		m.byDecl = map[*Loc][]*Loc{}
+		for _, o := range m.Locs() {
+			if o.Kind == "stmt" || o.Kind == "expr" {
+				m.byDecl[o.decl] = append(m.byDecl[o.decl], o)
+			}
+		}
+	}
+	return m.byDecl[d]
 }
 
 // Revision is the first 16 digits of RevisionDigest: enough to tell an
@@ -486,7 +745,7 @@ func (m *Module) Where(s ir.Span) (file string, a, b Pos, line string) {
 
 // Locate fills location fields of d from its id.
 func (m *Module) Locate(d *Diag) {
-	l := m.Index[d.ID]
+	l := m.Index()[d.ID]
 	if l == nil {
 		return
 	}
@@ -497,14 +756,20 @@ func (m *Module) Locate(d *Diag) {
 // IsStd reports whether file index fi belongs to a shipped package.
 func (m *Module) IsStd(fi int) bool { return strings.HasPrefix(m.Files[fi].Path, "std:") }
 
+// declaresLocal reports whether statement n declares a local called name: a
+// var, or either name of a var that receives two results.
+func declaresLocal(n *ir.Node, name string) bool {
+	return (n.Op == "var" && n.Name == name) || (n.Op == "var2" && (n.Name == name || n.Two.Name == name))
+}
+
 // Lookup finds an id, also accepting a bare name or pkg.Name for decls.
 func (m *Module) Lookup(q string) ([]*Loc, error) {
-	if l, ok := m.Index[q]; ok {
-		return []*Loc{l}, nil
+	if _, ok := m.Index()[q]; ok {
+		return m.Copies(q), nil
 	}
 	var out []*Loc
-	for _, id := range m.Order {
-		l := m.Index[id]
+	for _, id := range m.Order() {
+		l := m.Index()[id]
 		switch l.Kind {
 		case "func", "type", "const":
 		default:
@@ -512,34 +777,34 @@ func (m *Module) Lookup(q string) ([]*Loc, error) {
 		}
 		name := id[strings.LastIndex(id, ".")+1:]
 		if q == name || q == l.Pkg+"."+name || pkgSuffix(l.Pkg, q, name) {
-			out = append(out, l)
+			out = append(out, m.Copies(id)...)
 		}
 	}
 	if len(out) == 0 && strings.Contains(q, ".") {
 		// Type.field and Func.param, optionally package-qualified.
-		for _, id := range m.Order {
-			l := m.Index[id]
+		for _, id := range m.Order() {
+			l := m.Index()[id]
 			if l.Kind != "field" && l.Kind != "param" {
 				continue
 			}
 			rest := id[strings.Index(id, ":")+1+len(l.Pkg)+1:]
 			if q == rest || q == l.Pkg+"."+rest || pkgSuffix(l.Pkg, q, rest) {
-				out = append(out, l)
+				out = append(out, m.Copies(id)...)
 			}
 		}
 	}
 	if len(out) == 0 {
 		var cands []string
-		for _, id := range m.Order {
-			if k := m.Index[id].Kind; k == "func" || k == "type" || k == "const" {
+		for _, id := range m.Order() {
+			if k := m.Index()[id].Kind; k == "func" || k == "type" || k == "const" {
 				cands = append(cands, id)
 			}
 		}
 		msg := "no node with id or name " + q
 		var locals []string
-		for _, id := range m.Order {
-			l := m.Index[id]
-			if (l.Kind == "param" && strings.HasSuffix(id, "."+q)) || (l.Kind == "stmt" && l.Node.(*ir.Node).Op == "var" && l.Node.(*ir.Node).Name == q) {
+		for _, id := range m.Order() {
+			l := m.Index()[id]
+			if (l.Kind == "param" && strings.HasSuffix(id, "."+q)) || (l.Kind == "stmt" && declaresLocal(l.Node.(*ir.Node), q)) {
 				locals = append(locals, id)
 			}
 		}

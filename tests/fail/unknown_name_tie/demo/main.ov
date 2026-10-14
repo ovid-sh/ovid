@@ -1,0 +1,9 @@
+package demo
+import ovid/io
+import beta
+import alpha
+// Two loaded packages declare the name: the hint names the lowest path,
+// not the first imported or the first the map happened to give.
+func main(io *ovid/io.Cap) i64 {
+  return ovid/io.Twice(beta.Twice(2) + alpha.Twice(1)) // error: unknown_name 10 hint="did you mean alpha.Twice? alpha: func Twice(v i64) i64"
+}

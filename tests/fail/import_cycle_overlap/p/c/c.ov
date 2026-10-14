@@ -1,0 +1,5 @@
+package p/c
+import p/d
+func C() i64 {
+  return p/d.D()
+}

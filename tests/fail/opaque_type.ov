@@ -1,0 +1,16 @@
+package demo
+import ovid/io
+
+// Each line tries to make a capability from nothing, or to take one
+// apart. Outside ovid/io none of them is allowed.
+func Sneaky(raw i64, io *ovid/io.Cap) i64 {
+  var fake *ovid/io.Cap = raw as *ovid/io.Cap // error: opaque_type 27 hint="ovid/io's types are handles: get one from main or from an ovid/io func"
+  var addr i64 = io as i64 // error: opaque_type 18 hint="ovid/io's types are handles: ask an ovid/io func about one"
+  var argc i64 = io.argc // error: opaque_type 18 hint="call an ovid/io func instead"
+  io.used = 0 // error: opaque_type 3 hint="call an ovid/io func instead"
+  return (ovid/io.Argc(fake) + addr) + argc
+}
+
+func main(io *ovid/io.Cap) i64 {
+  return Sneaky(0, io)
+}

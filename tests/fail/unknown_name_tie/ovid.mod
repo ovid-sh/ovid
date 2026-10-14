@@ -1,0 +1,2 @@
+module demo
+entry demo

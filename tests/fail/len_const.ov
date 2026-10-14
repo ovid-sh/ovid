@@ -1,0 +1,7 @@
+package demo
+import ovid/io
+const K i64 = 1
+const N i64 = len(K) // error: syntax 21
+func main(io *ovid/io.Cap) i64 {
+  return N
+}

@@ -1,0 +1,2 @@
+module stock
+entry stock

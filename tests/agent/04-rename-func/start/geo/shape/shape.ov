@@ -1,0 +1,29 @@
+package geo/shape
+
+import ovid/io
+
+// Room is a room of a floor plan. Area is its floor area as measured on
+// site, which may differ from what the plan's sides give.
+type Room struct {
+  w i64
+  h i64
+  Area i64
+}
+
+// Area is the area of a w by h rectangle.
+func Area(w i64, h i64) i64 {
+  return w * h
+}
+
+// Planned is the area the plan gives r.
+func Planned(r *Room) i64 {
+  return Area(r.w, r.h)
+}
+
+func NewRoom(io *ovid/io.Cap, w i64, h i64, measured i64) *Room {
+  var r *Room = ovid/io.Alloc(io, sizeof(Room)) as *Room
+  r.w = w
+  r.h = h
+  r.Area = measured
+  return r
+}

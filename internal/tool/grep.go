@@ -4,17 +4,22 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+
+	"ovid/internal/module"
 )
 
 // GrepLimit is how many matches grep prints when no limit is given.
-const GrepLimit = 200
+const GrepLimit = PageLimit
 
 // Grep finds a regexp in the module's own source (not shipped packages
 // unless std) and names, for each match, the decl and the innermost
 // statement around it, so the result can feed show, refs, or edit directly.
-// It prints matches offset through offset+limit-1 (limit <= 0 means all);
-// the last line counts every match and says where the next page starts.
-func Grep(dir, pattern, pkg string, std bool, offset, limit int, w io.Writer) int {
+// As text the matches are grouped under their file and decl, one line per
+// match with its line number and source; asJSON prints one record per
+// match. It prints matches offset through offset+limit-1 (limit <= 0
+// means all); the last line counts every match and says where the next
+// page starts.
+func Grep(dir, pattern, pkg string, std, asJSON bool, offset, limit int, w io.Writer) int {
 	re, err := regexp.Compile(pattern)
 	if err != nil {
 		return fail(w, "bad_pattern", err.Error(), "the pattern is a Go regexp (RE2); quote it for the shell")
@@ -26,18 +31,19 @@ func Grep(dir, pattern, pkg string, std bool, offset, limit int, w io.Writer) in
 	// The decls and statements of each file, so a match is only compared
 	// with the nodes of its own file.
 	filePkg := map[int]string{}
-	byFile := map[int][]string{}
-	for _, id := range m.Order {
-		l := m.Index[id]
+	byFile := map[int][]*module.Loc{}
+	for _, l := range m.Locs() {
 		if _, ok := filePkg[l.Span.File]; !ok {
 			filePkg[l.Span.File] = l.Pkg
 		}
 		switch l.Kind {
 		case "func", "type", "const", "import", "stmt":
-			byFile[l.Span.File] = append(byFile[l.Span.File], id)
+			byFile[l.Span.File] = append(byFile[l.Span.File], l)
 		}
 	}
-	total, shown := 0, 0
+	pg := pager{Page: Page{offset, limit}}
+	var grp groups
+	lastLine := -1
 	for fi, f := range m.Files {
 		if m.IsStd(fi) && !std {
 			continue
@@ -46,22 +52,20 @@ func Grep(dir, pattern, pkg string, std bool, offset, limit int, w io.Writer) in
 			continue
 		}
 		for _, loc := range re.FindAllIndex(f.Src, -1) {
-			total++
-			if total <= offset || (limit > 0 && shown >= limit) {
+			if !pg.take() {
 				continue
 			}
-			shown++
 			p := f.Pos(loc[0])
 			r := map[string]any{"file": m.DisplayPath(f), "line": p.Line, "col": p.Col,
 				"match": string(f.Src[loc[0]:loc[1]]), "source": lineText(f.Src, loc[0])}
 			// The smallest decl and statement spans that hold the match.
 			declLen, stLen := 1<<62, 1<<62
-			for _, id := range byFile[fi] {
-				l := m.Index[id]
-				if loc[0] < l.Span.Off || loc[0] >= l.Span.End {
+			for _, l := range byFile[fi] {
+				id := l.ID
+				if loc[0] < l.Full.Off || loc[0] >= l.Full.End {
 					continue
 				}
-				size := l.Span.End - l.Span.Off
+				size := l.Full.End - l.Full.Off
 				if l.Kind == "stmt" {
 					if size < stLen {
 						stLen = size
@@ -72,15 +76,26 @@ func Grep(dir, pattern, pkg string, std bool, offset, limit int, w io.Writer) in
 					r["decl"] = id
 				}
 			}
-			emit(w, r)
+			if asJSON {
+				emit(w, r)
+				continue
+			}
+			// As text a line with several matches is printed once, as grep
+			// prints it; count and total still count matches.
+			if p.Line == lastLine && grp.file == r["file"] {
+				continue
+			}
+			lastLine = p.Line
+			decl, _ := r["decl"].(string)
+			grp.line(w, r["file"].(string), decl, p.Line, r["source"].(string))
 		}
 	}
-	res := map[string]any{"ok": true, "count": shown, "total": total, "offset": offset, "has_more": offset+shown < total}
-	if offset+shown < total {
-		res["next_offset"] = offset + shown
-		res["hint"] = fmt.Sprintf("%d more; --offset %d for the next page, or narrow with --pkg or a tighter pattern", total-offset-shown, offset+shown)
+	res := map[string]any{"ok": true, "revision": m.Revision()}
+	if pg.more() > 0 {
+		res["hint"] = fmt.Sprintf("%d more; --offset %d for the next page, or narrow with --pkg or a tighter pattern", pg.more(), pg.Offset+pg.shown)
 	}
-	if total == 0 {
+	pg.finish(res)
+	if pg.total == 0 {
 		res["hint"] = fmt.Sprintf("no match for %q; ovid refs <name> finds uses by meaning", pattern)
 	}
 	emit(w, res)

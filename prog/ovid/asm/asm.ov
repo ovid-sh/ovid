@@ -21,6 +21,9 @@ type Code struct {
   abss i64
   ro i64
   ron i64
+  // marks counts the labels marked so far: code between two of them runs
+  // straight through.
+  marks i64
   rocap i64
   stab i64
   smask i64
@@ -46,16 +49,16 @@ func New(io *ovid/io.Cap) *Code {
   return c
 }
 
-// Double returns a zeroed copy of the n bytes at p with room for 2n.
-func Double(c *Code, p i64, n i64) i64 {
-  var d i64 = ovid/io.Alloc(c.io, n * 2)
-  ovid/mem.Copy(d, p, n)
+// Double returns a zeroed copy of s with room for twice its length.
+func Double(c *Code, s bytes) i64 {
+  var d i64 = ovid/io.Alloc(c.io, len(s) * 2)
+  ovid/mem.CopyN(d, ptr(s), len(s))
   return d
 }
 
 func E(c *Code, b i64) i64 {
   if c.len >= c.cap {
-    c.data = Double(c, c.data, c.cap)
+    c.data = Double(c, bytes(c.data, c.cap))
     c.cap = c.cap * 2
   }
   store8(c.data + c.len, b & 255)
@@ -94,7 +97,7 @@ func PutU64(p i64, v i64) i64 {
 func NewLabel(c *Code) i64 {
   var id i64 = c.nlab
   if id >= c.labcap {
-    c.labs = Double(c, c.labs, c.labcap * 8)
+    c.labs = Double(c, bytes(c.labs, c.labcap * 8))
     c.labcap = c.labcap * 2
   }
   store64(c.labs + (id * 8), 0 - 1)
@@ -104,12 +107,13 @@ func NewLabel(c *Code) i64 {
 
 func Mark(c *Code, id i64) i64 {
   store64(c.labs + (id * 8), c.len)
+  c.marks = c.marks + 1
   return 0
 }
 
 func AddFix(c *Code, at i64, end i64, lab i64) i64 {
   if c.nfix >= c.fixcap {
-    c.fixes = Double(c, c.fixes, c.fixcap * 24)
+    c.fixes = Double(c, bytes(c.fixes, c.fixcap * 24))
     c.fixcap = c.fixcap * 2
   }
   var p i64 = c.fixes + (c.nfix * 24)
@@ -157,7 +161,7 @@ func Jl(c *Code, lab i64) i64 {
   return Jcc(c, 0x8C, lab)
 }
 
-func MovRegImm(c *Code, reg i64, imm i64) i64 {
+func MovRegImm64(c *Code, reg i64, imm i64) i64 {
   var rex i64 = 0x48
   if reg >= 8 {
     rex = 0x49
@@ -168,9 +172,285 @@ func MovRegImm(c *Code, reg i64, imm i64) i64 {
   return 0
 }
 
+// MovRegImm encodes mov reg, imm in its shortest form: a 32-bit move that
+// zero-extends, a sign-extended imm32, or the full imm64.
+func MovRegImm(c *Code, reg i64, imm i64) i64 {
+  if imm >= 0 && imm <= 0xffffffff {
+    if reg >= 8 {
+      E(c, 0x41)
+    }
+    E(c, 0xB8 + (reg & 7))
+    EU32(c, imm)
+    return 0
+  }
+  if imm >= (0 - 0x80000000) && imm < 0 {
+    var rex i64 = 0x48
+    if reg >= 8 {
+      rex = 0x49
+    }
+    E(c, rex)
+    E(c, 0xC7)
+    E(c, 192 + (reg & 7))
+    EU32(c, imm)
+    return 0
+  }
+  return MovRegImm64(c, reg, imm)
+}
+
+func Imm8(v i64) bool {
+  return v >= (0 - 128) && v <= 127
+}
+
+// AluRegImm encodes op reg, imm for the group-1 operation with /digit n
+// (0 add, 1 or, 4 and, 5 sub, 6 xor, 7 cmp); the imm is sign-extended.
+func AluRegImm(c *Code, n i64, reg i64, imm i64) i64 {
+  var rex i64 = 0x48
+  if reg >= 8 {
+    rex = 0x49
+  }
+  E(c, rex)
+  if Imm8(imm) {
+    E(c, 0x83)
+    E(c, (192 + (n * 8)) + (reg & 7))
+    E(c, imm)
+    return 0
+  }
+  E(c, 0x81)
+  E(c, (192 + (n * 8)) + (reg & 7))
+  EU32(c, imm)
+  return 0
+}
+
+// AluRegReg encodes op dst, src.
+func AluRegReg(c *Code, n i64, dst i64, src i64) i64 {
+  var rex i64 = 0x48
+  if dst >= 8 {
+    rex = rex + 4
+  }
+  if src >= 8 {
+    rex = rex + 1
+  }
+  E(c, rex)
+  E(c, (n * 8) + 3)
+  E(c, (192 + ((dst & 7) * 8)) + (src & 7))
+  return 0
+}
+
+// AluRegMem encodes op reg, [rbp+disp].
+func AluRegMem(c *Code, n i64, reg i64, disp i64) i64 {
+  return MovRbpDisp(c, (n * 8) + 3, reg, disp)
+}
+
+// AluMemReg encodes op [rbp+disp], reg.
+func AluMemReg(c *Code, n i64, disp i64, reg i64) i64 {
+  return MovRbpDisp(c, (n * 8) + 1, reg, disp)
+}
+
+// AluMemImm encodes op qword [rbp+disp], imm.
+func AluMemImm(c *Code, n i64, disp i64, imm i64) i64 {
+  if Imm8(imm) {
+    MovRbpDisp(c, 0x83, n, disp)
+    E(c, imm)
+    return 0
+  }
+  MovRbpDisp(c, 0x81, n, disp)
+  EU32(c, imm)
+  return 0
+}
+
+// MovMemRbpImm encodes mov qword [rbp+disp], imm (sign-extended).
+func MovMemRbpImm(c *Code, disp i64, imm i64) i64 {
+  MovRbpDisp(c, 0xC7, 0, disp)
+  EU32(c, imm)
+  return 0
+}
+
+// ImulRaxImm encodes imul rax, rax, imm.
+func ImulRaxImm(c *Code, imm i64) i64 {
+  E(c, 0x48)
+  if Imm8(imm) {
+    E(c, 0x6B)
+    E(c, 0xC0)
+    E(c, imm)
+    return 0
+  }
+  E(c, 0x69)
+  E(c, 0xC0)
+  EU32(c, imm)
+  return 0
+}
+
+// ImulRaxReg encodes imul rax, reg.
+func ImulRaxReg(c *Code, reg i64) i64 {
+  var rex i64 = 0x48
+  if reg >= 8 {
+    rex = 0x49
+  }
+  E(c, rex)
+  E(c, 0x0F)
+  E(c, 0xAF)
+  E(c, 192 + (reg & 7))
+  return 0
+}
+
+// ImulRaxMem encodes imul rax, [rbp+disp].
+func ImulRaxMem(c *Code, disp i64) i64 {
+  E(c, 0x48)
+  E(c, 0x0F)
+  E(c, 0xAF)
+  return RbpOperand(c, 0, disp)
+}
+
+// ShiftRaxImm encodes shl rax, n, or sar rax, n.
+func ShiftRaxImm(c *Code, sar bool, n i64) i64 {
+  E(c, 0x48)
+  E(c, 0xC1)
+  if sar {
+    E(c, 0xF8)
+  } else {
+    E(c, 0xE0)
+  }
+  E(c, n)
+  return 0
+}
+
+// SarRegImm encodes sar reg, n, for reg one of rax to rdi.
+func SarRegImm(c *Code, reg i64, n i64) i64 {
+  E(c, 0x48)
+  E(c, 0xC1)
+  E(c, 0xF8 + reg)
+  E(c, n)
+  return 0
+}
+
+// ShrRegImm encodes shr reg, n, for reg one of rax to rdi.
+func ShrRegImm(c *Code, reg i64, n i64) i64 {
+  E(c, 0x48)
+  E(c, 0xC1)
+  E(c, 0xE8 + reg)
+  E(c, n)
+  return 0
+}
+
+// RexMem emits the REX prefix for an instruction with operands reg and
+// [base+index+disp] (index -1 for none), when one is needed or forced.
+func RexMem(c *Code, w bool, reg i64, base i64, index i64, force bool) i64 {
+  var v i64 = 0x40
+  if w {
+    v = v + 8
+  }
+  if reg >= 8 {
+    v = v + 4
+  }
+  if index >= 0 && (index & 8) != 0 {
+    v = v + 2
+  }
+  if base >= 8 {
+    v = v + 1
+  }
+  if v != 0x40 || force {
+    E(c, v)
+  }
+  return 0
+}
+
+// LoadMem loads rax from width bits (8, 16, 32, or 64) at
+// [base+index+disp], zero-extended. index is -1 for none.
+func LoadMem(c *Code, width i64, base i64, index i64, disp i64) i64 {
+  return LoadMemReg(c, width, 0, base, index, disp)
+}
+
+// LoadMemReg is LoadMem into dst.
+func LoadMemReg(c *Code, width i64, dst i64, base i64, index i64, disp i64) i64 {
+  if width == 8 {
+    RexMem(c, true, dst, base, index, false)
+    E(c, 0x0F)
+    E(c, 0xB6)
+  } else if width == 16 {
+    RexMem(c, true, dst, base, index, false)
+    E(c, 0x0F)
+    E(c, 0xB7)
+  } else if width == 32 {
+    RexMem(c, false, dst, base, index, false)
+    E(c, 0x8B)
+  } else {
+    RexMem(c, true, dst, base, index, false)
+    E(c, 0x8B)
+  }
+  return MemOperand(c, dst, base, index, disp)
+}
+
+// StoreMemReg stores the low width bits (8, 16, 32, or 64) of src at
+// [base+index+disp].
+func StoreMemReg(c *Code, width i64, src i64, base i64, index i64, disp i64) i64 {
+  if width == 8 {
+    // sil and dil are only named with a REX prefix.
+    RexMem(c, false, src, base, index, src >= 4 && src < 8)
+    E(c, 0x88)
+  } else if width == 16 {
+    // The operand-size prefix goes before REX.
+    E(c, 0x66)
+    RexMem(c, false, src, base, index, false)
+    E(c, 0x89)
+  } else if width == 32 {
+    RexMem(c, false, src, base, index, false)
+    E(c, 0x89)
+  } else {
+    RexMem(c, true, src, base, index, false)
+    E(c, 0x89)
+  }
+  return MemOperand(c, src, base, index, disp)
+}
+
+// StoreMemImm stores the low width bits of imm (sign-extended to 64 for a
+// 64-bit store) at [base+index+disp].
+func StoreMemImm(c *Code, width i64, base i64, index i64, disp i64, imm i64) i64 {
+  if width == 8 {
+    RexMem(c, false, 0, base, index, false)
+    E(c, 0xC6)
+    MemOperand(c, 0, base, index, disp)
+    E(c, imm)
+    return 0
+  }
+  if width == 16 {
+    E(c, 0x66)
+    RexMem(c, false, 0, base, index, false)
+    E(c, 0xC7)
+    MemOperand(c, 0, base, index, disp)
+    E(c, imm)
+    E(c, imm >> 8)
+    return 0
+  }
+  RexMem(c, width == 64, 0, base, index, false)
+  E(c, 0xC7)
+  MemOperand(c, 0, base, index, disp)
+  EU32(c, imm)
+  return 0
+}
+
+// BswapRax reverses the bytes of the low width bits (16, 32, or 64) of
+// rax and zero-extends: bswap, then for 16 a shift down by 48.
+func BswapRax(c *Code, width i64) i64 {
+  if width != 32 {
+    E(c, 0x48)
+  }
+  E(c, 0x0F)
+  E(c, 0xC8)
+  if width == 16 {
+    ShrRegImm(c, 0, 48)
+  }
+  return 0
+}
+
+// Leave encodes leave: mov rsp, rbp; pop rbp.
+func Leave(c *Code) i64 {
+  E(c, 0xC9)
+  return 0
+}
+
 func AbsHere(c *Code, roOff i64) i64 {
   if c.nabs >= c.abscap {
-    c.abss = Double(c, c.abss, c.abscap * 16)
+    c.abss = Double(c, bytes(c.abss, c.abscap * 16))
     c.abscap = c.abscap * 2
   }
   var p i64 = c.abss + (c.nabs * 16)
@@ -231,6 +511,39 @@ func IdivRcx(c *Code) i64 {
   E(c, 0xF7)
   E(c, 0xF9)
   return 0
+}
+
+// ImulRcx encodes the one-operand imul rcx: rdx:rax = rax * rcx, signed.
+func ImulRcx(c *Code) i64 {
+  E(c, 0x48)
+  E(c, 0xF7)
+  E(c, 0xE9)
+  return 0
+}
+
+// Int3 encodes int3, which pads code that never runs.
+func Int3(c *Code) i64 {
+  E(c, 0xCC)
+  return 0
+}
+
+// Ud2 traps with an illegal instruction: a failed check.
+func Ud2(c *Code) i64 {
+  E(c, 0x0F)
+  E(c, 0x0B)
+  return 0
+}
+
+// RoBytes appends s to rodata and returns its offset.
+func RoBytes(c *Code, s bytes) i64 {
+  while (c.ron + len(s)) > c.rocap {
+    c.ro = Double(c, bytes(c.ro, c.rocap))
+    c.rocap = c.rocap * 2
+  }
+  var off i64 = c.ron
+  ovid/mem.CopyN(c.ro + off, ptr(s), len(s))
+  c.ron = off + len(s)
+  return off
 }
 
 func NegRax(c *Code) i64 {
@@ -325,6 +638,36 @@ func SarRaxCl(c *Code) i64 {
   return 0
 }
 
+func ShrRaxCl(c *Code) i64 {
+  E(c, 0x48)
+  E(c, 0xD3)
+  E(c, 0xE8)
+  return 0
+}
+
+// MulRcx encodes the one-operand mul rcx: rdx:rax = rax * rcx, unsigned.
+func MulRcx(c *Code) i64 {
+  E(c, 0x48)
+  E(c, 0xF7)
+  E(c, 0xE1)
+  return 0
+}
+
+// DivRcx encodes div rcx: rax = rdx:rax / rcx, rdx the remainder, unsigned.
+func DivRcx(c *Code) i64 {
+  E(c, 0x48)
+  E(c, 0xF7)
+  E(c, 0xF1)
+  return 0
+}
+
+// XorEdxEdx clears rdx, the high half of an unsigned dividend.
+func XorEdxEdx(c *Code) i64 {
+  E(c, 0x31)
+  E(c, 0xD2)
+  return 0
+}
+
 func SetccAl(c *Code, cc i64) i64 {
   E(c, 0x0F)
   E(c, cc)
@@ -381,6 +724,11 @@ func MovRbpDisp(c *Code, op i64, reg i64, disp i64) i64 {
   }
   E(c, rex)
   E(c, op)
+  return RbpOperand(c, reg, disp)
+}
+
+// RbpOperand encodes the ModRM bytes for reg, [rbp+disp].
+func RbpOperand(c *Code, reg i64, disp i64) i64 {
   if disp >= (0 - 128) && disp <= 127 {
     E(c, (64 + ((reg & 7) * 8)) + 5)
     E(c, disp)
@@ -421,19 +769,41 @@ func MemReg(c *Code, op i64, reg i64, base i64, disp i64) i64 {
   }
   E(c, rex)
   E(c, op)
+  return MemOperand(c, reg, base, -1, disp)
+}
+
+// MemOperand encodes the ModRM, SIB, and displacement bytes for reg,
+// [base+index+disp]; index is -1 for none and is never rsp. Bits 4 and 5
+// of index scale it: index | s<<4 is the register times 2^s.
+func MemOperand(c *Code, reg i64, base i64, index i64, disp i64) i64 {
   var rb i64 = base & 7
   var rg i64 = reg & 7
-  if disp == 0 && rb != 5 && rb != 4 {
-    E(c, (rg * 8) + rb)
-    return 0
+  // rsp and r12 as a base, and any index, need a SIB byte.
+  var sib bool = index >= 0 || rb == 4
+  var rm i64 = rb
+  if sib {
+    rm = 4
   }
-  if disp >= (0 - 128) && disp <= 127 {
-    E(c, (64 + (rg * 8)) + rb)
+  // rbp and r13 as a base have no form without a displacement.
+  var mod i64 = 2
+  if disp == 0 && rb != 5 {
+    mod = 0
+  } else if disp >= (0 - 128) && disp <= 127 {
+    mod = 1
+  }
+  E(c, ((mod * 64) + (rg * 8)) + rm)
+  if sib {
+    var x i64 = 4
+    if index >= 0 {
+      x = (index & 7) + (((index >> 4) & 3) * 8)
+    }
+    E(c, (x * 8) + rb)
+  }
+  if mod == 1 {
     E(c, disp)
-    return 0
+  } else if mod == 2 {
+    EU32(c, disp)
   }
-  E(c, (128 + (rg * 8)) + rb)
-  EU32(c, disp)
   return 0
 }
 
@@ -488,27 +858,27 @@ func MovR12MemRsp(c *Code) i64 {
   return 0
 }
 
-func StrHash(p i64, n i64) i64 {
+func StrHash(s bytes) i64 {
   var h i64 = 5381
   var i i64 = 0
-  while i < n {
-    h = ((h << 5) + h) + load8(p + i)
+  while i < len(s) {
+    h = ((h << 5) + h) + load8(ptr(s) + i)
     i = i + 1
   }
   return h
 }
 
-// StrSlot returns the address of the stab slot that holds p[0:n], or of
+// StrSlot returns the address of the stab slot that holds s, or of
 // the empty slot where it belongs.
-func StrSlot(c *Code, p i64, n i64) i64 {
-  var h i64 = StrHash(p, n) & c.smask
+func StrSlot(c *Code, s bytes) i64 {
+  var h i64 = StrHash(s) & c.smask
   while true {
     var r i64 = c.stab + (h * 16)
     var off i64 = load64(r)
     if off == 0 {
       return r
     }
-    if ovid/mem.Eq((c.ro + off) - 1, load64(r + 8), p, n) {
+    if ovid/mem.Eq(bytes((c.ro + off) - 1, load64(r + 8)), s) {
       return r
     }
     h = (h + 1) & c.smask
@@ -516,24 +886,24 @@ func StrSlot(c *Code, p i64, n i64) i64 {
   return 0
 }
 
-// Intern returns the offset of p[0:n] in the read-only pool, adding it
+// Intern returns the offset of s in the read-only pool, adding it
 // (NUL-terminated) the first time. Only identical strings share storage,
 // like the Go compiler's map, so every literal stays NUL-terminated.
-func Intern(c *Code, p i64, n i64) i64 {
-  var r i64 = StrSlot(c, p, n)
+func Intern(c *Code, s bytes) i64 {
+  var r i64 = StrSlot(c, s)
   if load64(r) != 0 {
     return load64(r) - 1
   }
-  while (c.ron + n + 1) > c.rocap {
-    c.ro = Double(c, c.ro, c.rocap)
+  while (c.ron + len(s) + 1) > c.rocap {
+    c.ro = Double(c, bytes(c.ro, c.rocap))
     c.rocap = c.rocap * 2
   }
   var off i64 = c.ron
-  ovid/mem.Copy(c.ro + off, p, n)
-  store8(c.ro + off + n, 0)
-  c.ron = off + n + 1
+  ovid/mem.CopyN(c.ro + off, ptr(s), len(s))
+  store8(c.ro + off + len(s), 0)
+  c.ron = off + len(s) + 1
   store64(r, off + 1)
-  store64(r + 8, n)
+  store64(r + 8, len(s))
   c.nstr = c.nstr + 1
   if (c.nstr * 2) > c.smask {
     var old i64 = c.stab
@@ -544,7 +914,7 @@ func Intern(c *Code, p i64, n i64) i64 {
     while i < oldn {
       var o i64 = old + (i * 16)
       if load64(o) != 0 {
-        var d i64 = StrSlot(c, (c.ro + load64(o)) - 1, load64(o + 8))
+        var d i64 = StrSlot(c, bytes((c.ro + load64(o)) - 1, load64(o + 8)))
         store64(d, load64(o))
         store64(d + 8, load64(o + 8))
       }
@@ -554,11 +924,11 @@ func Intern(c *Code, p i64, n i64) i64 {
   return off
 }
 
-// The image layout shared with ovid/elf: the ELF header and two program
-// headers, then code (read+execute), then rodata (read-only) mapped on the
+// The image layout shared with ovid/elf: the ELF header and three program
+// headers (two PT_LOAD and PT_GNU_STACK), then code (read+execute), then rodata (read-only) mapped on the
 // next page at the same offset within its page as in the file.
 const LOADADDR i64 = 4194304
-const HEADERSIZE i64 = 176
+const HEADERSIZE i64 = 232
 const PAGESIZE i64 = 4096
 
 func RodataVAddr(codeLen i64) i64 {

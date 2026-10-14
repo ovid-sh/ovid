@@ -1,0 +1,8 @@
+// app/x -> app/y -> app/z -> app/x. The cycle is reported once, at the
+// import in app/x that starts it; app/x's import of app/w is no part of it.
+package demo
+import ovid/io
+import app/z
+func main(io *ovid/io.Cap) i64 {
+  return app/z.Z()
+}

@@ -1,0 +1,8 @@
+package app/a
+import app/b // error: import_cycle 1 hint="packages may not import each other, directly or through others; move what they share into a package both import"
+func A() i64 {
+  return 1
+}
+func UsesB() i64 {
+  return app/b.B()
+}

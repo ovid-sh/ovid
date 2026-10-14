@@ -1,0 +1,9 @@
+package demo
+import ovid/io
+func Two() i64 {
+  return 2
+}
+const T [2]i64 = {1, Two()} // error: syntax 27
+func main(io *ovid/io.Cap) i64 {
+  return T[0]
+}

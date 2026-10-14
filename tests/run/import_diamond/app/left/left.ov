@@ -1,0 +1,5 @@
+package app/left
+import app/base
+func L() i64 {
+  return app/base.Ten + 1
+}

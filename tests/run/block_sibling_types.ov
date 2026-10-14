@@ -1,0 +1,33 @@
+// Two sibling blocks declare x with different struct types. Each x has
+// its own type, so x.a is field 0 of T in the first and field 1 of U in
+// the second (#20).
+// exit: 7
+package demo
+
+import ovid/io
+
+type T struct {
+  a i64
+  b i64
+}
+
+type U struct {
+  b i64
+  a i64
+}
+
+func main(io *ovid/io.Cap) i64 {
+  var r i64 = 0
+  if r == 0 {
+    var x *T = ovid/io.Alloc(io, sizeof(T)) as *T
+    x.a = 7
+    x.b = 9
+    r = load64(x as i64)
+  }
+  if r == 7 {
+    var x *U = ovid/io.Alloc(io, sizeof(U)) as *U
+    x.a = 0
+    r = r + x.a
+  }
+  return r
+}

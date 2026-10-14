@@ -1,0 +1,8 @@
+// app/a and app/b import each other. The cycle is reported once, at the
+// import in app/a, the package of the two whose path sorts first.
+package demo
+import ovid/io
+import app/b
+func main(io *ovid/io.Cap) i64 {
+  return app/b.B()
+}

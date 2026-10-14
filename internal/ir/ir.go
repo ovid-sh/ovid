@@ -1,15 +1,20 @@
 // Package ir is the Ovid program tree. The source of truth is .ov text; the
 // parser builds this tree with an id and a source span on every node. The JSON
-// form (ovid dump) is a derived view for tools and for the self-hosted CLI.
+// form (ovid dump) is a derived view for tools.
 package ir
 
 import (
 	"bytes"
+	"encoding/hex"
 	"encoding/json"
 	"strconv"
+	"unicode/utf8"
 )
 
 // Span is a byte range in one source file. File indexes Program.Files.
+// Declarations and nodes also record the token that spells their name
+// (NameSpan) and the name in each type they spell (TypeSpan, ResultSpan:
+// just T in *path.T), so tools can rewrite a name without scanning text.
 type Span struct {
 	File int
 	Off  int
@@ -32,6 +37,9 @@ type Package struct {
 	Types   []TypeDecl `json:"types,omitempty"`
 	Funcs   []Func     `json:"funcs,omitempty"`
 	Span    Span       `json:"-"`
+	// Sys says the package may call syscall: it is the toolchain's own
+	// copy of a shipped package, not one a module or its std line supplied.
+	Sys bool `json:"-"`
 }
 
 type Import struct {
@@ -40,51 +48,80 @@ type Import struct {
 	Span Span   `json:"-"`
 }
 
+// Const is a const, or a table: a const whose Values are its elements,
+// read with Name[i] and len(Name). A table's Type is [N]i64 and its Value
+// 0; an empty table's Values are absent from the dump.
 type Const struct {
-	ID    string `json:"id"`
-	Name  string `json:"name"`
-	Type  string `json:"type"`
-	Value int64  `json:"value"`
-	Span  Span   `json:"-"`
+	ID       string  `json:"id"`
+	Name     string  `json:"name"`
+	Type     string  `json:"type"`
+	Value    int64   `json:"value"`
+	Table    bool    `json:"table,omitempty"`
+	Values   []int64 `json:"values,omitempty"`
+	Span     Span    `json:"-"`
+	NameSpan Span    `json:"-"`
+	// Uses are the consts of the package its value (or a table's
+	// elements) names, which the parser folded away: the checker records
+	// a use of each, so refs and rename see them.
+	Uses []ConstUse `json:"-"`
+}
+
+// ConstUse is a const named in another const's value: its name and the
+// name token.
+type ConstUse struct {
+	Name string
+	Span Span
 }
 
 type TypeDecl struct {
-	ID     string  `json:"id"`
-	Name   string  `json:"name"`
-	Fields []Field `json:"fields"`
-	Span   Span    `json:"-"`
+	ID       string  `json:"id"`
+	Name     string  `json:"name"`
+	Fields   []Field `json:"fields"`
+	Span     Span    `json:"-"`
+	NameSpan Span    `json:"-"`
 }
 
 type Field struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-	Type string `json:"type"`
-	Span Span   `json:"-"`
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Type     string `json:"type"`
+	Span     Span   `json:"-"`
+	NameSpan Span   `json:"-"`
+	TypeSpan Span   `json:"-"`
 }
 
 type Func struct {
-	ID     string  `json:"id"`
-	Name   string  `json:"name"`
-	Params []Param `json:"params,omitempty"`
-	Result string  `json:"result"`
-	Body   []*Node `json:"body,omitempty"`
-	Span   Span    `json:"-"`
+	ID         string  `json:"id"`
+	Name       string  `json:"name"`
+	Params     []Param `json:"params,omitempty"`
+	Result     string  `json:"result"`
+	Result2    string  `json:"result2,omitempty"` // the error code of a func with two results
+	Body       []*Node `json:"body,omitempty"`
+	Span       Span    `json:"-"`
+	NameSpan   Span    `json:"-"`
+	ResultSpan Span    `json:"-"`
 }
 
 type Param struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-	Type string `json:"type"`
-	Span Span   `json:"-"`
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Type     string `json:"type"`
+	Span     Span   `json:"-"`
+	NameSpan Span   `json:"-"`
+	TypeSpan Span   `json:"-"`
 }
 
 // Node is a statement or expression. ValK selects the JSON "value" payload:
-// 1 int, 2 bool, 3 string.
+// 1 int, 2 bool, 3 string. For a call, NameSpan is the token of Func. A var2
+// or assign2 receives a call's two results into Name and Two.Name (Type and
+// Two.Type for a var2; "_" discards); a return with Val2 returns two. Spans
+// are not part of the JSON form.
 type Node struct {
 	ID    string
 	Op    string
 	Name  string
 	Type  string
+	Two   *Second
 	Pkg   string
 	Func  string
 	Str   string
@@ -97,12 +134,25 @@ type Node struct {
 	Base  *Node
 	Addr  *Node
 	Val   *Node
+	Val2  *Node
 	Cond  *Node
 	Args  []*Node
 	Then  []*Node
 	Else  []*Node
 	Body  []*Node
 	Span  Span
+
+	NameSpan Span
+	TypeSpan Span
+}
+
+// Second is the second name of a var2 or assign2, kept off Node so that
+// every other node does not carry it.
+type Second struct {
+	Name     string
+	Type     string // "" for an assign2 or for _
+	NameSpan Span
+	TypeSpan Span
 }
 
 func (n *Node) MarshalJSON() ([]byte, error) {
@@ -110,25 +160,39 @@ func (n *Node) MarshalJSON() ([]byte, error) {
 		return []byte("null"), nil
 	}
 	var b bytes.Buffer
+	n.appendJSON(&b)
+	return b.Bytes(), nil
+}
+
+// appendJSON writes n and everything under it to b in one pass.
+func (n *Node) appendJSON(b *bytes.Buffer) {
 	b.WriteString(`{"id":`)
-	writeJSONString(&b, n.ID)
+	writeJSONString(b, n.ID)
 	b.WriteString(`,"op":`)
-	writeJSONString(&b, n.Op)
+	writeJSONString(b, n.Op)
 	if n.Name != "" {
 		b.WriteString(`,"name":`)
-		writeJSONString(&b, n.Name)
+		writeJSONString(b, n.Name)
 	}
 	if n.Type != "" {
 		b.WriteString(`,"type":`)
-		writeJSONString(&b, n.Type)
+		writeJSONString(b, n.Type)
+	}
+	if n.Two != nil {
+		b.WriteString(`,"name2":`)
+		writeJSONString(b, n.Two.Name)
+		if n.Two.Type != "" {
+			b.WriteString(`,"type2":`)
+			writeJSONString(b, n.Two.Type)
+		}
 	}
 	if n.Pkg != "" {
 		b.WriteString(`,"pkg":`)
-		writeJSONString(&b, n.Pkg)
+		writeJSONString(b, n.Pkg)
 	}
 	if n.Func != "" {
 		b.WriteString(`,"func":`)
-		writeJSONString(&b, n.Func)
+		writeJSONString(b, n.Func)
 	}
 	switch n.ValK {
 	case 1:
@@ -142,22 +206,27 @@ func (n *Node) MarshalJSON() ([]byte, error) {
 			b.WriteString("false")
 		}
 	case 3:
-		b.WriteString(`,"value":`)
-		writeJSONString(&b, n.Str)
+		if utf8.ValidString(n.Str) {
+			b.WriteString(`,"value":`)
+			writeJSONString(b, n.Str)
+		} else {
+			// Bytes JSON cannot carry: hex, so nothing is lost.
+			b.WriteString(`,"value_hex":"` + hex.EncodeToString([]byte(n.Str)) + `"`)
+		}
 	}
-	writeNode(&b, "left", n.Left)
-	writeNode(&b, "right", n.Right)
-	writeNode(&b, "arg", n.Arg)
-	writeNode(&b, "base", n.Base)
-	writeNode(&b, "addr", n.Addr)
-	writeNode(&b, "val", n.Val)
-	writeNode(&b, "cond", n.Cond)
-	writeNodes(&b, "args", n.Args)
-	writeNodes(&b, "then", n.Then)
-	writeNodes(&b, "else", n.Else)
-	writeNodes(&b, "body", n.Body)
+	writeNode(b, "left", n.Left)
+	writeNode(b, "right", n.Right)
+	writeNode(b, "arg", n.Arg)
+	writeNode(b, "base", n.Base)
+	writeNode(b, "addr", n.Addr)
+	writeNode(b, "val", n.Val)
+	writeNode(b, "val2", n.Val2)
+	writeNode(b, "cond", n.Cond)
+	writeNodes(b, "args", n.Args)
+	writeNodes(b, "then", n.Then)
+	writeNodes(b, "else", n.Else)
+	writeNodes(b, "body", n.Body)
 	b.WriteByte('}')
-	return b.Bytes(), nil
 }
 
 func writeNode(b *bytes.Buffer, key string, n *Node) {
@@ -168,8 +237,7 @@ func writeNode(b *bytes.Buffer, key string, n *Node) {
 	b.WriteByte('"')
 	b.WriteString(key)
 	b.WriteString(`":`)
-	raw, _ := json.Marshal(n)
-	b.Write(raw)
+	n.appendJSON(b)
 }
 
 func writeNodes(b *bytes.Buffer, key string, ns []*Node) {
@@ -184,86 +252,37 @@ func writeNodes(b *bytes.Buffer, key string, ns []*Node) {
 		if i > 0 {
 			b.WriteByte(',')
 		}
-		raw, _ := json.Marshal(n)
-		b.Write(raw)
+		if n == nil {
+			b.WriteString("null")
+		} else {
+			n.appendJSON(b)
+		}
 	}
 	b.WriteByte(']')
 }
 
 func writeJSONString(b *bytes.Buffer, s string) {
+	// Printable ASCII without a quote or a backslash is itself in JSON;
+	// that is nearly every id, op, and name.
+	plain := true
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; c < 0x20 || c >= 0x7f || c == '"' || c == '\\' {
+			plain = false
+			break
+		}
+	}
+	if plain {
+		b.WriteByte('"')
+		b.WriteString(s)
+		b.WriteByte('"')
+		return
+	}
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
 	_ = enc.Encode(s)
 	raw := bytes.TrimRight(buf.Bytes(), "\n")
 	b.Write(raw)
-}
-
-func (n *Node) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
-		return nil
-	}
-	var raw struct {
-		ID    string          `json:"id"`
-		Op    string          `json:"op"`
-		Name  string          `json:"name"`
-		Type  string          `json:"type"`
-		Pkg   string          `json:"pkg"`
-		Func  string          `json:"func"`
-		Value json.RawMessage `json:"value"`
-		Left  *Node           `json:"left"`
-		Right *Node           `json:"right"`
-		Arg   *Node           `json:"arg"`
-		Base  *Node           `json:"base"`
-		Addr  *Node           `json:"addr"`
-		Val   *Node           `json:"val"`
-		Cond  *Node           `json:"cond"`
-		Args  []*Node         `json:"args"`
-		Then  []*Node         `json:"then"`
-		Else  []*Node         `json:"else"`
-		Body  []*Node         `json:"body"`
-	}
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return err
-	}
-	n.ID = raw.ID
-	n.Op = raw.Op
-	n.Name = raw.Name
-	n.Type = raw.Type
-	n.Pkg = raw.Pkg
-	n.Func = raw.Func
-	n.Left = raw.Left
-	n.Right = raw.Right
-	n.Arg = raw.Arg
-	n.Base = raw.Base
-	n.Addr = raw.Addr
-	n.Val = raw.Val
-	n.Cond = raw.Cond
-	n.Args = raw.Args
-	n.Then = raw.Then
-	n.Else = raw.Else
-	n.Body = raw.Body
-	if len(raw.Value) == 0 {
-		return nil
-	}
-	switch raw.Value[0] {
-	case '"':
-		if err := json.Unmarshal(raw.Value, &n.Str); err != nil {
-			return err
-		}
-		n.ValK = 3
-	case 't', 'f':
-		if err := json.Unmarshal(raw.Value, &n.Bool); err != nil {
-			return err
-		}
-		n.ValK = 2
-	default:
-		if err := json.Unmarshal(raw.Value, &n.Int); err != nil {
-			return err
-		}
-		n.ValK = 1
-	}
-	return nil
 }
 
 func (n *Node) Walk(fn func(*Node)) {
@@ -277,6 +296,7 @@ func (n *Node) Walk(fn func(*Node)) {
 	n.Base.Walk(fn)
 	n.Addr.Walk(fn)
 	n.Val.Walk(fn)
+	n.Val2.Walk(fn)
 	n.Cond.Walk(fn)
 	for _, c := range n.Args {
 		c.Walk(fn)
@@ -303,20 +323,10 @@ func Marshal(p *Program) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func Unmarshal(data []byte) (*Program, error) {
-	var p Program
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.UseNumber()
-	if err := dec.Decode(&p); err != nil {
-		return nil, err
-	}
-	return &p, nil
-}
-
 // Children returns the direct child nodes of n in source order.
 func (n *Node) Children() []*Node {
 	var out []*Node
-	for _, c := range []*Node{n.Left, n.Right, n.Arg, n.Base, n.Addr, n.Val, n.Cond} {
+	for _, c := range []*Node{n.Left, n.Right, n.Arg, n.Base, n.Addr, n.Val, n.Val2, n.Cond} {
 		if c != nil {
 			out = append(out, c)
 		}
@@ -331,7 +341,7 @@ func (n *Node) Children() []*Node {
 // IsStmt reports whether op names a statement.
 func IsStmt(op string) bool {
 	switch op {
-	case "var", "assign", "setfield", "store8", "store64", "return", "if", "while", "expr":
+	case "var", "var2", "assign", "assign2", "setfield", "store8", "store16", "store32", "store64", "chk", "setbyte", "return", "if", "while", "break", "continue", "expr":
 		return true
 	}
 	return false

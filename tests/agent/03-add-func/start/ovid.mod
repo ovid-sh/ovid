@@ -1,0 +1,2 @@
+module shop
+entry shop

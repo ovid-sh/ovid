@@ -18,6 +18,7 @@ type Error struct {
 	File int
 	Off  int
 	Msg  string
+	Hint string // what the language wants instead, when the slip is a known one
 }
 
 func (e *Error) Error() string { return e.Msg }
@@ -33,6 +34,7 @@ type parser struct {
 	fn      *ir.Func
 	ec      int
 	sc      int
+	cuses   []ir.ConstUse // the consts the const being parsed names
 }
 
 type mark struct {
@@ -59,6 +61,11 @@ func ParseFile(file int, src []byte) (pkg *ir.Package, err *Error) {
 }
 
 func (p *parser) errorf(f string, args ...any) {
+	p.fail("", f, args...)
+}
+
+// fail is errorf with a hint.
+func (p *parser) fail(hint string, f string, args ...any) {
 	p.skip()
 	msg := fmt.Sprintf(f, args...)
 	if strings.HasPrefix(msg, "expected") {
@@ -69,7 +76,7 @@ func (p *parser) errorf(f string, args ...any) {
 		// Point at the end of the line the problem is on, not the next one.
 		off = p.last
 	}
-	panic(&Error{File: p.file, Off: off, Msg: msg})
+	panic(&Error{File: p.file, Off: off, Msg: msg, Hint: hint})
 }
 
 // found describes the next token for error messages.
@@ -204,6 +211,11 @@ func (p *parser) ident() string {
 	return id
 }
 
+// tok is the span of the identifier name that was just consumed.
+func (p *parser) tok(name string) ir.Span {
+	return ir.Span{File: p.file, Off: p.last - len(name), End: p.last}
+}
+
 func (p *parser) peekKw(k string) bool {
 	m := p.save()
 	if !p.peekIdent() {
@@ -212,6 +224,31 @@ func (p *parser) peekKw(k string) bool {
 	id := p.ident()
 	p.restore(m)
 	return id == k
+}
+
+// peekLen reports whether the next tokens are len(, with at most spaces
+// and tabs between: len is a keyword only there, so a variable may still
+// be named len.
+func (p *parser) peekLen() bool {
+	return p.peekCall("len")
+}
+
+// peekCall says whether the keyword kw is next and a ( follows it (after
+// spaces or tabs): len and ptr are keywords only as calls, so a variable
+// may bear either name.
+func (p *parser) peekCall(kw string) bool {
+	if !p.peekKw(kw) {
+		return false
+	}
+	m := p.save()
+	p.ident()
+	i := p.i
+	for i < len(p.src) && (p.src[i] == ' ' || p.src[i] == '\t') {
+		i++
+	}
+	open := i < len(p.src) && p.src[i] == '('
+	p.restore(m)
+	return open
 }
 
 func (p *parser) kw(k string) bool {
@@ -280,15 +317,24 @@ func (p *parser) expectEnd() {
 		return
 	}
 	if !p.nl {
+		if p.peekByte(';') {
+			p.fail("statements are one per line; there is no ;", "expected newline")
+		}
 		p.errorf("expected newline")
 	}
 }
 
 func (p *parser) parseConst(s int) {
 	name := p.ident()
-	typ := p.parseType()
+	ns := p.tok(name)
+	if p.peekByte('[') {
+		p.parseTable(s, name, ns)
+		return
+	}
+	typ, _ := p.parseType()
 	p.expect('=')
 	ex := p.parseExpr()
+	p.cuses = nil
 	v, ok := p.evalConst(ex)
 	if !ok {
 		p.errorf("const %s is not a constant integer expression", name)
@@ -297,7 +343,47 @@ func (p *parser) parseConst(s int) {
 		p.errorf("const %s must be i64", name)
 	}
 	p.pkg.Consts = append(p.pkg.Consts, ir.Const{
-		ID: "cn:" + p.pkg.Path + "." + name, Name: name, Type: "i64", Value: v, Span: p.span(s),
+		ID: "cn:" + p.pkg.Path + "." + name, Name: name, Type: "i64", Value: v, Span: p.span(s), NameSpan: ns,
+		Uses: p.cuses,
+	})
+	p.expectEnd()
+}
+
+// parseTable reads the rest of const Name [N]i64 = {e, ...}: N elements,
+// each a constant expression, which may run over several lines.
+func (p *parser) parseTable(s int, name string, ns ir.Span) {
+	p.expect('[')
+	if !p.isNum() {
+		p.errorf("expected the table's length")
+	}
+	n := p.number().Int
+	p.expect(']')
+	p.expectKw("i64")
+	p.expect('=')
+	p.expect('{')
+	var vals []int64
+	p.cuses = nil
+	for !p.peekByte('}') {
+		if p.eof() {
+			p.errorf("unclosed table")
+		}
+		ex := p.parseExpr()
+		v, ok := p.evalConst(ex)
+		if !ok {
+			p.errorf("element %d of table %s is not a constant integer expression", len(vals), name)
+		}
+		vals = append(vals, v)
+		if !p.peekByte('}') {
+			p.expect(',')
+		}
+	}
+	p.expect('}')
+	if int64(len(vals)) != n {
+		p.errorf("table %s is declared [%d]i64 but has %d elements", name, n, len(vals))
+	}
+	p.pkg.Consts = append(p.pkg.Consts, ir.Const{
+		ID: "cn:" + p.pkg.Path + "." + name, Name: name, Type: fmt.Sprintf("[%d]i64", n), Table: true, Values: vals,
+		Span: p.span(s), NameSpan: ns, Uses: p.cuses,
 	})
 	p.expectEnd()
 }
@@ -315,7 +401,20 @@ func (p *parser) evalConst(n *ir.Node) (int64, bool) {
 		}
 		for _, c := range p.pkg.Consts {
 			if c.Name == n.Name {
-				return c.Value, true
+				p.cuses = append(p.cuses, ir.ConstUse{Name: c.Name, Span: n.NameSpan})
+				return c.Value, !c.Table
+			}
+		}
+		return 0, false
+	case "len":
+		// len(Table) of a table in this package, declared above.
+		if n.Pkg != "" && n.Pkg != p.pkg.Path {
+			p.errorf("a const's value cannot name another package's table (%s.%s); write the number", n.Pkg, n.Name)
+		}
+		for _, c := range p.pkg.Consts {
+			if c.Name == n.Name && c.Table {
+				p.cuses = append(p.cuses, ir.ConstUse{Name: c.Name, Span: n.NameSpan})
+				return int64(len(c.Values)), true
 			}
 		}
 		return 0, false
@@ -367,6 +466,7 @@ func (p *parser) evalConst(n *ir.Node) (int64, bool) {
 
 func (p *parser) parseTypeDecl(s int) {
 	name := p.ident()
+	ns := p.tok(name)
 	p.expectKw("struct")
 	p.expect('{')
 	var fields []ir.Field
@@ -376,20 +476,24 @@ func (p *parser) parseTypeDecl(s int) {
 		}
 		fs := p.start()
 		fn := p.ident()
-		ft := p.parseType()
+		fns := p.tok(fn)
+		ft, fts := p.parseType()
 		fields = append(fields, ir.Field{
 			ID: "fld:" + p.pkg.Path + "." + name + "." + fn, Name: fn, Type: ft, Span: p.span(fs),
+			NameSpan: fns, TypeSpan: fts,
 		})
 		p.expectEnd()
 	}
 	p.expect('}')
 	p.pkg.Types = append(p.pkg.Types, ir.TypeDecl{
-		ID: "ty:" + p.pkg.Path + "." + name, Name: name, Fields: fields, Span: p.span(s),
+		ID: "ty:" + p.pkg.Path + "." + name, Name: name, Fields: fields, Span: p.span(s), NameSpan: ns,
 	})
 	p.expectEnd()
 }
 
-func (p *parser) parseType() string {
+// parseType reads a type and returns its full form and the span of its
+// name, the last identifier.
+func (p *parser) parseType() (string, ir.Span) {
 	star := false
 	if p.peekByte('*') {
 		p.expect('*')
@@ -408,26 +512,27 @@ func (p *parser) parseType() string {
 		name = p.ident()
 		pkg = path
 	}
+	ns := p.tok(name)
 	if pkg == "" {
-		if name == "i64" || name == "bool" {
+		if name == "i64" || name == "bool" || name == "bytes" {
 			if star {
 				p.errorf("cannot use a pointer to %s", name)
 			}
-			return name
+			return name, ns
 		}
 		pkg = p.pkg.Path
 	}
 	full := pkg + "." + name
 	if star {
-		return "*" + full
+		return "*" + full, ns
 	}
-	return full
+	return full, ns
 }
 
 func (p *parser) parseFunc(s int) {
 	name := p.ident()
 	p.fn = &ir.Func{
-		ID: "fn:" + p.pkg.Path + "." + name, Name: name,
+		ID: "fn:" + p.pkg.Path + "." + name, Name: name, NameSpan: p.tok(name),
 	}
 	p.ec = 0
 	p.sc = 0
@@ -436,9 +541,11 @@ func (p *parser) parseFunc(s int) {
 		for {
 			ps := p.start()
 			pn := p.ident()
-			pt := p.parseType()
+			pns := p.tok(pn)
+			pt, pts := p.parseType()
 			p.fn.Params = append(p.fn.Params, ir.Param{
 				ID: "pa:" + p.pkg.Path + "." + name + "." + pn, Name: pn, Type: pt, Span: p.span(ps),
+				NameSpan: pns, TypeSpan: pts,
 			})
 			if p.peekByte(')') {
 				break
@@ -447,7 +554,19 @@ func (p *parser) parseFunc(s int) {
 		}
 	}
 	p.expect(')')
-	p.fn.Result = p.parseType()
+	if p.peekByte('(') {
+		// Two results: (T, i64), the second an error code.
+		p.expect('(')
+		p.fn.Result, p.fn.ResultSpan = p.parseType()
+		p.expect(',')
+		p.fn.Result2, _ = p.parseType()
+		if p.fn.Result2 != "i64" {
+			p.errorf("the second result is an error code; write (%s, i64)", p.fn.Result)
+		}
+		p.expect(')')
+	} else {
+		p.fn.Result, p.fn.ResultSpan = p.parseType()
+	}
 	p.fn.Body = p.parseBlock()
 	p.fn.Span = p.span(s)
 	p.pkg.Funcs = append(p.pkg.Funcs, *p.fn)
@@ -507,24 +626,46 @@ func (p *parser) stmt(s int, id string) *ir.Node {
 		return p.parseWhile()
 	case p.kw("return"):
 		return p.parseReturn()
-	case p.peekKw("store8") || p.peekKw("store64"):
+	case p.kw("break"):
+		return &ir.Node{Op: "break"}
+	case p.kw("continue"):
+		return &ir.Node{Op: "continue"}
+	case p.peekKw("store8") || p.peekKw("store16") || p.peekKw("store32") || p.peekKw("store64"):
 		op := p.ident()
-		p.expect('(')
-		addr := p.parseExpr()
-		p.expect(',')
-		val := p.parseExpr()
-		p.expect(')')
-		return &ir.Node{Op: op, Addr: addr, Val: val}
+		args, ok := p.builtinArgs(2)
+		if !ok {
+			return &ir.Node{Op: op, Args: args}
+		}
+		return &ir.Node{Op: op, Addr: args[0], Val: args[1]}
 	default:
 		e := p.parseExpr()
+		if p.peekByte(',') {
+			// a, b = call: the call's two results into existing locals.
+			if e.Op != "name" || e.Pkg != "" {
+				p.errorf("cannot assign to this expression")
+			}
+			p.expect(',')
+			name2 := p.ident()
+			ns2 := p.tok(name2)
+			if e.Name == "_" && name2 == "_" {
+				p.errorf("_, _ discards both results; receive the error")
+			}
+			p.expect('=')
+			v := p.parseExpr()
+			return &ir.Node{Op: "assign2", Name: e.Name, Two: &ir.Second{Name: name2, NameSpan: ns2}, Val: v, NameSpan: e.NameSpan}
+		}
 		if p.peekAssign() {
 			p.expect('=')
 			v := p.parseExpr()
 			if e.Op == "name" && e.ValK == 0 && e.Left == nil && e.Base == nil {
-				return &ir.Node{Op: "assign", Name: e.Name, Val: v}
+				return &ir.Node{Op: "assign", Name: e.Name, Val: v, NameSpan: e.NameSpan}
 			}
 			if e.Op == "field" {
-				return &ir.Node{Op: "setfield", Base: e.Base, Name: e.Name, Val: v}
+				return &ir.Node{Op: "setfield", Base: e.Base, Name: e.Name, Val: v, NameSpan: e.NameSpan}
+			}
+			if e.Op == "index" || e.Op == "byte" {
+				// b[i] = v stores the low byte of v.
+				return &ir.Node{Op: "setbyte", Base: e, Val: v}
 			}
 			p.errorf("cannot assign to this expression")
 		}
@@ -544,14 +685,43 @@ func (p *parser) peekAssign() bool {
 }
 
 func (p *parser) parseVar() *ir.Node {
-	name := p.ident()
-	typ := p.parseType()
-	n := &ir.Node{Op: "var", Name: name, Type: typ}
+	name, ns, typ, ts := p.varName()
+	n := &ir.Node{Op: "var", Name: name, Type: typ, NameSpan: ns, TypeSpan: ts}
+	if p.peekByte(',') {
+		// var a T, b T = call: the call's two results. _ discards one.
+		p.expect(',')
+		n.Op = "var2"
+		n.Two = &ir.Second{}
+		n.Two.Name, n.Two.NameSpan, n.Two.Type, n.Two.TypeSpan = p.varName()
+		p.expect('=')
+		n.Val = p.parseExpr()
+		if n.Name == "_" && n.Two.Name == "_" {
+			p.errorf("var _, _ discards both results; receive the error")
+		}
+		return n
+	}
+	if name == "_" {
+		p.errorf("_ only discards one of a call's two results: var x T, _ = f(...)")
+	}
 	if p.peekAssign() {
 		p.expect('=')
 		n.Val = p.parseExpr()
 	}
 	return n
+}
+
+// varName reads a var's name and type; _ has no type.
+func (p *parser) varName() (string, ir.Span, string, ir.Span) {
+	name := p.ident()
+	ns := p.tok(name)
+	if name == "_" {
+		return name, ns, "", ir.Span{}
+	}
+	if p.peekByte('=') {
+		p.fail("every local is declared with its type: var "+name+" i64 = ...", "expected a type after "+name)
+	}
+	typ, ts := p.parseType()
+	return name, ns, typ, ts
 }
 
 func (p *parser) parseReturn() *ir.Node {
@@ -560,10 +730,15 @@ func (p *parser) parseReturn() *ir.Node {
 	if p.i >= len(p.src) || p.nl || p.src[p.i] == '}' {
 		return n
 	}
-	if p.peekKw("var") || p.peekKw("if") || p.peekKw("while") || p.peekKw("return") || p.peekKw("store8") || p.peekKw("store64") {
+	if p.peekKw("var") || p.peekKw("if") || p.peekKw("while") || p.peekKw("return") || p.peekKw("break") || p.peekKw("continue") || p.peekKw("store8") || p.peekKw("store16") || p.peekKw("store32") || p.peekKw("store64") {
 		return n
 	}
 	n.Val = p.parseExpr()
+	if p.peekByte(',') {
+		// return v, e: a func with two results.
+		p.expect(',')
+		n.Val2 = p.parseExpr()
+	}
 	return n
 }
 
@@ -719,13 +894,35 @@ func (p *parser) postfix() *ir.Node {
 			if p.peekByte('(') {
 				p.errorf("methods are not in v0")
 			}
-			e = &ir.Node{ID: p.eid(), Op: "field", Base: e, Name: name, Span: ir.Span{File: p.file, Off: e.Span.Off, End: p.last}}
+			e = &ir.Node{ID: p.eid(), Op: "field", Base: e, Name: name, Span: ir.Span{File: p.file, Off: e.Span.Off, End: p.last}, NameSpan: p.tok(name)}
 			continue
 		}
 		if p.peekKw("as") {
 			p.ident()
-			t := p.parseType()
-			e = &ir.Node{ID: p.eid(), Op: "cast", Type: t, Arg: e, Span: ir.Span{File: p.file, Off: e.Span.Off, End: p.last}}
+			t, ts := p.parseType()
+			e = &ir.Node{ID: p.eid(), Op: "cast", Type: t, Arg: e, Span: ir.Span{File: p.file, Off: e.Span.Off, End: p.last}, TypeSpan: ts}
+			continue
+		}
+		if p.peekByte('[') {
+			// Name[i] reads a table or a bytes, which the checker tells
+			// apart (a local shadows a table); e[i] on any other base and
+			// e[i:j] are bytes operations.
+			p.expect('[')
+			i := p.parseExpr()
+			if p.peekByte(':') {
+				p.expect(':')
+				j := p.parseExpr()
+				p.expect(']')
+				e = &ir.Node{ID: p.eid(), Op: "slice", Base: e, Left: i, Right: j, Span: ir.Span{File: p.file, Off: e.Span.Off, End: p.last}}
+				continue
+			}
+			p.expect(']')
+			if e.Op != "name" {
+				e = &ir.Node{ID: p.eid(), Op: "byte", Base: e, Arg: i, Span: ir.Span{File: p.file, Off: e.Span.Off, End: p.last}}
+				continue
+			}
+			// The name node stays as the base, for a bytes.
+			e = &ir.Node{ID: p.eid(), Op: "index", Name: e.Name, Pkg: e.Pkg, Base: e, Arg: i, Span: ir.Span{File: p.file, Off: e.Span.Off, End: p.last}, NameSpan: e.NameSpan}
 			continue
 		}
 		return e
@@ -748,9 +945,6 @@ func (p *parser) primary0() *ir.Node {
 		p.expect(')')
 		return e
 	}
-	if p.peekByte('"') {
-		p.errorf("bare string literal; write strptr(\"...\") for the address and strlen(\"...\") for the length")
-	}
 	if p.isNum() {
 		return p.number()
 	}
@@ -763,28 +957,69 @@ func (p *parser) primary0() *ir.Node {
 		return &ir.Node{ID: p.eid(), Op: "bool", ValK: 2, Bool: false}
 	case p.peekKw("syscall"):
 		p.ident()
-		return p.callArgs("syscall", "", "")
-	case p.peekKw("load8"), p.peekKw("load32"), p.peekKw("load64"):
-		op := p.ident()
+		return p.callArgs("syscall", "", "", ir.Span{})
+	case p.peekLen():
+		// len(Table), a compile-time constant, or len(b) of a bytes; a
+		// name is either, which the checker tells apart.
+		p.ident()
 		p.expect('(')
-		a := p.parseExpr()
+		t := p.postfix()
 		p.expect(')')
-		return &ir.Node{ID: p.eid(), Op: op, Arg: a}
+		if t.Op != "name" {
+			return &ir.Node{ID: p.eid(), Op: "blen", Base: t}
+		}
+		return &ir.Node{ID: p.eid(), Op: "len", Name: t.Name, Pkg: t.Pkg, Base: t, NameSpan: t.NameSpan}
+	case p.peekKw("ushr"), p.peekKw("umulhi"), p.peekKw("ult"), p.peekKw("udiv"), p.peekKw("urem"):
+		// The unsigned operations are binary operators spelled as calls.
+		op := p.ident()
+		args, ok := p.builtinArgs(2)
+		if !ok {
+			return &ir.Node{ID: p.eid(), Op: op, Args: args}
+		}
+		return &ir.Node{ID: p.eid(), Op: op, Left: args[0], Right: args[1]}
+	case p.peekKw("load8"), p.peekKw("load16"), p.peekKw("load32"), p.peekKw("load64"), p.peekKw("bswap16"), p.peekKw("bswap32"), p.peekKw("bswap64"):
+		op := p.ident()
+		args, ok := p.builtinArgs(1)
+		if !ok {
+			return &ir.Node{ID: p.eid(), Op: op, Args: args}
+		}
+		return &ir.Node{ID: p.eid(), Op: op, Arg: args[0]}
 	case p.peekKw("sizeof"):
 		p.ident()
 		p.expect('(')
 		if p.peekByte('*') {
-			p.errorf("sizeof takes a struct type, not a pointer: sizeof(T) is 8 * T's fields")
+			p.errorf("sizeof takes a struct type, not a pointer: sizeof(T) is the size of a T")
 		}
-		t := p.parseType()
+		t, ts := p.parseType()
 		p.expect(')')
-		return &ir.Node{ID: p.eid(), Op: "sizeof", Type: t}
+		return &ir.Node{ID: p.eid(), Op: "sizeof", Type: t, TypeSpan: ts}
 	case p.peekKw("strptr"), p.peekKw("strlen"):
 		op := p.ident()
 		p.expect('(')
 		s := p.string()
 		p.expect(')')
 		return &ir.Node{ID: p.eid(), Op: op, ValK: 3, Str: s}
+	case p.peekKw("bytes"):
+		// bytes(p, n): a bytes value from an address and a length.
+		p.ident()
+		args, ok := p.builtinArgs(2)
+		if !ok {
+			return &ir.Node{ID: p.eid(), Op: "bytes", Args: args}
+		}
+		return &ir.Node{ID: p.eid(), Op: "bytes", Left: args[0], Right: args[1]}
+	case p.peekCall("ptr"):
+		// ptr(b): the address a bytes starts at, for a syscall.
+		p.ident()
+		args, ok := p.builtinArgs(1)
+		if !ok {
+			return &ir.Node{ID: p.eid(), Op: "ptr", Args: args}
+		}
+		return &ir.Node{ID: p.eid(), Op: "ptr", Arg: args[0]}
+	}
+	if p.peekByte('"') {
+		// A string literal is a bytes value in rodata.
+		s := p.string()
+		return &ir.Node{ID: p.eid(), Op: "str", ValK: 3, Str: s}
 	}
 	if !p.peekIdent() {
 		p.errorf("expected an expression")
@@ -793,11 +1028,12 @@ func (p *parser) primary0() *ir.Node {
 	id := p.ident()
 	if p.peekByte('/') {
 		if path, name, ok := p.tryPkgRef(id); ok {
+			ns := p.tok(name)
 			if p.peekByte('(') {
-				return p.callArgs("call", path, name)
+				return p.callArgs("call", path, name, ns)
 			}
 			if p.imported(path) {
-				return &ir.Node{ID: p.eid(), Op: "name", Pkg: path, Name: name}
+				return &ir.Node{ID: p.eid(), Op: "name", Pkg: path, Name: name, NameSpan: ns}
 			}
 		}
 		p.restore(m)
@@ -808,18 +1044,20 @@ func (p *parser) primary0() *ir.Node {
 		p.expect('.')
 		if p.peekIdent() {
 			name := p.ident()
+			ns := p.tok(name)
 			if p.peekByte('(') {
-				return p.callArgs("call", id, name)
+				return p.callArgs("call", id, name, ns)
 			}
 			// pkg.Name without a call is an imported const.
-			return &ir.Node{ID: p.eid(), Op: "name", Pkg: id, Name: name}
+			return &ir.Node{ID: p.eid(), Op: "name", Pkg: id, Name: name, NameSpan: ns}
 		}
 		p.restore(m)
 	}
+	ns := p.tok(id)
 	if p.peekByte('(') {
-		return p.callArgs("call", "", id)
+		return p.callArgs("call", "", id, ns)
 	}
-	return &ir.Node{ID: p.eid(), Op: "name", Name: id}
+	return &ir.Node{ID: p.eid(), Op: "name", Name: id, NameSpan: ns}
 }
 
 // imported reports whether path is imported by the file being parsed.
@@ -855,7 +1093,19 @@ func (p *parser) tryPkgRef(first string) (string, string, bool) {
 	return path, p.ident(), true
 }
 
-func (p *parser) callArgs(op, pkg, name string) *ir.Node {
+// callArgs reads a call's arguments; ns is the span of the func name.
+func (p *parser) callArgs(op, pkg, name string, ns ir.Span) *ir.Node {
+	args := p.argList()
+	n := &ir.Node{ID: p.eid(), Op: op, Pkg: pkg, Func: name, Args: args, NameSpan: ns}
+	if op == "syscall" {
+		n.Func = ""
+		n.Pkg = ""
+	}
+	return n
+}
+
+// argList reads a parenthesised, comma-separated list of expressions.
+func (p *parser) argList() []*ir.Node {
 	p.expect('(')
 	var args []*ir.Node
 	if !p.peekByte(')') {
@@ -868,12 +1118,15 @@ func (p *parser) callArgs(op, pkg, name string) *ir.Node {
 		}
 	}
 	p.expect(')')
-	n := &ir.Node{ID: p.eid(), Op: op, Pkg: pkg, Func: name, Args: args}
-	if op == "syscall" {
-		n.Func = ""
-		n.Pkg = ""
-	}
-	return n
+	return args
+}
+
+// builtinArgs reads a builtin's arguments and reports whether there are
+// want of them. Any other number is left to the checker, which reports
+// an arity error naming the builtin and its form, as the parser cannot.
+func (p *parser) builtinArgs(want int) ([]*ir.Node, bool) {
+	args := p.argList()
+	return args, len(args) == want
 }
 
 func (p *parser) isNum() bool {

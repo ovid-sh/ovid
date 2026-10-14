@@ -1,0 +1,21 @@
+package demo
+import ovid/io
+// exit: 0
+// stdout: "a7\n"
+
+// Print and PrintInt borrow heap scratch for a handle and give it back:
+// the next Alloc still returns zeroed memory.
+func main(io *ovid/io.Cap) i64 {
+  ovid/io.Print(io, "a")
+  ovid/io.PrintInt(io, 7)
+  ovid/io.Print(io, "\n")
+  var p i64 = ovid/io.Alloc(io, 32)
+  var i i64 = 0
+  while i < 32 {
+    if load8(p + i) != 0 {
+      return 1
+    }
+    i = i + 1
+  }
+  return 0
+}

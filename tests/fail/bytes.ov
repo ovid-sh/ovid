@@ -1,0 +1,24 @@
+package demo
+import ovid/io
+// bytes is its own type: an address and a length, two words.
+type T struct {
+  b bytes
+}
+func Seven(a bytes, b bytes, c bytes, d i64) i64 { // error: arity 1 hint="a bytes param counts two; pass a struct pointer for the rest"
+  return d
+}
+func Bad(b bytes, n i64, s *T) i64 {
+  var x i64 = b // error: type_mismatch 15 expected="i64" got="bytes"
+  var y bytes = n // error: type_mismatch 17 expected="bytes" got="i64"
+  var z bytes = b as bytes // error: bad_type 17
+  if b == y { // error: bad_type 6 hint="ovid/mem.Eq(a, b) compares the bytes"
+    return 1
+  }
+  n[0] = 1 // error: bad_type 3
+  var w bytes = bytes(n) // error: arity 17 expected="2" got="1" hint="bytes(p, n) bytes"
+  var sz i64 = sizeof(bytes) // error: bad_type 16 hint="write 16; sizeof takes a struct type"
+  return x + n[1] + len(n) + b[s] + len(s.b[n:b]) + len(w) + sz // error: bad_type 14 // error: bad_type 21 // error: type_mismatch 32 expected="i64" got="*demo.T" // error: type_mismatch 47 expected="i64" got="bytes"
+}
+func main(io *ovid/io.Cap) i64 {
+  return 0
+}

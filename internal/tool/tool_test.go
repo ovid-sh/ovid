@@ -8,13 +8,18 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"ovid/internal/check"
 	"ovid/internal/module"
 	"path/filepath"
+	"reflect"
+	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 // repo is the repository root, found from this package's directory.
@@ -110,8 +115,16 @@ func needExec(t *testing.T) {
 // run executes an emitted binary.
 func run(t *testing.T, bin string, args ...string) (string, int) {
 	t.Helper()
+	return runIn(t, "", bin, args...)
+}
+
+// runIn is run with the working directory dir.
+func runIn(t *testing.T, dir, bin string, args ...string) (string, int) {
+	t.Helper()
 	needExec(t)
-	out, err := exec.Command(bin, args...).CombinedOutput()
+	cmd := exec.Command(bin, args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
 	if ee, ok := err.(*exec.ExitError); ok {
 		return string(out), ee.ExitCode()
 	} else if err != nil {
@@ -154,19 +167,19 @@ func main(io *ovid/io.Cap) i64 {
       i = i + 1
     }
     store8(b + n, 7)
-    if ovid/mem.Copy(b, a, n) != n {
+    if ovid/mem.CopyN(b, a, n) != n {
       return 1
     }
     if load8(b + n) != 7 {
       return 2
     }
-    if !ovid/mem.Eq(a, n, b, n) {
+    if !ovid/mem.Eq(bytes(a, n), bytes(b, n)) {
       return 3
     }
     i = 0
     while i < n {
       store8(b + i, 0)
-      if ovid/mem.Eq(a, n, b, n) {
+      if ovid/mem.Eq(bytes(a, n), bytes(b, n)) {
         return 4
       }
       store8(b + i, 65 + i)
@@ -174,19 +187,19 @@ func main(io *ovid/io.Cap) i64 {
     }
     n = n + 1
   }
-  if ovid/mem.Eq(a, 9, b, 10) {
+  if ovid/mem.Eq(bytes(a, 9), bytes(b, 10)) {
     return 5
   }
   // dst three bytes past src: the first three bytes repeat.
-  ovid/mem.Copy(a, strptr("abcdefghijklmnop"), 16)
-  ovid/mem.Copy(a + 3, a, 13)
-  if !ovid/mem.Eq(a, 16, strptr("abcabcabcabcabca"), 16) {
+  ovid/mem.CopyN(a, strptr("abcdefghijklmnop"), 16)
+  ovid/mem.CopyN(a + 3, a, 13)
+  if !ovid/mem.Eq(bytes(a, 16), bytes(strptr("abcabcabcabcabca"), 16)) {
     return 6
   }
   // dst before src: a plain move down.
-  ovid/mem.Copy(a, strptr("abcdefghijklmnop"), 16)
-  ovid/mem.Copy(a, a + 3, 13)
-  if !ovid/mem.Eq(a, 16, strptr("defghijklmnopnop"), 16) {
+  ovid/mem.CopyN(a, strptr("abcdefghijklmnop"), 16)
+  ovid/mem.CopyN(a, a + 3, 13)
+  if !ovid/mem.Eq(bytes(a, 16), bytes(strptr("defghijklmnopnop"), 16)) {
     return 7
   }
   return 0
@@ -204,49 +217,14 @@ import ovid/sha
 func main(io *ovid/io.Cap) i64 {
   var raw i64 = ovid/io.Alloc(io, 32)
   var hex i64 = ovid/io.Alloc(io, 80)
-  ovid/sha.Sum(io, strptr("abc"), strlen("abc"), raw)
+  ovid/sha.Sum(io, "abc", raw)
   ovid/sha.Hex(hex, raw)
-  ovid/io.Stdout(hex, 64)
+  ovid/io.Print(io, bytes(hex, 64))
   return 0
 }
 `), "ovid/sha")
 	if out, code := buildRun(t, sha); code != 0 || out != "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" {
 		t.Fatalf("sha: code %d out %q", code, out)
-	}
-
-	js := withProg(t, demo(`package demo
-import ovid/io
-import ovid/json
-func main(io *ovid/io.Cap) i64 {
-  var raw i64 = strptr("{\"a\":[1,true,null],\"b\":\"hi\\n\"}")
-  var n i64 = strlen("{\"a\":[1,true,null],\"b\":\"hi\\n\"}")
-  var root i64 = ovid/json.Parse(io, raw, n)
-  if root == 0 {
-    return 1
-  }
-  var a i64 = ovid/json.GetLit(root, strptr("a"), strlen("a"))
-  if ovid/json.Int(ovid/json.At(a, 0)) != 1 {
-    return 2
-  }
-  if ovid/json.Kind(ovid/json.At(a, 2)) != 0 {
-    return 4
-  }
-  var b i64 = ovid/json.GetLit(root, strptr("b"), strlen("b"))
-  if ovid/json.StrN(b) != 3 {
-    return 5
-  }
-  var e i64 = ovid/json.Parse(io, strptr("\x22\x5c\x75\x30\x30\x65\x39\x5c\x62\x22"), 10)
-  if ovid/json.StrN(e) != 3 {
-    return 6
-  }
-  if load8(ovid/json.StrP(e)) != 0xC3 {
-    return 7
-  }
-  return 0
-}
-`), "ovid/json")
-	if out, code := buildRun(t, js); code != 0 {
-		t.Fatalf("json: code %d out %q", code, out)
 	}
 
 	elfOut := filepath.Join(t.TempDir(), "exit.elf")
@@ -262,8 +240,7 @@ func main(io *ovid/io.Cap) i64 {
   ovid/asm.Syscall(c)
   ovid/asm.Patch(c)
   var b *ovid/mem.Buf = ovid/elf.Link(io, c)
-  var path i64 = ovid/io.Arg(io, 1)
-  if ovid/io.WriteFile(io, path, ovid/io.CLen(path), b.data, b.len, 493) != 0 {
+  if ovid/io.WriteFile(io, ovid/io.Arg(io, 1), ovid/mem.Bytes(b), 493) != 0 {
     return 8
   }
   return 0
@@ -281,13 +258,11 @@ func main(io *ovid/io.Cap) i64 {
 	if _, code := buildRun(t, demo(`package demo
 import ovid/io
 func main(io *ovid/io.Cap) i64 {
-  var path i64 = ovid/io.Arg(io, 1)
-  var pp i64 = ovid/io.Alloc(io, 8)
-  var nn i64 = ovid/io.Alloc(io, 8)
-  if ovid/io.ReadFile(io, path, ovid/io.CLen(path), pp, nn) != 0 {
+  var data bytes, e i64 = ovid/io.ReadFile(io, ovid/io.Arg(io, 1))
+  if e != 0 {
     return 9
   }
-  return load64(nn)
+  return len(data)
 }
 `), note); code != 5 {
 		t.Fatalf("readfile len %d", code)
@@ -346,7 +321,7 @@ func editJSON(t *testing.T, dir string, req any, flags ...string) (map[string]an
 func TestGrepPages(t *testing.T) {
 	dir := mkmod(t, demo("package demo\n\nimport ovid/io\n\nfunc main(io *ovid/io.Cap) i64 {\n  var x i64 = 1\n  x = x + 1\n  return x\n}\n"))
 	var b bytes.Buffer
-	Grep(dir, `\bx\b`, "", false, 1, 2, &b)
+	Grep(dir, `\bx\b`, "", false, true, 1, 2, &b)
 	lines := strings.Split(strings.TrimSpace(b.String()), "\n")
 	end := last(t, b.String())
 	if len(lines) != 3 || end["total"] != 4.0 || end["count"] != 2.0 || end["has_more"] != true || end["next_offset"] != 3.0 {
@@ -356,9 +331,40 @@ func TestGrepPages(t *testing.T) {
 		t.Fatalf("enclosing nodes: %s", lines[0])
 	}
 	b.Reset()
-	Grep(dir, `\bx\b`, "", false, 3, 0, &b)
+	Grep(dir, `\bx\b`, "", false, true, 3, 0, &b)
 	if end := last(t, b.String()); end["count"] != 1.0 || end["has_more"] != false {
 		t.Fatalf("last page: %s", b.String())
+	}
+}
+
+// TestBuildSkipsTests: build and run compile the program without its
+// _test.ov files, so a broken test stops check and test but not them, and
+// the program cannot use a test's helpers.
+func TestBuildSkipsTests(t *testing.T) {
+	files := demo("package demo\n\nimport ovid/io\n\nfunc main(io *ovid/io.Cap) i64 {\n  return 3\n}\n")
+	files["demo/main_test.ov"] = "package demo\n\nfunc TestX(io *ovid/io.Cap) i64 {\n  return nope\n}\n"
+	dir := mkmod(t, files)
+	var b bytes.Buffer
+	if code := Build(dir, filepath.Join(t.TempDir(), "x"), &b); code != 0 {
+		t.Fatalf("build: %d %s", code, b.String())
+	}
+	if canExec {
+		b.Reset()
+		if code := Run(dir, nil, &b); code != 3 {
+			t.Fatalf("run: %d %s", code, b.String())
+		}
+	}
+	b.Reset()
+	if code := Check(dir, false, &b); code != ExitFail {
+		t.Fatalf("check passed a broken test: %s", b.String())
+	}
+
+	files["demo/main.ov"] = "package demo\n\nimport ovid/io\n\nfunc main(io *ovid/io.Cap) i64 {\n  return helper()\n}\n"
+	files["demo/main_test.ov"] = "package demo\n\nfunc helper() i64 {\n  return 0\n}\n"
+	dir = mkmod(t, files)
+	b.Reset()
+	if code := Build(dir, filepath.Join(t.TempDir(), "x"), &b); code != ExitFail || !strings.Contains(b.String(), `"unknown_name"`) {
+		t.Fatalf("build used a test helper: %d %s", code, b.String())
 	}
 }
 
@@ -462,12 +468,230 @@ func TestPositionalIDsNeedExpect(t *testing.T) {
 	b.Reset()
 	del.Expect = read
 	if code := runEdit(dir, &EditReq{Ops: []EditOp{del}}, EditOpts{}, &b); code != ExitStale ||
-		!strings.Contains(fmt.Sprint(last(t, b.String())["message"]), "belongs to st:demo.main:2") {
+		!strings.Contains(fmt.Sprint(last(t, b.String())["message"]), "changed since you read") ||
+		last(t, b.String())["hash"] != hashOf(t, dir, "st:demo.main:1") || last(t, b.String())["decl_hash"] != hashOf(t, dir, "fn:demo.main") {
 		t.Fatalf("stale id: %d %s", code, b.String())
+	}
+	// A current hash passed with the wrong id names the node it belongs to.
+	b.Reset()
+	wrong := EditOp{Op: "delete", ID: "st:demo.main:1", Expect: hashOf(t, dir, "st:demo.main:2")}
+	if code := runEdit(dir, &EditReq{Ops: []EditOp{wrong}}, EditOpts{}, &b); code != ExitStale ||
+		!strings.Contains(fmt.Sprint(last(t, b.String())["message"]), "belongs to st:demo.main:2") {
+		t.Fatalf("wrong id: %d %s", code, b.String())
 	}
 	b.Reset()
 	if code := runEdit(dir, &EditReq{Ops: []EditOp{del}}, EditOpts{Force: true, AllowBroken: true}, &b); code != 0 {
 		t.Fatalf("force: %d %s", code, b.String())
+	}
+}
+
+const twinSrc = "package demo\n\nimport ovid/io\n\nfunc G() i64 {\n  var x i64 = 0\n  x = x + 1\n  x = x + 1\n  return x\n}\n\nfunc H() i64 {\n  var y i64 = 0\n  y = y + 1\n  return y\n}\n\nfunc main(io *ovid/io.Cap) i64 {\n  return G() + H()\n}\n"
+
+// stmtsWith lists the statements of decl whose text is text, in order.
+func stmtsWith(t *testing.T, dir, decl, text string) []string {
+	t.Helper()
+	m, err := module.Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, id := range m.Order() {
+		if l := m.Index()[id]; l.Kind == "stmt" && l.Decl == decl && m.Text(l.Span) == text {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+func mainOv(t *testing.T, dir string) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(dir, "demo/main.ov"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+// edit1 runs one op with no flags.
+func edit1(t *testing.T, dir string, op EditOp) (int, map[string]any) {
+	t.Helper()
+	var b bytes.Buffer
+	code := runEdit(dir, &EditReq{Ops: []EditOp{op}}, EditOpts{}, &b)
+	return code, last(t, b.String())
+}
+
+// refused asserts that op is refused as stale and writes nothing.
+func refused(t *testing.T, dir string, op EditOp) {
+	t.Helper()
+	before := mainOv(t, dir)
+	code, r := edit1(t, dir, op)
+	if code != ExitStale || r["error"] != "stale" || r["id"] != op.ID || r["hash"] == op.Expect {
+		t.Fatalf("stale %v not refused: %d %v", op, code, r)
+	}
+	if after := mainOv(t, dir); after != before {
+		t.Fatalf("a refused edit wrote:\n%s", after)
+	}
+}
+
+// TestStaleTwin: a st: hash is bound to its decl, so a request read before
+// the decl changed is refused, and never lands on a text-identical twin
+// that now has its id (#22).
+func TestStaleTwin(t *testing.T) {
+	t.Run("delete replayed after it deleted one twin", func(t *testing.T) {
+		dir := mkmod(t, demo(twinSrc))
+		twins := stmtsWith(t, dir, "fn:demo.G", "x = x + 1")
+		del := EditOp{Op: "delete", ID: twins[0], Expect: hashOf(t, dir, twins[0])}
+		if code, r := edit1(t, dir, del); code != 0 {
+			t.Fatalf("delete: %d %v", code, r)
+		}
+		// The survivor now has the deleted twin's id; a retry of the same
+		// request (its answer lost, say) must not delete it too.
+		if got := stmtsWith(t, dir, "fn:demo.G", "x = x + 1"); len(got) != 1 || got[0] != twins[0] {
+			t.Fatalf("survivor %v", got)
+		}
+		refused(t, dir, del)
+		// With the decl's hash read before, too.
+		refused(t, dir, EditOp{Op: "delete", ID: twins[0], Expect: hashOf(t, mkmod(t, demo(twinSrc)), "fn:demo.G")})
+	})
+	t.Run("replace after another agent deleted a twin", func(t *testing.T) {
+		dir := mkmod(t, demo(twinSrc))
+		twins := stmtsWith(t, dir, "fn:demo.G", "x = x + 1")
+		rep := EditOp{Op: "replace", ID: twins[0], Expect: hashOf(t, dir, twins[0]), Text: "x = x + 2"}
+		if code, r := edit1(t, dir, EditOp{Op: "delete", ID: twins[0], Expect: hashOf(t, dir, twins[0])}); code != 0 {
+			t.Fatalf("delete: %d %v", code, r)
+		}
+		refused(t, dir, rep)
+	})
+	t.Run("after a twin was inserted above", func(t *testing.T) {
+		dir := mkmod(t, demo(twinSrc))
+		first := stmtsWith(t, dir, "fn:demo.G", "x = x + 1")[0]
+		del := EditOp{Op: "delete", ID: first, Expect: hashOf(t, dir, first)}
+		rep := EditOp{Op: "replace", ID: first, Expect: hashOf(t, dir, first), Text: "x = x + 2"}
+		ins := EditOp{Op: "insert", Before: first, Expect: hashOf(t, dir, "fn:demo.G"), Text: "x = x + 1"}
+		if code, r := edit1(t, dir, ins); code != 0 {
+			t.Fatalf("insert: %d %v", code, r)
+		}
+		refused(t, dir, del)
+		refused(t, dir, rep)
+	})
+	t.Run("after the statements were reordered", func(t *testing.T) {
+		src := strings.Replace(twinSrc, "  x = x + 1\n  x = x + 1\n", "  x = x + 1\n  x = x * 2\n  x = x + 1\n", 1)
+		dir := mkmod(t, demo(src))
+		second := stmtsWith(t, dir, "fn:demo.G", "x = x + 1")[1]
+		rep := EditOp{Op: "replace", ID: second, Expect: hashOf(t, dir, second), Text: "x = x + 2"}
+		reorder := EditOp{Op: "replace", ID: "fn:demo.G", Expect: hashOf(t, dir, "fn:demo.G"),
+			Text: "func G() i64 {\n  var x i64 = 0\n  x = x * 2\n  x = x + 1\n  x = x + 1\n  return x\n}"}
+		if code, r := edit1(t, dir, reorder); code != 0 {
+			t.Fatalf("reorder: %d %v", code, r)
+		}
+		refused(t, dir, rep)
+		refused(t, dir, EditOp{Op: "delete", ID: second, Expect: rep.Expect})
+	})
+}
+
+// TestGuardsPerDecl: edits to different funcs, each guarded by what was
+// read before either ran, both go through; of two edits to the same func
+// read at the same time, the second is refused.
+func TestGuardsPerDecl(t *testing.T) {
+	dir := mkmod(t, demo(twinSrc))
+	g := stmtsWith(t, dir, "fn:demo.G", "var x i64 = 0")[0]
+	h := stmtsWith(t, dir, "fn:demo.H", "y = y + 1")[0]
+	opG := EditOp{Op: "replace", ID: g, Expect: hashOf(t, dir, g), Text: "var x i64 = 5"}
+	opH := EditOp{Op: "replace", ID: h, Expect: hashOf(t, dir, h), Text: "y = y + 2"}
+	if code, r := edit1(t, dir, opG); code != 0 {
+		t.Fatalf("G: %d %v", code, r)
+	}
+	if code, r := edit1(t, dir, opH); code != 0 {
+		t.Fatalf("H after G: %d %v", code, r)
+	}
+	// Two agents read G; one changes its first statement, the other its
+	// last. The second is refused, whichever hash it holds.
+	ret := stmtsWith(t, dir, "fn:demo.G", "return x")[0]
+	viaStmt := EditOp{Op: "replace", ID: ret, Expect: hashOf(t, dir, ret), Text: "return x + 1"}
+	viaDecl := EditOp{Op: "replace", ID: ret, Expect: hashOf(t, dir, "fn:demo.G"), Text: "return x + 1"}
+	first := EditOp{Op: "replace", ID: g, Expect: hashOf(t, dir, g), Text: "var x i64 = 6"}
+	if code, r := edit1(t, dir, first); code != 0 {
+		t.Fatalf("first: %d %v", code, r)
+	}
+	refused(t, dir, viaStmt)
+	refused(t, dir, viaDecl)
+	if src := mainOv(t, dir); !strings.Contains(src, "var x i64 = 6\n") || !strings.Contains(src, "y = y + 2\n") || !strings.Contains(src, "  return x\n") {
+		t.Fatalf("source:\n%s", src)
+	}
+}
+
+// TestEveryEditNeedsAGuard: an op on a decl id needs expect, a revision, or
+// force, like one on a st: id; only an append of new decls to a package,
+// which overwrites nothing, goes without (#22).
+func TestEveryEditNeedsAGuard(t *testing.T) {
+	dir := mkmod(t, demo(twinSrc))
+	src := mainOv(t, dir)
+	h := hashOf(t, dir, "fn:demo.H")
+	body := "func H() i64 {\n  return 8\n}"
+	for _, op := range []EditOp{
+		{Op: "replace", ID: "fn:demo.H", Text: body},
+		{Op: "replace", ID: "H", Text: body},
+		{Op: "delete", ID: "fn:demo.H"},
+		{Op: "insert", After: "fn:demo.H", Text: "func K() i64 {\n  return 1\n}"},
+		{Op: "append", Into: "fn:demo.H", Text: "return 9"},
+	} {
+		if code, r := edit1(t, dir, op); code != ExitFail || r["error"] != "expect_required" || r["op"] != 0.0 {
+			t.Errorf("%v unguarded: %d %v", op, code, r)
+		}
+	}
+	// The same through a JSON batch.
+	if r, code := editJSON(t, dir, []any{map[string]any{"op": "replace", "id": "fn:demo.H", "text": body}}); code != ExitFail || r["error"] != "expect_required" {
+		t.Errorf("batch unguarded: %d %v", code, r)
+	}
+	// An expect on a package append would guard nothing.
+	if code, r := edit1(t, dir, EditOp{Op: "append", Into: "demo", Expect: h, Text: "func K() i64 {\n  return 1\n}"}); code != ExitFail || r["error"] != "bad_edit" {
+		t.Errorf("append with expect: %d %v", code, r)
+	}
+	if got := mainOv(t, dir); got != src {
+		t.Fatalf("a refused edit wrote:\n%s", got)
+	}
+
+	// Two agents read H; the first replace goes through, the second is stale.
+	a := EditOp{Op: "replace", ID: "fn:demo.H", Expect: h, Text: body}
+	if code, r := edit1(t, dir, a); code != 0 {
+		t.Fatalf("first: %d %v", code, r)
+	}
+	b := a
+	b.Text = "func H() i64 {\n  return 9\n}"
+	refused(t, dir, b)
+
+	// A revision guards the whole request; a stale one refuses it.
+	rev := last(t, func() string { var o bytes.Buffer; Check(dir, false, &o); return o.String() }())["revision"].(string)
+	var out bytes.Buffer
+	if code := runEdit(dir, &EditReq{Ops: []EditOp{{Op: "delete", ID: "fn:demo.H"}}}, EditOpts{Revision: "0123456789abcdef"}, &out); code != ExitStale {
+		t.Fatalf("stale revision: %d %s", code, out.String())
+	}
+	out.Reset()
+	if code := runEdit(dir, &EditReq{Ops: []EditOp{{Op: "replace", ID: "fn:demo.H", Text: body}}}, EditOpts{Revision: rev}, &out); code != 0 {
+		t.Fatalf("revision: %d %s", code, out.String())
+	}
+	// --force is the explicit opt-out.
+	out.Reset()
+	if code := runEdit(dir, &EditReq{Ops: []EditOp{{Op: "replace", ID: "fn:demo.H", Text: "func H() i64 {\n  return 10\n}"}}}, EditOpts{Force: true}, &out); code != 0 {
+		t.Fatalf("force: %d %s", code, out.String())
+	}
+	// It skips every guard, the request's stale revision included.
+	out.Reset()
+	if code := runEdit(dir, &EditReq{Ops: []EditOp{{Op: "replace", ID: "fn:demo.H", Text: "func H() i64 {\n  return 11\n}"}}}, EditOpts{Revision: rev, Force: true}, &out); code != 0 {
+		t.Fatalf("force with a stale revision: %d %s", code, out.String())
+	}
+
+	// A package append needs no guard, and replaying it is refused.
+	k := EditOp{Op: "append", Into: "demo", Text: "func K() i64 {\n  return 1\n}"}
+	if code, r := edit1(t, dir, k); code != 0 {
+		t.Fatalf("append: %d %v", code, r)
+	}
+	src = mainOv(t, dir)
+	if code, r := edit1(t, dir, k); code != ExitFail || r["error"] != "check" {
+		t.Fatalf("replayed append: %d %v", code, r)
+	}
+	if got := mainOv(t, dir); got != src {
+		t.Fatalf("a replayed append wrote:\n%s", got)
 	}
 }
 
@@ -512,6 +736,133 @@ func TestEditFixAndStale(t *testing.T) {
 	}
 }
 
+// TestEditStrictKeys: an unknown or repeated key in a request is refused
+// before anything is written, naming the key and the op (#31).
+func TestEditStrictKeys(t *testing.T) {
+	src := "package demo\n\nimport ovid/io\n\nfunc main(io *ovid/io.Cap) i64 {\n  return 0\n}\n"
+	dir := mkmod(t, demo(src))
+	h := hashOf(t, dir, "fn:demo.main")
+	body := `"func main(io *ovid/io.Cap) i64 {\n  return 1\n}"`
+	for _, c := range []struct {
+		name, req, key string
+		op             any
+	}{
+		{"misspelled expect", `{"ops":[{"op":"replace","id":"fn:demo.main","expcet":"` + h + `","text":` + body + `}]}`, `"expcet"`, 0.0},
+		{"expect in another case", `[{"op":"replace","id":"main","Expect":"` + h + `","text":` + body + `}]`, `"Expect"`, 0.0},
+		{"repeated text", `{"ops":[{"op":"replace","id":"main","expect":"` + h + `","text":` + body + `,"text":"func main(io *ovid/io.Cap) i64 {\n  return 2\n}"}]}`, `"text" appears twice`, 0.0},
+		{"second op", `{"ops":[{"op":"replace","id":"st:demo.main:1","expect":"` + h + `","text":"return 1"},{"op":"delete","idd":"st:demo.main:1"}]}`, `"idd"`, 1.0},
+		{"one op on its own", `{"op":"replace","id":"main","expect":"` + h + `","txet":` + body + `}`, `"txet"`, 0.0},
+		{"request key", `{"revison":"0123456789abcdef","ops":[{"op":"replace","id":"main","expect":"` + h + `","text":` + body + `}]}`, `"revison"`, nil},
+		{"repeated ops", `{"ops":[],"ops":[{"op":"delete","id":"main","expect":"` + h + `"}]}`, `"ops" appears twice`, nil},
+	} {
+		p := filepath.Join(t.TempDir(), "edit.json")
+		os.WriteFile(p, []byte(c.req), 0o644)
+		var b bytes.Buffer
+		code := Edit(dir, p, EditOpts{}, &b)
+		r := last(t, b.String())
+		if code != ExitFail || r["error"] != "bad_edit" || r["op"] != c.op || !strings.Contains(fmt.Sprint(r["message"]), c.key) {
+			t.Errorf("%s: %d %s", c.name, code, b.String())
+		}
+		if got, _ := os.ReadFile(filepath.Join(dir, "demo/main.ov")); string(got) != src {
+			t.Fatalf("%s: written:\n%s", c.name, got)
+		}
+	}
+	// The same request spelled right goes through.
+	r, code := editJSON(t, dir, map[string]any{"op": "replace", "id": "main", "expect": h, "text": "func main(io *ovid/io.Cap) i64 {\n  return 1\n}"})
+	if code != 0 || r["written"] != true {
+		t.Fatalf("well-formed: %d %v", code, r)
+	}
+}
+
+// TestEditStrayFields: a field that belongs to another op is refused, not
+// ignored. A replace that names a before was meant as an insert; doing a
+// replace would drop the code the caller meant to keep.
+func TestEditStrayFields(t *testing.T) {
+	src := "package demo\n\nimport ovid/io\n\nfunc main(io *ovid/io.Cap) i64 {\n  var x i64 = 1\n  return x\n}\n"
+	dir := mkmod(t, demo(src))
+	h := hashOf(t, dir, "fn:demo.main")
+	for _, c := range []struct {
+		op  EditOp
+		key string
+	}{
+		{EditOp{Op: "replace", ID: "st:demo.main:2", Before: "st:demo.main:2", Text: "return 0"}, `replace takes no "before"`},
+		{EditOp{Op: "replace", ID: "st:demo.main:2", After: "st:demo.main:1", Text: "return 0"}, `replace takes no "after"`},
+		{EditOp{Op: "replace", ID: "st:demo.main:2", File: "demo/x.ov", Text: "return 0"}, `replace takes no "file"`},
+		{EditOp{Op: "delete", ID: "st:demo.main:1", Text: "var x i64 = 2"}, `delete takes no "text"`},
+		{EditOp{Op: "delete", ID: "st:demo.main:1", Into: "fn:demo.main"}, `delete takes no "into"`},
+		{EditOp{Op: "insert", ID: "st:demo.main:1", After: "st:demo.main:1", Text: "x = 2"}, `insert takes no "id"`},
+		{EditOp{Op: "insert", After: "st:demo.main:1", File: "demo/x.ov", Text: "x = 2"}, `insert takes no "file"`},
+		{EditOp{Op: "append", Into: "fn:demo.main", Before: "st:demo.main:2", Text: "x = 2"}, `append takes no "before"`},
+		// Given, even empty: "before":"" or --before= is still a field
+		// the op does not take.
+		{EditOp{Op: "replace", ID: "st:demo.main:2", Text: "return 0", Given: []string{"before"}}, `replace takes no "before"`},
+		{EditOp{Op: "delete", ID: "st:demo.main:1", Given: []string{"text"}}, `delete takes no "text"`},
+	} {
+		c.op.Expect = h
+		// Both forms: one op from the command line, and a JSON request.
+		var b bytes.Buffer
+		code := EditOne(dir, c.op, "", EditOpts{}, &b)
+		r := last(t, b.String())
+		if code != ExitFail || r["error"] != "bad_edit" || !strings.Contains(fmt.Sprint(r["message"]), c.key) || r["hint"] == nil {
+			t.Errorf("%s: %d %s", c.key, code, b.String())
+		}
+		// In JSON a given field is a key, here spelled out empty.
+		raw, _ := json.Marshal(c.op)
+		var req map[string]any
+		json.Unmarshal(raw, &req)
+		for _, k := range c.op.Given {
+			req[k] = ""
+		}
+		r, code = editJSON(t, dir, req)
+		if code != ExitFail || r["error"] != "bad_edit" || !strings.Contains(fmt.Sprint(r["message"]), c.key) {
+			t.Errorf("%s (JSON): %d %v", c.key, code, r)
+		}
+		if got, _ := os.ReadFile(filepath.Join(dir, "demo/main.ov")); string(got) != src {
+			t.Fatalf("%s: written:\n%s", c.key, got)
+		}
+	}
+}
+
+// TestHelpCommand: ovid help <command> prints that command's entry, since
+// agents ask for it by name; the edit ops share one entry.
+// TestHelpAgent: one call gives the language, the shipped packages, the
+// edit commands, and the id forms, each as its own topic prints it.
+func TestHelpAgent(t *testing.T) {
+	var all bytes.Buffer
+	if code := Help("agent", &all); code != ExitOK {
+		t.Fatalf("help agent: %d", code)
+	}
+	for _, topic := range []string{"language", "std", "edit", "ids"} {
+		var one bytes.Buffer
+		Help(topic, &one)
+		if !strings.Contains(all.String(), "==== ovid help "+topic+" ====\n\n"+one.String()) {
+			t.Errorf("help agent lacks %s", topic)
+		}
+	}
+	var ov bytes.Buffer
+	Help("", &ov)
+	if !strings.Contains(strings.Join(strings.SplitN(ov.String(), "\n", 4)[:3], "\n"), "ovid help agent") {
+		t.Errorf("the overview's first lines do not point to help agent:\n%s", ov.String())
+	}
+}
+
+func TestHelpCommand(t *testing.T) {
+	for _, c := range []string{"init", "check", "build", "run", "test", "outline", "show", "refs", "grep",
+		"replace", "insert", "append", "delete", "rename", "move", "dump", "version", "help"} {
+		var b bytes.Buffer
+		if code := Help(c, &b); code != ExitOK || !regexp.MustCompile(`(?m)(^ovid |\| )`+c+`\b`).MatchString(b.String()) {
+			t.Errorf("help %s: %d\n%s", c, code, b.String())
+		}
+	}
+	var b bytes.Buffer
+	if Help("show", &b); strings.Contains(b.String(), "ovid refs") {
+		t.Errorf("help show includes other entries:\n%s", b.String())
+	}
+	if code := Help("nope", &b); code != ExitUsage {
+		t.Errorf("help nope: %d", code)
+	}
+}
+
 func buildRunDir(t *testing.T, dir string) (string, int) {
 	t.Helper()
 	bin := filepath.Join(dir, "bin", "demo")
@@ -544,12 +895,21 @@ func TestEditInsertAppend(t *testing.T) {
 		t.Fatalf("exit %d", code)
 	}
 	// A syntax error rejects the batch and writes nothing.
-	r, code = editJSON(t, dir, []any{map[string]any{"op": "append", "into": "fn:demo.main", "text": "x = (1"}})
+	r, code = editJSON(t, dir, []any{map[string]any{"op": "append", "into": "fn:demo.main", "expect": hashOf(t, dir, "fn:demo.main"), "text": "x = (1"}})
 	if code == 0 || r["error"] != "syntax" {
 		t.Fatalf("syntax %d %v", code, r)
 	}
 	if again, _ := os.ReadFile(filepath.Join(dir, "demo/main.ov")); string(again) != want {
 		t.Fatal("file changed after rejected edit")
+	}
+	// The parser's hint for a known slip reaches the receipt.
+	r, code = editJSON(t, dir, []any{map[string]any{"op": "append", "into": "fn:demo.main", "expect": hashOf(t, dir, "fn:demo.main"), "text": "var n = 3"}})
+	if code == 0 || r["error"] != "syntax" || r["hint"] != "every local is declared with its type: var n i64 = ... (nothing was written)" {
+		t.Fatalf("syntax hint %d %v", code, r)
+	}
+	r, code = editJSON(t, dir, []any{map[string]any{"op": "append", "into": "fn:demo.main", "expect": hashOf(t, dir, "fn:demo.main"), "text": "x = 1; x = 2"}})
+	if code == 0 || r["error"] != "syntax" || r["hint"] != "statements are one per line; there is no ; (nothing was written)" {
+		t.Fatalf("syntax hint %d %v", code, r)
 	}
 }
 
@@ -590,7 +950,7 @@ func Four() i64 {
 	})
 	for _, rn := range [][2]string{{"Make", "NewPoint"}, {"Point", "Pt"}, {"fld:demo/pt.Pt.x", "xx"}, {"Size", "Width"}, {"pa:demo/pt.NewPoint.x", "x0"}} {
 		var b bytes.Buffer
-		if code := Rename(dir, rn[0], rn[1], false, &b); code != 0 {
+		if code := Rename(dir, rn[0], rn[1], "", false, &b); code != 0 {
 			t.Fatalf("rename %v: %s", rn, b.String())
 		}
 	}
@@ -605,7 +965,7 @@ func Four() i64 {
 		t.Fatalf("exit %d", code)
 	}
 	var b bytes.Buffer
-	if code := Rename(dir, "Width", "NewPoint", false, &b); code == 0 {
+	if code := Rename(dir, "Width", "NewPoint", "", false, &b); code == 0 {
 		t.Fatalf("expected conflict: %s", b.String())
 	}
 }
@@ -613,9 +973,7 @@ func Four() i64 {
 // TestRunCrash: a program that faults under ovid run gets its exit code
 // passed through, and stderr names the statement and the calls that led to it.
 func TestRunCrash(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("crash sites need ptrace")
-	}
+	needExec(t) // and ptrace, which linux has
 	dir := mkmod(t, demo(`package demo
 
 import ovid/io
@@ -629,7 +987,7 @@ func Get(n *Node) i64 {
 }
 
 func main(io *ovid/io.Cap) i64 {
-  ovid/io.Print(strptr("before\n"))
+  ovid/io.Print(io, "before\n")
   return Get(0 as *Node)
 }
 `))
@@ -653,6 +1011,40 @@ func main(io *ovid/io.Cap) i64 {
 	}
 }
 
+// TestRunStoreLiteral: a store into a strptr literal faults, since rodata
+// is read-only, and the hint says so; a store into a copy works.
+func TestRunStoreLiteral(t *testing.T) {
+	needExec(t) // and ptrace, which linux has
+	src := `package demo
+
+import ovid/io
+import ovid/mem
+
+func main(io *ovid/io.Cap) i64 {
+  var p i64 = strptr("abc")
+  COPY
+  store8(p + 1, 66)
+  return load8(p + 1)
+}
+`
+	dir := mkmod(t, demo(strings.Replace(src, "COPY", "", 1)))
+	stderr := filepath.Join(dir, "err")
+	if code := withStdio(t, os.DevNull, stderr, func() int { return Run(dir, nil, io.Discard) }); code != 128+11 {
+		t.Fatalf("exit %d", code)
+	}
+	errb, _ := os.ReadFile(stderr)
+	r := last(t, string(errb))
+	at, _ := r["at"].(map[string]any)
+	if hint, _ := r["hint"].(string); !strings.Contains(hint, "string literal") || at["id"] != "st:demo.main:2" {
+		t.Fatalf("stderr: %s", errb)
+	}
+
+	dir = mkmod(t, demo(strings.Replace(src, "COPY", "var b i64 = ovid/io.Alloc(io, 4)\n  ovid/mem.CopyN(b, p, 4)\n  p = b", 1)))
+	if code := withStdio(t, os.DevNull, stderr, func() int { return Run(dir, nil, io.Discard) }); code != 66 {
+		t.Fatalf("store into a copy: exit %d", code)
+	}
+}
+
 // TestRunStdio: a program that exits normally gets ovid run's stdin, writes
 // its own stdout and stderr, and its exit code passes through, whether it
 // runs traced or plainly (the fallback where ptrace is unavailable).
@@ -666,9 +1058,9 @@ import ovid/io
 
 func main(io *ovid/io.Cap) i64 {
   var buf i64 = ovid/io.Alloc(io, 64)
-  var n i64 = ovid/io.Read(0, buf, 64)
-  ovid/io.Stdout(buf, n)
-  ovid/io.Stderr(strptr("to stderr\n"), 10)
+  var n i64, _ = ovid/io.Read(ovid/io.Stdin(io), bytes(buf, 64))
+  ovid/io.Print(io, bytes(buf, n))
+  ovid/io.Eprint(io, bytes(strptr("to stderr\n"), 10))
   return 3
 }
 `))
@@ -714,7 +1106,7 @@ func main(io *ovid/io.Cap) i64 {
 		if err != nil {
 			t.Fatal(err)
 		}
-		pr := runner(bin, nil, procIO{stdin, open(name + ".out"), open(name + ".err")}, 0)
+		pr := runner(bin, nil, procIO{stdin: stdin, stdout: open(name + ".out"), stderr: open(name + ".err")}, 0)
 		stdin.Close()
 		if pr.err != nil || !pr.exited {
 			t.Fatalf("%s: %+v", name, pr)
@@ -740,6 +1132,308 @@ func withStdio(t *testing.T, stdout, stderr string, f func() int) int {
 	os.Stdout, os.Stderr = o, e
 	defer func() { os.Stdout, os.Stderr = so, se }()
 	return f()
+}
+
+// TestUnsignedDivZero: udiv and urem by zero trap like / and %, and the
+// crash names the statement. Each is its own test, since the first trap
+// ends a process.
+func TestUnsignedDivZero(t *testing.T) {
+	dir := mkmod(t, map[string]string{
+		"demo/main.ov": "package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  return 0\n}\n",
+		"demo/main_test.ov": `package demo
+import ovid/io
+func Zero() i64 {
+  return 0
+}
+func TestUdiv(io *ovid/io.Cap) i64 {
+  return udiv(7, Zero())
+}
+func TestUrem(io *ovid/io.Cap) i64 {
+  return urem(7, Zero())
+}
+func TestFine(io *ovid/io.Cap) i64 {
+  return udiv(7, 7) - 1 + urem(7, 7)
+}
+`,
+	})
+	needExec(t)
+	var b bytes.Buffer
+	if code := Test(dir, "", false, &b); code != ExitFail {
+		t.Fatalf("code %d %s", code, b.String())
+	}
+	got := map[string]map[string]any{}
+	for _, r := range lines(t, b.String()) {
+		if r["fact"] == "test" {
+			got[r["id"].(string)] = r
+		}
+	}
+	if got["fn:demo.TestFine"]["ok"] != true {
+		t.Fatalf("fine %v", got["fn:demo.TestFine"])
+	}
+	for name, src := range map[string]string{"TestUdiv": "  return udiv(7, Zero())", "TestUrem": "  return urem(7, Zero())"} {
+		r := got["fn:demo."+name]
+		at, _ := r["at"].(map[string]any)
+		if r["signal"] != "floating point exception" || at["source"] != src {
+			t.Fatalf("%s: %v", name, r)
+		}
+	}
+}
+
+// TestTableBounds: an index one past a table's end, or negative, traps
+// with an illegal instruction and the crash names the statement.
+func TestTableBounds(t *testing.T) {
+	dir := mkmod(t, map[string]string{
+		"demo/main.ov": "package demo\nimport ovid/io\nconst T [3]i64 = {4, 5, 6}\nfunc main(io *ovid/io.Cap) i64 {\n  return 0\n}\n",
+		"demo/main_test.ov": `package demo
+import ovid/io
+func At(i i64) i64 {
+  return T[i]
+}
+func TestPastEnd(io *ovid/io.Cap) i64 {
+  return At(len(T))
+}
+func TestNegative(io *ovid/io.Cap) i64 {
+  return At(0 - 1)
+}
+func TestEdges(io *ovid/io.Cap) i64 {
+  return At(0) + At(len(T) - 1) - 10
+}
+func TestInWhile(io *ovid/io.Cap) i64 {
+  var i i64 = 0
+  while T[i] != 0 {
+    i = i + 1
+  }
+  return i
+}
+`,
+	})
+	needExec(t)
+	var b bytes.Buffer
+	if code := Test(dir, "", false, &b); code != ExitFail {
+		t.Fatalf("code %d %s", code, b.String())
+	}
+	got := map[string]map[string]any{}
+	for _, r := range lines(t, b.String()) {
+		if r["fact"] == "test" {
+			got[r["id"].(string)] = r
+		}
+	}
+	if got["fn:demo.TestEdges"]["ok"] != true {
+		t.Fatalf("edges %v", got["fn:demo.TestEdges"])
+	}
+	for name, src := range map[string]string{"TestPastEnd": "  return T[i]", "TestNegative": "  return T[i]", "TestInWhile": "  while T[i] != 0 {"} {
+		r := got["fn:demo."+name]
+		at, _ := r["at"].(map[string]any)
+		if r["signal"] != "illegal instruction" || at["source"] != src {
+			t.Fatalf("%s: %v", name, r)
+		}
+	}
+}
+
+// TestBytesBounds: each check on a bytes traps with an illegal instruction
+// and the crash names the statement: an index at the length or negative,
+// a slice past the end, and a slice whose low bound passes its high.
+func TestBytesBounds(t *testing.T) {
+	dir := mkmod(t, map[string]string{
+		"demo/main.ov": "package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  return 0\n}\n",
+		"demo/main_test.ov": `package demo
+import ovid/io
+const N i64 = 5
+const I i64 = 0 - 1
+func At(b bytes, i i64) i64 {
+  return b[i]
+}
+func Put(b bytes, i i64) i64 {
+  b[i] = 1
+  return 0
+}
+func Cut(b bytes, i i64, j i64) i64 {
+  return len(b[i:j])
+}
+func TestPastEnd(io *ovid/io.Cap) i64 {
+  return At("abc", 3)
+}
+func TestNegative(io *ovid/io.Cap) i64 {
+  return At("abc", 0 - 1)
+}
+func TestStore(io *ovid/io.Cap) i64 {
+  return Put(bytes(ovid/io.Alloc(io, 4), 4), 4)
+}
+func TestHigh(io *ovid/io.Cap) i64 {
+  return Cut("abc", 1, 4)
+}
+func TestCrossed(io *ovid/io.Cap) i64 {
+  return Cut("abc", 2, 1)
+}
+func Nest(b bytes, i i64) i64 {
+  if len(b) > 0 && len(b[i:i + 1]) == 1 {
+    return 1
+  }
+  return 0
+}
+func TestNested(io *ovid/io.Cap) i64 {
+  return Nest("abc", 5)
+}
+func Scan(b bytes, k i64) i64 {
+  while len(b[k:k + 1]) == 1 {
+    k = k + 1
+  }
+  return k
+}
+func TestInWhile(io *ovid/io.Cap) i64 {
+  return Scan("abc", 5)
+}
+func TestNegativeLength(io *ovid/io.Cap) i64 {
+  var b bytes = bytes(ovid/io.Alloc(io, 4), 0 - 1)
+  return len(b)
+}
+func TestNegativeLiteral(io *ovid/io.Cap) i64 {
+  var b bytes = bytes(ovid/io.Alloc(io, 4), -1)
+  return len(b)
+}
+func TestLoopAfter(io *ovid/io.Cap) i64 {
+  var b bytes = "abc"
+  var s i64 = 0
+  var i i64 = 0
+  while i < len(b) {
+    i = i + 1
+    s = s + b[i]
+  }
+  return s
+}
+func TestLoopBack(io *ovid/io.Cap) i64 {
+  var b bytes = "abc"
+  var s i64 = 0
+  var i i64 = 0
+  while i < len(b) {
+    s = s + b[i]
+    i = i - 1
+  }
+  return s
+}
+func TestLoopGrown(io *ovid/io.Cap) i64 {
+  var b bytes = "abc"
+  var s i64 = 0
+  var i i64 = 0
+  while i < len(b) {
+    if i == 2 {
+      i = i + 1
+    }
+    s = s + b[i]
+    i = i + 1
+  }
+  return s
+}
+func TestLoopWrap(io *ovid/io.Cap) i64 {
+  var b bytes = "abc"
+  var s i64 = 0
+  var i i64 = 1
+  while i < len(b) {
+    s = s + b[i]
+    i = i + 9223372036854775807
+  }
+  return s
+}
+func TestLoopEntryWrap(io *ovid/io.Cap) i64 {
+  var b bytes = "abc"
+  var s i64 = 0
+  var i i64 = 9223372036854775807
+  i = i + 1
+  while i < len(b) {
+    s = s + b[i]
+    i = i + 1
+  }
+  return s
+}
+func TestLoopStoreAfter(io *ovid/io.Cap) i64 {
+  var b bytes = bytes(ovid/io.Alloc(io, 3), 3)
+  var i i64 = 0
+  while i < len(b) {
+    i = i + 1
+    b[i] = 1
+  }
+  return 0
+}
+func TestLoopConstN(io *ovid/io.Cap) i64 {
+  var b bytes = "abc"
+  var s i64 = 0
+  var i i64 = 0
+  if s == 1 {
+    var N i64 = len(b)
+    s = N
+  }
+  while i < N {
+    s = s + b[i]
+    i = i + 1
+  }
+  return s
+}
+func TestLoopConstI(io *ovid/io.Cap) i64 {
+  var b bytes = "abc"
+  var s i64 = 0
+  if s == 1 {
+    var I i64 = 0
+    s = I
+  }
+  while I < len(b) {
+    s = s + b[I]
+  }
+  return s
+}
+func TestEdges(io *ovid/io.Cap) i64 {
+  var b bytes = bytes(ovid/io.Alloc(io, 4), 4)
+  Put(b, 0)
+  Put(b, 3)
+  return At(b, 0) + At(b, 3) + Cut(b, 0, 4) + Cut(b, 4, 4) + Cut(b, 0, 0) - 6
+}
+`,
+	})
+	needExec(t)
+	var b bytes.Buffer
+	if code := Test(dir, "", false, &b); code != ExitFail {
+		t.Fatalf("code %d %s", code, b.String())
+	}
+	got := map[string]map[string]any{}
+	for _, r := range lines(t, b.String()) {
+		if r["fact"] == "test" {
+			got[r["id"].(string)] = r
+		}
+	}
+	if got["fn:demo.TestEdges"]["ok"] != true {
+		t.Fatalf("edges %v", got["fn:demo.TestEdges"])
+	}
+	for name, src := range map[string]string{
+		"TestPastEnd": "  return b[i]", "TestNegative": "  return b[i]", "TestStore": "  b[i] = 1",
+		"TestHigh": "  return len(b[i:j])", "TestCrossed": "  return len(b[i:j])",
+		"TestNested":          "  if len(b) > 0 && len(b[i:i + 1]) == 1 {",
+		"TestInWhile":         "  while len(b[k:k + 1]) == 1 {",
+		"TestNegativeLength":  "  var b bytes = bytes(ovid/io.Alloc(io, 4), 0 - 1)",
+		"TestNegativeLiteral": "  var b bytes = bytes(ovid/io.Alloc(io, 4), -1)",
+		"TestLoopAfter":       "    s = s + b[i]", "TestLoopBack": "    s = s + b[i]", "TestLoopGrown": "    s = s + b[i]",
+		"TestLoopWrap": "    s = s + b[i]", "TestLoopEntryWrap": "    s = s + b[i]", "TestLoopStoreAfter": "    b[i] = 1", "TestLoopConstN": "    s = s + b[i]", "TestLoopConstI": "    s = s + b[I]",
+	} {
+		r := got["fn:demo."+name]
+		at, _ := r["at"].(map[string]any)
+		if r["signal"] != "illegal instruction" || at["source"] != src {
+			t.Fatalf("%s: %v", name, r)
+		}
+	}
+}
+
+// TestTwoResultFuncIsNoTest: a TestX that returns a value and an error code
+// is not a test, since the runner would take its first result and drop the
+// code unseen.
+func TestTwoResultFuncIsNoTest(t *testing.T) {
+	dir := mkmod(t, map[string]string{
+		"demo/main.ov":      "package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  return 0\n}\n",
+		"demo/main_test.ov": "package demo\nimport ovid/io\nfunc TestOne(io *ovid/io.Cap) i64 {\n  return 0\n}\nfunc TestTwo(io *ovid/io.Cap) (i64, i64) {\n  return 0, 1\n}\n",
+	})
+	var b bytes.Buffer
+	code := Test(dir, "", true, &b)
+	rs := lines(t, b.String())
+	if code != 0 || len(rs) != 3 || rs[0]["code"] != "bad_test" || rs[0]["id"] != "fn:demo.TestTwo" || rs[1]["id"] != "fn:demo.TestOne" || rs[2]["count"] != float64(1) {
+		t.Fatalf("list %d %s", code, b.String())
+	}
 }
 
 func TestTestCommand(t *testing.T) {
@@ -815,13 +1509,13 @@ func TestNil(io *ovid/io.Cap) i64 {
 func TestRefsAndOutline(t *testing.T) {
 	dir := mkmod(t, demo(addSrc))
 	var b bytes.Buffer
-	Refs(dir, "Add", &b)
+	Refs(dir, "Add", "", true, Page{}, &b)
 	rs := lines(t, b.String())
 	if len(rs) != 2 || rs[0]["kind"] != "call" || rs[0]["line"] != float64(10) {
 		t.Fatalf("refs %v", rs)
 	}
 	b.Reset()
-	Outline(dir, "demo", false, false, &b)
+	Outline(dir, "demo", false, false, false, true, Page{}, &b)
 	if rs := lines(t, b.String()); len(rs) != 3 || rs[0]["sig"] != "func Add(a i64, b i64) i64" {
 		t.Fatalf("outline %v", rs)
 	}
@@ -829,7 +1523,7 @@ func TestRefsAndOutline(t *testing.T) {
 		t.Fatalf("refs summary %v", s)
 	}
 	b.Reset()
-	Outline(dir, "demo", false, true, &b)
+	Outline(dir, "demo", false, true, false, true, Page{}, &b)
 	if rs := lines(t, b.String()); rs[0]["used_by"].(map[string]any)["demo"] != float64(1) {
 		t.Fatalf("outline --uses %v", rs)
 	}
@@ -874,6 +1568,194 @@ func TestProgTests(t *testing.T) {
 	needExec(t)
 	if code := Test(filepath.Join(repo(t), "prog"), "", false, &b); code != 0 {
 		t.Fatalf("prog tests fail:\n%s", b.String())
+	}
+}
+
+// TestOutlineTable: outline shows a table in its declared shape, not as a
+// const with a value.
+func TestOutlineTable(t *testing.T) {
+	dir := mkmod(t, demo("package demo\nimport ovid/io\nconst Pow [3]i64 = {1, 10, 100}\nconst K i64 = 7\nfunc main(io *ovid/io.Cap) i64 {\n  return Pow[0] + K\n}\n"))
+	var b bytes.Buffer
+	Outline(dir, "demo", false, false, false, true, Page{}, &b)
+	sigs := map[string]any{}
+	for _, r := range lines(t, b.String()) {
+		if r["id"] != nil {
+			sigs[r["id"].(string)] = r["sig"]
+		}
+	}
+	if sigs["cn:demo.Pow"] != "const Pow [3]i64" || sigs["cn:demo.K"] != "const K i64 = 7" {
+		t.Fatalf("sigs %v", sigs)
+	}
+}
+
+// TestShowIndexBase: the name a table read or a bytes index is on is an
+// expression of its own, listed with a type: the table's, or bytes.
+func TestShowIndexBase(t *testing.T) {
+	dir := mkmod(t, map[string]string{
+		"demo/main.ov": "package demo\nimport ovid/io\nimport util\nconst T [3]i64 = {1, 2, 3}\nconst E [0]i64 = {}\nfunc main(io *ovid/io.Cap) i64 {\n  var b bytes = \"ab\"\n  return T[1] + len(E) + util.Primes[0] + b[0] + len(b)\n}\n",
+		"util/util.ov": "package util\nconst Primes [2]i64 = {2, 3}\n",
+	})
+	var b bytes.Buffer
+	Show(dir, []string{"st:demo.main:2"}, true, true, false, &b)
+	types := map[string]any{}
+	for _, ln := range strings.Split(strings.TrimSpace(b.String()), "\n") {
+		var r map[string]any
+		if json.Unmarshal([]byte(ln), &r) == nil && r["exprs"] != nil {
+			for _, e := range r["exprs"].([]any) {
+				e := e.(map[string]any)
+				if e["text"] == "T" || e["text"] == "E" || e["text"] == "util.Primes" || e["text"] == "b" {
+					types[fmt.Sprint(e["text"])] = e["type"]
+				}
+			}
+		}
+	}
+	if types["T"] != "[3]i64" || types["E"] != "[0]i64" || types["util.Primes"] != "[2]i64" || types["b"] != "bytes" {
+		t.Fatalf("base types %v in %s", types, b.String())
+	}
+}
+
+// TestBytesFieldCodegen: a bytes field read in a loop condition and in
+// ptr() compiles to the same code as the pointer+length pair of i64 fields
+// it stands for; the lowering reads it in place, not through temps.
+func TestBytesFieldCodegen(t *testing.T) {
+	skip := "func Skip(p *P) i64 {\n  var c i64 = 0\n  while p.i < len(p.src) && At(p, p.i) != 10 {\n    p.i = p.i + 1\n    c = c + 1\n  }\n  if p.i >= len(p.src) || (p.nl && p.i > 0) {\n    return c + 1\n  }\n  return c\n}\n"
+	pair := mkmod(t, demo("package demo\nimport ovid/io\ntype P struct {\n  src i64\n  n i64\n  i i64\n  nl bool\n}\nfunc At(p *P, k i64) i64 { return load8(p.src + k) }\n"+
+		strings.NewReplacer("len(p.src)", "p.n").Replace(skip)+
+		"func main(io *ovid/io.Cap) i64 {\n  var p *P = ovid/io.Alloc(io, sizeof(P)) as *P\n  p.src = strptr(\"abc\\ndef\")\n  p.n = strlen(\"abc\\ndef\")\n  return Skip(p)\n}\n"))
+	field := mkmod(t, demo("package demo\nimport ovid/io\ntype P struct {\n  src bytes\n  i i64\n  nl bool\n}\nfunc At(p *P, k i64) i64 { return load8(ptr(p.src) + k) }\n"+skip+
+		"func main(io *ovid/io.Cap) i64 {\n  var p *P = ovid/io.Alloc(io, sizeof(P)) as *P\n  p.src = \"abc\\ndef\"\n  return Skip(p)\n}\n"))
+	var out [2][]byte
+	for i, dir := range []string{pair, field} {
+		bin := filepath.Join(t.TempDir(), "x")
+		var b bytes.Buffer
+		if code := Build(dir, bin, &b); code != 0 {
+			t.Fatalf("build %d: %s", i, b.String())
+		}
+		data, err := os.ReadFile(bin)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out[i] = data
+	}
+	if !bytes.Equal(out[0], out[1]) {
+		t.Fatalf("a bytes field compiles to %d bytes, the pair of i64 fields to %d", len(out[1]), len(out[0]))
+	}
+}
+
+// TestBytesLoopCodegen: a loop over b by i whose condition proves b[i]
+// in bounds, reading and storing it, compiles to the same code as the
+// loop over a pointer and a length with no check at all.
+func TestBytesLoopCodegen(t *testing.T) {
+	body := "  var s i64 = 0\n  var i i64 = 0\n  while i < n {\n    s = s + LOAD\n    STORE\n    i = i + 1\n  }\n  return s\n}\n"
+	tail := "func main(io *ovid/io.Cap) i64 {\n  return Sum(\"abc\")\n}\n"
+	pair := mkmod(t, demo("package demo\nimport ovid/io\nfunc Sum(b i64, m i64) i64 {\n  var n i64 = m\n"+strings.NewReplacer("LOAD", "load8(b + i)", "STORE", "store8(b + i, s & 255)").Replace(body)+
+		strings.NewReplacer("Sum(\"abc\")", "Sum(strptr(\"abc\"), strlen(\"abc\"))").Replace(tail)))
+	checked := mkmod(t, demo("package demo\nimport ovid/io\nfunc Sum(b bytes) i64 {\n  var n i64 = len(b)\n"+strings.NewReplacer("LOAD", "b[i]", "STORE", "b[i] = s & 255").Replace(body)+tail))
+	var out [2][]byte
+	for i, dir := range []string{pair, checked} {
+		bin := filepath.Join(t.TempDir(), "x")
+		var b bytes.Buffer
+		if code := Build(dir, bin, &b); code != 0 {
+			t.Fatalf("build %d: %s", i, b.String())
+		}
+		data, err := os.ReadFile(bin)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out[i] = data
+	}
+	if !bytes.Equal(out[0], out[1]) {
+		t.Fatalf("the checked loop compiles to %d bytes, the pointer loop to %d", len(out[1]), len(out[0]))
+	}
+}
+
+// constUses names consts in other consts' values and a table's elements.
+const constUses = "package demo\nimport ovid/io\nconst One i64 = 1\nconst Two i64 = One + 1\nconst T [3]i64 = {\n  One,\n  Two * One,\n  0\n}\nconst N i64 = len(T)\nfunc main(io *ovid/io.Cap) i64 {\n  return Two + T[0] + N\n}\n"
+
+// TestConstUses: refs, rename, and move see a const named in another
+// const's value and in a table's elements, which the parser folds away.
+func TestConstUses(t *testing.T) {
+	dir := mkmod(t, demo(constUses))
+	var b bytes.Buffer
+	if code := Refs(dir, "One", "", true, Page{}, &b); code != ExitOK || last(t, b.String())["total"] != float64(3) {
+		t.Fatalf("refs One: %d %s", code, b.String())
+	}
+	b.Reset()
+	if code := Refs(dir, "T", "", true, Page{}, &b); code != ExitOK || last(t, b.String())["total"] != float64(2) {
+		t.Fatalf("refs T: %d %s", code, b.String())
+	}
+	b.Reset()
+	if code := Rename(dir, "cn:demo.One", "Uno", "", false, &b); code != ExitOK {
+		t.Fatalf("rename: %d %s", code, b.String())
+	}
+	src := readFile(t, dir, "demo/main.ov")
+	if strings.Contains(src, "One") || strings.Count(src, "Uno") != 4 {
+		t.Fatalf("rename left:\n%s", src)
+	}
+	b.Reset()
+	if code := Check(dir, false, &b); code != ExitOK {
+		t.Fatalf("check after rename: %s", b.String())
+	}
+	// A const may not name another package's, so moving one that another
+	// const names is refused, for that reason (move rewrote the use), and
+	// nothing is written.
+	b.Reset()
+	if code := Move(dir, "Uno", "demo/util", "", false, &b); code == ExitOK || !strings.Contains(last(t, b.String())["message"].(string), "cannot name another package's const") {
+		t.Fatalf("move: %s", b.String())
+	}
+	if readFile(t, dir, "demo/main.ov") != src {
+		t.Fatal("a refused move wrote")
+	}
+}
+
+// TestBytesFieldLayout: a bytes field is two words, and what outline and
+// check --facts say about a struct's size and its fields' offsets agree
+// with the code generator.
+func TestBytesFieldLayout(t *testing.T) {
+	dir := mkmod(t, demo("package demo\nimport ovid/io\ntype T struct {\n  b bytes\n  n i64\n}\nfunc main(io *ovid/io.Cap) i64 {\n  return sizeof(T)\n}\n"))
+	var b bytes.Buffer
+	Outline(dir, "demo", false, false, false, true, Page{}, &b)
+	for _, r := range lines(t, b.String()) {
+		if r["id"] == "ty:demo.T" && r["size"] != float64(24) {
+			t.Fatalf("outline size %v", r["size"])
+		}
+	}
+	b.Reset()
+	if code := Check(dir, true, &b); code != 0 {
+		t.Fatalf("check: %s", b.String())
+	}
+	got := map[string]any{}
+	for _, r := range lines(t, b.String()) {
+		switch r["fact"] {
+		case "type":
+			got[r["id"].(string)] = r["size"]
+		case "field":
+			got[r["id"].(string)] = r["offset"]
+		}
+	}
+	if got["ty:demo.T"] != float64(24) || got["fld:demo.T.b"] != float64(0) || got["fld:demo.T.n"] != float64(16) {
+		t.Fatalf("facts %v", got)
+	}
+}
+
+// TestMoveTableUse: a func whose only use of a package is a table read or
+// its length brings that import along when it moves.
+func TestMoveTableUse(t *testing.T) {
+	dir := mkmod(t, map[string]string{
+		"demo/main.ov": "package demo\nimport ovid/io\nimport util\nfunc Sum() i64 {\n  return util.Primes[0] + len(util.Primes)\n}\nfunc main(io *ovid/io.Cap) i64 {\n  return 0\n}\n",
+		"util/util.ov": "package util\nconst Primes [2]i64 = {2, 3}\n",
+	})
+	var b bytes.Buffer
+	if code := Move(dir, "Sum", "other", "", false, &b); code != 0 {
+		t.Fatalf("move %d: %s", code, b.String())
+	}
+	src, _ := os.ReadFile(filepath.Join(dir, "other/other.ov"))
+	if !strings.Contains(string(src), "import util\n") || !strings.Contains(string(src), "util.Primes[0] + len(util.Primes)") {
+		t.Fatalf("other.ov:\n%s", src)
+	}
+	b.Reset()
+	if code := Check(dir, false, &b); code != 0 {
+		t.Fatalf("after move: %s", b.String())
 	}
 }
 
@@ -947,12 +1829,12 @@ func Twice(v i64) i64 {
 func TestBinaryShape(t *testing.T) {
 	dir := mkmod(t, demo(`package demo
 import ovid/io
-func Unused() i64 {
-  ovid/io.Stdout(strptr("never printed"), strlen("never printed"))
+func Unused(io *ovid/io.Cap) i64 {
+  ovid/io.Print(io, "never printed")
   return 1
 }
 func main(io *ovid/io.Cap) i64 {
-  ovid/io.Stdout(strptr("hi\n"), strlen("hi\n"))
+  ovid/io.Print(io, "hi\n")
   return 0
 }
 `))
@@ -965,10 +1847,20 @@ func main(io *ovid/io.Cap) i64 {
 		t.Fatal(err)
 	}
 	defer f.Close()
+	stack := 0
 	for _, p := range f.Progs {
 		if p.Flags&elf.PF_W != 0 && p.Flags&elf.PF_X != 0 {
 			t.Fatalf("segment at %#x is writable and executable", p.Vaddr)
 		}
+		if p.Type == elf.PT_GNU_STACK {
+			stack++
+			if p.Flags != elf.PF_R|elf.PF_W || p.Off|p.Vaddr|p.Paddr|p.Filesz|p.Memsz|p.Align != 0 {
+				t.Fatalf("PT_GNU_STACK is %+v, want flags RW and the rest 0", p.ProgHeader)
+			}
+		}
+	}
+	if stack != 1 {
+		t.Fatalf("%d PT_GNU_STACK headers, want 1", stack)
 	}
 	raw, _ := os.ReadFile(bin)
 	if bytes.Contains(raw, []byte("never printed")) {
@@ -983,7 +1875,7 @@ func TestEditOne(t *testing.T) {
 	dir := mkmod(t, demo("package demo\n\nimport ovid/io\n\nfunc main(io *ovid/io.Cap) i64 {\n  return 1\n}\n"))
 	text := filepath.Join(t.TempDir(), "text.ov")
 	// Quotes and newlines need no escaping; the trailing newline is dropped.
-	os.WriteFile(text, []byte("ovid/io.Stdout(strptr(\"a \\\"b\\\"\\n\"), strlen(\"a \\\"b\\\"\\n\"))\n"), 0o644)
+	os.WriteFile(text, []byte("ovid/io.Print(io, \"a \\\"b\\\"\\n\")\n"), 0o644)
 	var b bytes.Buffer
 	if code := EditOne(dir, EditOp{Op: "insert", Before: "st:demo.main:1", Expect: hashOf(t, dir, "fn:demo.main")}, text, EditOpts{RequireClean: true}, &b); code != 0 {
 		t.Fatalf("insert %d %s", code, b.String())
@@ -1093,7 +1985,7 @@ func TestMoveManyRollsBack(t *testing.T) {
 			t.Fatalf("%s not restored:\n%s", rel, got)
 		}
 	}
-	// Into a new package, dry-run: moves and restores, removing the new dir.
+	// Into a new package, dry-run: planned in memory, so no new dir.
 	b.Reset()
 	if code := MoveMany(dir, []string{"K", "Taken"}, "demo/num", "", true, &b); code != 0 {
 		t.Fatalf("dry-run %d %s", code, b.String())
@@ -1164,6 +2056,26 @@ func TestSelfHost(t *testing.T) {
 		}
 	}
 
+	// The self-hosted refs prints what this one prints, for every kind of
+	// target: its checker records the same uses.
+	for _, q := range []string{"fn:ovid/parse.FindDecl", "fn:ovid/mem.Eq", "ty:ovid/parse.Decl", "ty:ovid/io.Cap",
+		"fld:ovid/parse.Decl.next", "fld:ovid/parse.Node.op", "pa:ovid/check.Err.code", "cn:ovid/parse.OP_CALL",
+		"cn:ovid/asm.LOADADDR", "st:ovid/sha.Sum:1", "Block", "ovid/cg.Max", "Revision", "ovid/parse.CountDecls",
+		"mem.Eq", "Decl.next", "parse.Node.op", "Err.code"} {
+		// Both print module-relative paths: this toolchain under
+		// OVID_PATHS=module, the self-hosted one when run in the module on ".".
+		t.Setenv("OVID_PATHS", "module")
+		b.Reset()
+		if code := Refs(prog, q, "", false, Page{}, &b); code != 0 {
+			t.Fatalf("refs %s: %s", q, b.String())
+		}
+		want := b.String()
+		got, code := runIn(t, prog, s1, "refs", q, ".", "--std", stdDir)
+		if code != 0 || got != want {
+			t.Fatalf("refs %s: self-hosted (exit %d) differs from go:\n--- self\n%s\n--- go\n%s", q, code, got, want)
+		}
+	}
+
 	// The self-hosted checker names each error's node and source line, and
 	// reports a second decl of a name once, at that decl.
 	bad := mkmod(t, demo("package demo\nimport ovid/io\nfunc F() i64 {\n  return 1\n}\nfunc F() i64 {\n  return 2\n}\nfunc main(io *ovid/io.Cap) i64 {\n  var x i64 = true\n  return x\n}\n"))
@@ -1172,7 +2084,7 @@ func TestSelfHost(t *testing.T) {
 	if code != 1 || len(ds) != 3 {
 		t.Fatalf("self-hosted check %d: %s", code, out)
 	}
-	if d := ds[0]; d["code"] != "duplicate_id" || d["id"] != "fn:demo.F" || d["line"] != float64(6) {
+	if d := ds[0]; d["code"] != "duplicate_name" || d["id"] != "fn:demo.F" || d["line"] != float64(6) {
 		t.Fatalf("duplicate: %v", d)
 	}
 	if d := ds[1]; d["code"] != "type_mismatch" || d["id"] != "ex:demo.main:1" || d["func"] != "main" || d["line"] != float64(10) || d["col"] != float64(15) || d["source"] != "  var x i64 = true" {
@@ -1180,6 +2092,87 @@ func TestSelfHost(t *testing.T) {
 	}
 	if d := ds[2]; d["ok"] != false || d["errors"] != float64(2) {
 		t.Fatalf("summary: %v", d)
+	}
+
+	// On a module whose decls are duplicated, which check rejects, the
+	// self-hosted refs refuses what this one refuses, for the same reason:
+	// a field only a later copy of the type has is found there, by its id
+	// or its qualified name, and a duplicated id is ambiguous_id before
+	// its kind is looked at.
+	dup := mkmod(t, map[string]string{"ovid.mod": "module app\nentry app\n",
+		"app/a.ov": "package app\nimport ovid/io\ntype T struct {\n  a i64\n}\nfunc F(io *ovid/io.Cap) i64 {\n  var x i64, e i64 = ovid/io.ReadFile(io, \"f\")\n  return x + e\n}\nfunc main(io *ovid/io.Cap) i64 {\n  var t *T = ovid/io.Alloc(io, sizeof(T)) as *T\n  return t.a + F(io)\n}\n",
+		"app/b.ov": "package app\nimport ovid/io\nimport ovid/mem\nimport ovid/mem\ntype T struct {\n  a i64\n  f i64\n}\nfunc F(io *ovid/io.Cap) i64 {\n  var y i64 = 2\n  return y\n}\n"})
+	for q, want := range map[string]string{"fld:app.T.f": "", "fld:app.T.a": "ambiguous_id", "st:app.F:1": "ambiguous_id", "ex:app.F:1": "ambiguous_id", "fld:app.T.g": "not_found",
+		"T.f": "", "T.a": "ambiguous_id", "F.io": "ambiguous_id", "im:app:ovid/mem": "ambiguous_id", "im:app:ovid/io": "unsupported"} {
+		b.Reset()
+		Refs(dup, q, "", true, Page{}, &b)
+		gr := last(t, b.String())
+		out, _ := runIn(t, dup, s1, "refs", q, ".", "--std", stdDir)
+		sr := last(t, out)
+		if gr["error"] != sr["error"] || (want == "" && gr["ok"] != true) || (want != "" && gr["error"] != want) {
+			t.Fatalf("refs %s on duplicates: self-hosted %v, go %v, want %q", q, sr, gr, want)
+		}
+	}
+
+	// --name picks one local of a two-result var, and is refused the same
+	// way by both without one or with a name the target does not declare.
+	vmod := mkmod(t, demo("package demo\nimport ovid/io\nfunc Two(x i64) (i64, i64) {\n  return x, 0\n}\nfunc main(io *ovid/io.Cap) i64 {\n  var v i64, e i64 = Two(1)\n  v, e = Two(v + e)\n  if e != 0 {\n    return e\n  }\n  return v\n}\n"))
+	// --name given empty is a usage error for the self-hosted refs too.
+	if out, code := runIn(t, vmod, s1, "refs", "Two", ".", "--std", stdDir, "--name", ""); code != 64 || !strings.Contains(out, "--name needs a name") {
+		t.Fatalf("refs --name '': self-hosted exit %d: %s", code, out)
+	}
+
+	// _ discards a result and is no local.
+	dmod := mkmod(t, demo("package demo\nimport ovid/io\nfunc Two(x i64) (i64, i64) {\n  return x, 0\n}\nfunc main(io *ovid/io.Cap) i64 {\n  var _, e i64 = Two(1)\n  var v i64, _ = Two(e)\n  return v + e\n}\n"))
+	for _, c := range [][3]string{{"v", "st:demo.main:1", "e"}, {"v", "st:demo.main:1", "v"}, {"v", "st:demo.main:1", ""}, {"v", "st:demo.main:1", "z"}, {"v", "Two", "Three"}, {"v", "Two", "Two"},
+		{"d", "st:demo.main:1", ""}, {"d", "st:demo.main:1", "e"}, {"d", "st:demo.main:1", "_"}, {"d", "st:demo.main:2", ""}, {"d", "st:demo.main:2", "_"}, {"d", "st:demo.main:2", "x"}} {
+		dir := vmod
+		if c[0] == "d" {
+			dir = dmod
+		}
+		c := [2]string{c[1], c[2]}
+		b.Reset()
+		code := Refs(dir, c[0], c[1], false, Page{}, &b)
+		args := []string{"refs", c[0], ".", "--std", stdDir}
+		if c[1] != "" {
+			args = append(args, "--name", c[1])
+		}
+		got, scode := runIn(t, dir, s1, args...)
+		// A refusal is compared as JSON: the self-hosted line orders its
+		// keys differently.
+		same := got == b.String()
+		if code != 0 {
+			sr, gr := last(t, got), last(t, b.String())
+			same = sr["error"] == gr["error"] && sr["message"] == gr["message"]
+		}
+		if scode != code || !same {
+			t.Fatalf("refs %s --name %q: self-hosted (exit %d) differs from go (exit %d):\n--- self\n%s\n--- go\n%s", c[0], c[1], scode, code, got, b.String())
+		}
+	}
+
+	// A const named in another const's value or a table's elements is a
+	// use for both, which the parser folded away.
+	cmod := mkmod(t, demo(constUses))
+	for _, q := range []string{"One", "T", "Two"} {
+		b.Reset()
+		if code := Refs(cmod, q, "", false, Page{}, &b); code != 0 {
+			t.Fatalf("refs %s: %s", q, b.String())
+		}
+		got, code := runIn(t, cmod, s1, "refs", q, ".", "--std", stdDir)
+		if code != 0 || got != b.String() {
+			t.Fatalf("refs %s in consts: self-hosted (exit %d) differs from go:\n--- self\n%s\n--- go\n%s", q, code, got, b.String())
+		}
+	}
+
+	// A var's value is checked before its name is in scope, by both
+	// checkers, so check fails where build would.
+	self := mkmod(t, demo("package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  var x i64 = x\n  return x\n}\n"))
+	b.Reset()
+	Check(self, false, &b)
+	gd := lines(t, b.String())[0]
+	out, code = run(t, s1, "check", self, "--std", stdDir)
+	if d := lines(t, out)[0]; code != 1 || d["code"] != "unknown_name" || gd["code"] != "unknown_name" || d["line"] != gd["line"] || d["col"] != gd["col"] {
+		t.Fatalf("var x = x: self-hosted %d %s; go %v", code, out, gd)
 	}
 
 	// Like this compiler, its build prints only the receipt, or the errors
@@ -1202,6 +2195,69 @@ func TestSelfHost(t *testing.T) {
 	if d := last(t, out); code != 1 || d["fact"] != "summary" || d["ok"] != false || d["errors"] != float64(1) {
 		t.Fatalf("check of a syntax error %d: %s", code, out)
 	}
+
+	// An unknown field is reported at the access, not at its base, which
+	// starts at the same column: the two checkers must name the same id.
+	fields := mkmod(t, demo("package demo\nimport ovid/io\ntype P struct {\n  x i64\n}\nfunc main(io *ovid/io.Cap) i64 {\n  var p *P = ovid/io.Alloc(io, sizeof(P)) as *P\n  p.y = 1\n  return p.z + p.x\n}\n"))
+	b.Reset()
+	Check(fields, false, &b)
+	out, _ = run(t, s1, "check", fields, "--std", stdDir)
+	var goIDs, selfIDs []string
+	for _, d := range lines(t, b.String()) {
+		if d["fact"] == "error" {
+			goIDs = append(goIDs, fmt.Sprint(d["code"], " ", d["id"]))
+		}
+	}
+	for _, d := range lines(t, out) {
+		if d["fact"] == "error" {
+			selfIDs = append(selfIDs, fmt.Sprint(d["code"], " ", d["id"]))
+		}
+	}
+	if want := []string{"unknown_field st:demo.main:2", "unknown_field ex:demo.main:9"}; !slices.Equal(goIDs, want) || !slices.Equal(selfIDs, want) {
+		t.Fatalf("unknown field ids: go %v, self-hosted %v, want %v", goIDs, selfIDs, want)
+	}
+
+	// Both dumps are valid JSON and say the same thing. A literal's bytes
+	// that are not UTF-8 (prog's asm tests have some) come out as
+	// value_hex, which loses nothing.
+	lit := mkmod(t, demo("package demo\nimport ovid/io\nconst T [3]i64 = {-1, 0, 7}\nconst E [0]i64 = {}\ntype R struct {\n  s bytes\n}\nfunc Two(x i64) (i64, i64) {\n  return x, 0\n}\nfunc Cut(b bytes) (bytes, i64) {\n  return b[1:len(b)], 0\n}\nfunc main(io *ovid/io.Cap) i64 {\n  var v i64, e i64 = Two(1)\n  v, e = Two(2)\n  var w i64, _ = Two(3)\n  var s bytes = \"ab\"\n  var r *R = ovid/io.Alloc(io, sizeof(R)) as *R\n  r.s = bytes(ovid/io.Alloc(io, 2), 2)\n  r.s[0] = s[1]\n  var c bytes, ce i64 = Cut(r.s)\n  return load8(strptr(\"\\xb8\\n\") + 1) + strlen(\"é\") + T[1] + len(T) + v + e + w + len(c) + ce + len(r.s)\n}\n"))
+	for _, dir := range []string{prog, lit} {
+		b.Reset()
+		Dump(dir, "", "", &b)
+		out, code := run(t, s1, "dump", dir, "--std", stdDir)
+		var g, o any
+		if !utf8.ValidString(out) || json.Unmarshal(b.Bytes(), &g) != nil || json.Unmarshal([]byte(out), &o) != nil || code != 0 {
+			t.Fatalf("dump of %s is not valid JSON (%d)", dir, code)
+		}
+		if !reflect.DeepEqual(g, o) {
+			t.Fatalf("dumps of %s differ", dir)
+		}
+	}
+	if b.Reset(); Dump(lit, "", "", &b) != 0 || !strings.Contains(b.String(), `"value_hex": "b80a"`) || !strings.Contains(b.String(), `"value": "é"`) || !strings.Contains(b.String(), `"values": [`) {
+		t.Fatalf("dump of literals: %s", b.String())
+	}
+	// A source line that is not UTF-8 is still valid JSON in a diagnostic.
+	badSrc := mkmod(t, demo("package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  return true // \xff\xe2\x82\n}\n"))
+	b.Reset()
+	Check(badSrc, false, &b)
+	out, _ = run(t, s1, "check", badSrc, "--std", stdDir)
+	if !utf8.ValidString(out) || lines(t, out)[0]["source"] != lines(t, b.String())[0]["source"] {
+		t.Fatalf("diagnostic source: self-hosted %q, go %q", out, b.String())
+	}
+
+	// Its build leaves out _test.ov files too, so an error in one does not
+	// stop it, and the two binaries still agree.
+	tbad := filepath.Join(hello, "hello", "bad_test.ov")
+	if err := os.WriteFile(tbad, []byte("package hello\nfunc TestBad() i64 {\n  return nope\n}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, code := run(t, s1, "build", hello, "-o", hs, "--std", stdDir); code != 0 {
+		t.Fatalf("self-hosted build with a broken test %d: %s", code, out)
+	}
+	same(mustBuild(t, hello), hs)
+	if _, code := run(t, s1, "check", hello, "--std", stdDir); code != 1 {
+		t.Fatalf("self-hosted check passed a broken test")
+	}
 }
 
 // TestSelfHostLarge builds a program far larger than the compiler with both
@@ -1213,14 +2269,7 @@ func TestSelfHostLarge(t *testing.T) {
 	if testing.Short() {
 		t.Skip("large program")
 	}
-	const n = 30000
-	var src strings.Builder
-	src.WriteString("package demo\nimport ovid/io\nfunc F0() i64 {\n  return 1\n}\n")
-	for i := 1; i < n; i++ {
-		fmt.Fprintf(&src, "func F%d() i64 {\n  return (F%d() + strlen(\"a%d\") + strlen(\"b%d\") + load8(strptr(\"c%d\")) + strlen(\"a%d\")) & 1023\n}\n", i, i-1, i, i, i, i-1)
-	}
-	fmt.Fprintf(&src, "func main(io *ovid/io.Cap) i64 {\n  return F%d() & 127\n}\n", n-1)
-	dir := mkmod(t, demo(src.String()))
+	dir := mkmod(t, demo(largeSource(30000)))
 	g := mustBuild(t, dir)
 
 	tmp := t.TempDir()
@@ -1244,23 +2293,11 @@ func TestSelfHostLarge(t *testing.T) {
 	}
 }
 
-// TestRevisionCoversBuild: the revision moves when ovid.mod or a loaded std
-// file changes, not only when a module file does.
+// TestRevisionCoversBuild: the revision moves when ovid.mod changes, not
+// only when a module file does.
 func TestRevisionCoversBuild(t *testing.T) {
-	stdDir := t.TempDir()
-	for _, rel := range []string{"ovid/io/io.ov", "ovid/mem/mem.ov"} {
-		src, err := os.ReadFile(filepath.Join(repo(t), "std", rel))
-		if err != nil {
-			t.Fatal(err)
-		}
-		os.MkdirAll(filepath.Dir(filepath.Join(stdDir, rel)), 0o755)
-		if err := os.WriteFile(filepath.Join(stdDir, rel), src, 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
 	files := demo("package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  return 0\n}\n")
 	files["alt/main.ov"] = "package alt\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  return 2\n}\n"
-	files["ovid.mod"] = "module demo\nentry demo\nstd " + stdDir + "\n"
 	dir := mkmod(t, files)
 	rev := func() string {
 		t.Helper()
@@ -1278,28 +2315,144 @@ func TestRevisionCoversBuild(t *testing.T) {
 	if rev() != r0 {
 		t.Fatal("the revision is not stable")
 	}
-	if err := os.WriteFile(filepath.Join(dir, "ovid.mod"), []byte("module demo\nentry alt\nstd "+stdDir+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "ovid.mod"), []byte("module demo\nentry alt\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	r1 := rev()
-	if r1 == r0 {
+	if rev() == r0 {
 		t.Fatal("changing the entry in ovid.mod kept the revision")
 	}
+}
+
+// stdCopy copies the shipped packages a hello-sized program loads into a
+// fresh directory, for the self-hosted compiler's --std.
+func stdCopy(t *testing.T) string {
+	t.Helper()
+	stdDir := t.TempDir()
+	for _, rel := range []string{"ovid/io/io.ov", "ovid/mem/mem.ov"} {
+		src, err := os.ReadFile(filepath.Join(repo(t), "std", rel))
+		if err != nil {
+			t.Fatal(err)
+		}
+		os.MkdirAll(filepath.Dir(filepath.Join(stdDir, rel)), 0o755)
+		if err := os.WriteFile(filepath.Join(stdDir, rel), src, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return stdDir
+}
+
+// TestRevisionCoversStd: the revision also moves when a loaded file of the
+// standard library changes. The Go toolchain's is built in, so this is
+// shown with the self-hosted compiler, whose --std is a directory.
+func TestRevisionCoversStd(t *testing.T) {
+	needExec(t)
+	self := mustBuild(t, filepath.Join(repo(t), "prog"))
+	stdDir := stdCopy(t)
+	dir := mkmod(t, demo("package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  return 0\n}\n"))
+	rev := func() string {
+		t.Helper()
+		out, code := run(t, self, "check", dir, "--std", stdDir)
+		r, _ := last(t, out)["revision"].(string)
+		if code != 0 || len(r) != 16 {
+			t.Fatalf("check %d: %s", code, out)
+		}
+		return r
+	}
+	r1 := rev()
 	io := filepath.Join(stdDir, "ovid/io/io.ov")
 	src, _ := os.ReadFile(io)
 	if err := os.WriteFile(io, append(src, []byte("\n// changed\n")...), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if rev() == r1 {
+	r2 := rev()
+	if r2 == r1 {
 		t.Fatal("changing a loaded std file kept the revision")
 	}
 	// A std file that is not loaded does not count.
-	r2 := rev()
 	mem := filepath.Join(stdDir, "ovid/mem/mem.ov")
 	src, _ = os.ReadFile(mem)
 	os.WriteFile(mem, append(src, []byte("\n// changed\n")...), 0o644)
 	if rev() != r2 {
 		t.Fatal("changing a std file that is not loaded moved the revision")
+	}
+}
+
+// TestSyscallNeedsShippedPackage: the checker allows syscall by where
+// ovid/io came from, not by its name alone. A package with the name and
+// without the origin cannot be loaded today (reserved_path), so the origin
+// is cleared by hand here.
+func TestSyscallNeedsShippedPackage(t *testing.T) {
+	dir := mkmod(t, demo("package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  ovid/io.Alloc(io, 8)\n  return 0\n}\n"))
+	m, err := module.Load(dir)
+	if err != nil || len(m.Errors) != 0 {
+		t.Fatal(err, m.Errors)
+	}
+	count := func() int {
+		n := 0
+		for _, is := range check.Run(m.Prog).Issues {
+			if is.Code == "syscall_forbidden" {
+				n++
+			}
+		}
+		return n
+	}
+	if n := count(); n != 0 {
+		t.Fatalf("%d syscall_forbidden in the shipped ovid/io", n)
+	}
+	for i := range m.Prog.Packages {
+		if p := &m.Prog.Packages[i]; p.Path == "ovid/io" {
+			if !p.Sys {
+				t.Fatal("the shipped ovid/io is not marked as the toolchain's")
+			}
+			p.Sys = false
+		} else if p.Sys && p.Path == "demo" {
+			t.Fatal("a module package is marked as the toolchain's")
+		}
+	}
+	if count() == 0 {
+		t.Fatal("an ovid/io that is not the toolchain's may call syscall")
+	}
+}
+
+// TestModuleCannotChooseStd: the right to call syscall belongs to the
+// standard library the toolchain brings, and a module has no way to supply
+// one: not by a std line in ovid.mod, and not by a package of the same path
+// (tests/fail/reserved_path). Both compilers refuse the std line.
+func TestModuleCannotChooseStd(t *testing.T) {
+	evil := t.TempDir()
+	os.MkdirAll(filepath.Join(evil, "ovid/io"), 0o755)
+	os.WriteFile(filepath.Join(evil, "ovid/io/io.ov"), []byte("package ovid/io\ntype Cap struct {\n  argc i64\n  argv i64\n  heap i64\n  used i64\n  size i64\n}\nfunc Pwn() i64 {\n  return syscall(60, 42, 0, 0, 0, 0, 0)\n}\n"), 0o644)
+	files := demo("package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  return ovid/io.Pwn()\n}\n")
+	files["ovid.mod"] = "module demo\nentry demo\nstd " + evil + "\n"
+	dir := mkmod(t, files)
+	var b bytes.Buffer
+	if code := Check(dir, false, &b); code != ExitFail {
+		t.Fatalf("check exit %d: %s", code, b.String())
+	}
+	if r := last(t, b.String()); r["ok"] != false || r["error"] != "load" || !strings.Contains(r["message"].(string), "std line is no longer supported") {
+		t.Fatalf("%v", r)
+	}
+	b.Reset()
+	if code := Build(dir, filepath.Join(t.TempDir(), "x"), &b); code == ExitOK {
+		t.Fatalf("build succeeded: %s", b.String())
+	}
+
+	needExec(t)
+	self := mustBuild(t, filepath.Join(repo(t), "prog"))
+	out, code := run(t, self, "check", dir, "--std", filepath.Join(repo(t), "std"))
+	if rs := lines(t, out); code != 1 || rs[0]["code"] != "mod" || !strings.Contains(rs[0]["message"].(string), "std line is no longer supported") ||
+		!strings.Contains(rs[0]["message"].(string), "--std") || strings.Contains(rs[0]["message"].(string), "built into") {
+		t.Fatalf("self-hosted check %d: %s", code, out)
+	}
+	// An operator who points --std at a library whose Cap is not the
+	// runtime's is told so; a module can no longer reach this.
+	short := t.TempDir()
+	os.MkdirAll(filepath.Join(short, "ovid/io"), 0o755)
+	os.WriteFile(filepath.Join(short, "ovid/io/io.ov"), []byte("package ovid/io\ntype Cap struct {\n  argc i64\n  heap i64\n}\n"), 0o644)
+	plain := mkmod(t, demo("package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  return 0\n}\n"))
+	out, code = run(t, self, "check", plain, "--std", short)
+	if rs := lines(t, out); code != 1 || rs[0]["code"] != "bad_abi" {
+		t.Fatalf("self-hosted check with a short Cap %d: %s", code, out)
 	}
 }
 
@@ -1310,14 +2463,8 @@ func TestHints(t *testing.T) {
 	if ds := lines(t, b0.String()); ds[0]["message"] != "sizeof(i64) is always 8" || !strings.Contains(ds[1]["message"].(string), "unknown type demo.Nope") {
 		t.Fatalf("sizeof %v", ds)
 	}
-	dir := mkmod(t, demo("package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  while true {\n    break\n  }\n  return 0\n}\n"))
+	dir := mkmod(t, demo("package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  var x i64 = 1\n  F(&x)\n  return 0\n}\n"))
 	var b bytes.Buffer
-	Check(dir, false, &b)
-	if d := lines(t, b.String())[0]; d["message"] != "there is no break" || !strings.Contains(d["hint"].(string), "flag") {
-		t.Fatalf("break %v", d)
-	}
-	dir = mkmod(t, demo("package demo\nimport ovid/io\nfunc main(io *ovid/io.Cap) i64 {\n  var x i64 = 1\n  F(&x)\n  return 0\n}\n"))
-	b.Reset()
 	Check(dir, false, &b)
 	if d := lines(t, b.String())[0]; !strings.Contains(d["message"].(string), "no address-of") {
 		t.Fatalf("& %v", d)

@@ -1,0 +1,5 @@
+package app/z
+import app/x
+func Z() i64 {
+  return app/x.X() + 1
+}

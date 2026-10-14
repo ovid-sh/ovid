@@ -1,0 +1,2 @@
+module hello
+entry hello

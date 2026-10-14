@@ -11,9 +11,16 @@ import (
 	"runtime/debug"
 	"strconv"
 	"strings"
+	"time"
 
+	"ovid/internal/module"
 	"ovid/internal/tool"
 )
+
+// commit is the revision for a build with no VCS stamp of its own (built
+// outside a checkout, as Nix does): -ldflags "-X main.commit=REV", where a
+// "-dirty" suffix means the tree had changes.
+var commit string
 
 // args is a parsed command line: positionals, flags with values, and bools.
 type args struct {
@@ -21,6 +28,14 @@ type args struct {
 	vals  map[string]string
 	bools map[string]bool
 	rest  []string // after --
+}
+
+// nameArg refuses --name given empty: it picks a local by its name, and
+// an empty one would read as no --name at all.
+func nameArg(cmd string, a args) {
+	if v, ok := a.vals["name"]; ok && v == "" {
+		usageErr(cmd, "--name needs a name")
+	}
 }
 
 func usageErr(cmd, msg string) {
@@ -76,7 +91,25 @@ func parse(cmd string, argv []string, valued, boolean []string) args {
 	return a
 }
 
+// pageArg reads --offset and --limit: the default page is the first
+// tool.PageLimit records, and --limit 0 asks for all of them.
+func pageArg(cmd string, a args) tool.Page {
+	pg := tool.Page{Limit: tool.PageLimit}
+	for k, p := range map[string]*int{"offset": &pg.Offset, "limit": &pg.Limit} {
+		if v, ok := a.vals[k]; ok {
+			n, err := strconv.Atoi(v)
+			if err != nil || n < 0 {
+				usageErr(cmd, "--"+k+" takes a count, got "+strconv.Quote(v))
+			}
+			*p = n
+		}
+	}
+	return pg
+}
+
 func main() {
+	// With OVID_CONFINE set this process is a launcher for a confined
+	// program, and tool's init has already replaced it; see tool.ConfineMain.
 	argv := os.Args[1:]
 	dir := ""
 	// A leading -C dir applies to every command.
@@ -88,6 +121,9 @@ func main() {
 		os.Exit(tool.ExitUsage)
 	}
 	cmd, argv := argv[0], argv[1:]
+	if v := os.Getenv(module.PathsEnv); v != "" && v != "cwd" && v != "module" {
+		usageErr("", module.PathsEnv+" is \"cwd\" (the default) or \"module\", got "+strconv.Quote(v))
+	}
 	w := os.Stdout
 	// dirArg picks the module dir: -C, else an optional positional.
 	dirArg := func(a args, maxPos int) string {
@@ -124,57 +160,65 @@ func main() {
 		a := parse(cmd, argv, []string{"C", "o"}, nil)
 		os.Exit(tool.Build(dirArg(a, 0), a.vals["o"], w))
 	case "run":
-		a := parse(cmd, argv, []string{"C"}, nil)
-		os.Exit(tool.Run(dirArg(a, 0), a.rest, w))
+		a := parse(cmd, argv, []string{"C", "timeout", "max-output"}, []string{"json", "no-confine"})
+		o := tool.RunOpts{JSON: a.bools["json"], NoConfine: a.bools["no-confine"]}
+		if v, ok := a.vals["timeout"]; ok {
+			d, err := time.ParseDuration(v)
+			if err != nil || d <= 0 {
+				usageErr(cmd, "--timeout takes a duration such as 5s or 500ms, got "+strconv.Quote(v))
+			}
+			o.Timeout = d
+		}
+		if v, ok := a.vals["max-output"]; ok {
+			n, err := strconv.Atoi(v)
+			if err != nil || n <= 0 || !o.JSON {
+				usageErr(cmd, "--max-output takes a byte count and goes with --json, got "+strconv.Quote(v))
+			}
+			o.MaxOutput = n
+		}
+		os.Exit(tool.RunWith(dirArg(a, 0), a.rest, o, w))
 	case "test":
-		a := parse(cmd, argv, []string{"C", "run"}, []string{"list"})
-		os.Exit(tool.Test(dirArg(a, 0), a.vals["run"], a.bools["list"], w))
+		a := parse(cmd, argv, []string{"C", "run"}, []string{"list", "no-confine"})
+		os.Exit(tool.TestWith(dirArg(a, 0), tool.TestOpts{Filter: a.vals["run"], List: a.bools["list"], NoConfine: a.bools["no-confine"]}, w))
 	case "dump":
-		a := parse(cmd, argv, []string{"C"}, nil)
-		os.Exit(tool.Dump(dirArg(a, 0), w))
+		a := parse(cmd, argv, []string{"C", "pkg", "o"}, nil)
+		os.Exit(tool.Dump(dirArg(a, 0), a.vals["pkg"], a.vals["o"], w))
 	case "outline":
-		a := parse(cmd, argv, []string{"C", "pkg"}, []string{"all", "uses"})
-		os.Exit(tool.Outline(dirArg(a, 0), a.vals["pkg"], a.bools["all"], a.bools["uses"], w))
+		a := parse(cmd, argv, []string{"C", "pkg", "offset", "limit"}, []string{"all", "uses", "ids", "json"})
+		os.Exit(tool.Outline(dirArg(a, 0), a.vals["pkg"], a.bools["all"], a.bools["uses"], a.bools["ids"], a.bools["json"], pageArg(cmd, a), w))
 	case "show":
 		a := parse(cmd, argv, []string{"C"}, []string{"ids", "plain", "json", "exprs"})
 		if len(a.pos) == 0 {
-			usageErr(cmd, "usage: ovid show <id|name>... [--plain] [--json] [--exprs]")
+			usageErr(cmd, "usage: ovid show <id|name>... [--ids] [--json] [--exprs]")
 		}
-		os.Exit(tool.Show(dirArg(a, 1<<30), a.pos, !a.bools["plain"], a.bools["json"], a.bools["exprs"], w))
+		os.Exit(tool.Show(dirArg(a, 1<<30), a.pos, a.bools["ids"], a.bools["json"], a.bools["exprs"], w))
 	case "refs":
-		a := parse(cmd, argv, []string{"C"}, nil)
+		a := parse(cmd, argv, []string{"C", "name", "offset", "limit"}, []string{"json"})
 		if len(a.pos) != 1 {
-			usageErr(cmd, "usage: ovid refs <id|name>")
+			usageErr(cmd, "usage: ovid refs <id|name> [--name N] [--json] [--offset N] [--limit N]")
 		}
-		os.Exit(tool.Refs(dirArg(a, 1), a.pos[0], w))
+		nameArg(cmd, a)
+		os.Exit(tool.Refs(dirArg(a, 1), a.pos[0], a.vals["name"], a.bools["json"], pageArg(cmd, a), w))
 	case "grep":
-		a := parse(cmd, argv, []string{"C", "pkg", "offset", "limit"}, []string{"std"})
+		a := parse(cmd, argv, []string{"C", "pkg", "offset", "limit"}, []string{"std", "json"})
 		if len(a.pos) != 1 {
-			usageErr(cmd, "usage: ovid grep <regexp> [--pkg P] [--std] [--offset N] [--limit N]")
+			usageErr(cmd, "usage: ovid grep <regexp> [--pkg P] [--std] [--json] [--offset N] [--limit N]")
 		}
-		offset, limit := 0, tool.GrepLimit
-		for k, p := range map[string]*int{"offset": &offset, "limit": &limit} {
-			if v, ok := a.vals[k]; ok {
-				n, err := strconv.Atoi(v)
-				if err != nil || n < 0 {
-					usageErr(cmd, "--"+k+" takes a count, got "+strconv.Quote(v))
-				}
-				*p = n
-			}
-		}
-		os.Exit(tool.Grep(dirArg(a, 1), a.pos[0], a.vals["pkg"], a.bools["std"], offset, limit, w))
+		pg := pageArg(cmd, a)
+		os.Exit(tool.Grep(dirArg(a, 1), a.pos[0], a.vals["pkg"], a.bools["std"], a.bools["json"], pg.Offset, pg.Limit, w))
 	case "edit":
-		a := parse(cmd, argv, []string{"C"}, []string{"dry-run", "require-clean", "allow-broken", "show", "force"})
+		a := parse(cmd, argv, []string{"C", "rev"}, []string{"dry-run", "require-clean", "allow-broken", "show", "force"})
 		if len(a.pos) != 1 {
-			usageErr(cmd, "usage: ovid edit <file|-> [--dry-run] [--require-clean|--allow-broken] [--show]; see ovid help edit")
+			usageErr(cmd, "usage: ovid edit <file|-> [--rev REV] [--dry-run] [--require-clean|--allow-broken] [--show] [--force]; see ovid help edit")
 		}
-		os.Exit(tool.Edit(dirArg(a, 1), a.pos[0], tool.EditOpts{DryRun: a.bools["dry-run"], RequireClean: a.bools["require-clean"], AllowBroken: a.bools["allow-broken"], Show: a.bools["show"], Force: a.bools["force"]}, w))
+		os.Exit(tool.Edit(dirArg(a, 1), a.pos[0], tool.EditOpts{DryRun: a.bools["dry-run"], RequireClean: a.bools["require-clean"], AllowBroken: a.bools["allow-broken"], Show: a.bools["show"], Force: a.bools["force"], Revision: a.vals["rev"]}, w))
 	case "rename":
-		a := parse(cmd, argv, []string{"C"}, []string{"dry-run"})
+		a := parse(cmd, argv, []string{"C", "name"}, []string{"dry-run"})
 		if len(a.pos) != 2 {
-			usageErr(cmd, "usage: ovid rename <id|name> <new> [--dry-run]")
+			usageErr(cmd, "usage: ovid rename <id|name> <new> [--name N] [--dry-run]")
 		}
-		os.Exit(tool.Rename(dirArg(a, 2), a.pos[0], a.pos[1], a.bools["dry-run"], w))
+		nameArg(cmd, a)
+		os.Exit(tool.Rename(dirArg(a, 2), a.pos[0], a.pos[1], a.vals["name"], a.bools["dry-run"], w))
 	case "move":
 		a := parse(cmd, argv, []string{"C", "file"}, []string{"dry-run"})
 		if len(a.pos) < 2 {
@@ -185,30 +229,40 @@ func main() {
 	case "replace", "insert", "append", "delete":
 		// One edit op with its text on stdin (or --text-file), so a shell
 		// heredoc carries code without JSON escaping.
-		a := parse(cmd, argv, []string{"C", "expect", "before", "after", "file", "text-file"}, []string{"dry-run", "require-clean", "allow-broken", "show", "force"})
+		a := parse(cmd, argv, []string{"C", "expect", "rev", "before", "after", "file", "text-file"}, []string{"dry-run", "require-clean", "allow-broken", "show", "force"})
 		op := tool.EditOp{Op: cmd, Expect: a.vals["expect"], File: a.vals["file"]}
 		from := a.vals["text-file"]
 		if from == "" && cmd != "delete" {
 			from = "-"
 		}
+		// Every flag goes into the op, so one that does not belong to this
+		// command is refused by the planner rather than dropped here.
+		op.Before, op.After = a.vals["before"], a.vals["after"]
+		for _, k := range []string{"before", "after", "file"} {
+			if _, ok := a.vals[k]; ok {
+				op.Given = append(op.Given, k)
+			}
+		}
+		if _, ok := a.vals["text-file"]; ok {
+			op.Given = append(op.Given, "text")
+		}
 		switch cmd {
 		case "insert":
-			op.Before, op.After = a.vals["before"], a.vals["after"]
 			if len(a.pos) != 0 || (op.Before == "") == (op.After == "") {
-				usageErr(cmd, "usage: ovid insert --after <id> | --before <id> [--expect H] <<'EOF' ... EOF")
+				usageErr(cmd, "usage: ovid insert --after <id> | --before <id> --expect H|--rev REV|--force <<'EOF' ... EOF")
 			}
 		case "append":
 			if len(a.pos) != 1 {
-				usageErr(cmd, "usage: ovid append <fn-or-pkg id> [--file pkg/x.ov] <<'EOF' ... EOF")
+				usageErr(cmd, "usage: ovid append <fn-or-pkg id> [--file pkg/x.ov] [--expect H|--rev REV|--force] <<'EOF' ... EOF")
 			}
 			op.Into = a.pos[0]
 		default:
 			if len(a.pos) != 1 {
-				usageErr(cmd, "usage: ovid "+cmd+" <id> [--expect H]"+map[bool]string{true: "", false: " <<'EOF' ... EOF"}[cmd == "delete"])
+				usageErr(cmd, "usage: ovid "+cmd+" <id> --expect H|--rev REV|--force"+map[bool]string{true: "", false: " <<'EOF' ... EOF"}[cmd == "delete"])
 			}
 			op.ID = a.pos[0]
 		}
-		os.Exit(tool.EditOne(dirArg(a, 1<<30), op, from, tool.EditOpts{DryRun: a.bools["dry-run"], RequireClean: a.bools["require-clean"], AllowBroken: a.bools["allow-broken"], Show: a.bools["show"], Force: a.bools["force"]}, w))
+		os.Exit(tool.EditOne(dirArg(a, 1<<30), op, from, tool.EditOpts{DryRun: a.bools["dry-run"], RequireClean: a.bools["require-clean"], AllowBroken: a.bools["allow-broken"], Show: a.bools["show"], Force: a.bools["force"], Revision: a.vals["rev"]}, w))
 	default:
 		usageErr("", "unknown command "+cmd+"; commands: init check build run test outline show refs grep edit replace insert append delete rename move dump version help")
 	}
@@ -231,6 +285,10 @@ func version(w io.Writer) int {
 				r["commit_time"] = s.Value
 			}
 		}
+	}
+	if _, ok := r["commit"]; !ok && commit != "" {
+		r["commit"] = strings.TrimSuffix(commit, "-dirty")
+		r["dirty"] = strings.HasSuffix(commit, "-dirty")
 	}
 	if exe, err := os.Executable(); err == nil {
 		r["path"] = exe

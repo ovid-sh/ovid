@@ -1,0 +1,41 @@
+package ovid/parse
+
+import ovid/io
+import ovid/mem
+
+// ServeHost gives the entry package a main when it has handle and no main:
+// the stdio host, which reads the requests on stdin one after another,
+// calls handle for each, writes each response, and resets the heap between
+// two of them. The main joins the entry package after its own
+// funcs, so it cannot collide with a package of the module's, and the
+// imports it needs, ovid/io and ovid/http, are ones handle's signature
+// already made the package declare. The Go toolchain does the same
+// (internal/tool/serve.go).
+func ServeHost(m *Mod) i64 {
+  var e *Pkg = m.pkgs
+  while e != 0 as *Pkg && !ovid/mem.Eq(e.path, m.entry) {
+    e = e.next
+  }
+  if e == 0 as *Pkg {
+    return 0
+  }
+  if FindDecl(e.fs, "main") != 0 as *Decl || FindDecl(e.fs, "handle") == 0 as *Decl {
+    return 0
+  }
+  var io *ovid/io.Cap = m.io
+  var b *ovid/mem.Buf = ovid/mem.New(io, 1024)
+  ovid/mem.WBytes(io, b, "package ")
+  ovid/mem.WBytes(io, b, m.entry)
+  ovid/mem.WBytes(io, b, "\n\nfunc main(io *ovid/io.Cap) i64 {\n  var s *ovid/http.Stdio = ovid/http.NewStdio(io)\n  var m *ovid/io.HeapMark = ovid/io.MarkHeap(io)\n  var req *ovid/http.Request = ovid/http.NextStdio(io, s)\n  while req != 0 as *ovid/http.Request {\n    var res *ovid/http.Response = ovid/http.NewResponse(io)\n    var result i64 = 0\n    if ovid/http.Err(req) == 0 {\n      result = handle(io, req, res)\n    }\n    if ovid/http.WriteStdio(io, req, res, result) != 0 {\n      return 1\n    }\n    ovid/io.ResetHeap(io, m)\n    req = ovid/http.NextStdio(io, s)\n  }\n  return 0\n}\n")
+  var f *File = ovid/io.Alloc(io, sizeof(File)) as *File
+  f.rel = "serve host"
+  f.disp = f.rel
+  f.src = bytes(b.data, b.len)
+  var p *P = NewP(io, f)
+  var one *Pkg = ParseFile(p)
+  if p.err != 0 {
+    return 1
+  }
+  Merge(e, one)
+  return IndexFuncs(m)
+}

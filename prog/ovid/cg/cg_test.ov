@@ -1,0 +1,120 @@
+package ovid/cg
+
+import ovid/io
+import ovid/mem
+import ovid/parse
+
+// MsgIs reports whether c failed with the message want.
+func MsgIs(io *ovid/io.Cap, c *C, want bytes) bool {
+  if c.err == 0 {
+    ovid/io.Eprint(io, "no failure\n")
+    return false
+  }
+  if ovid/mem.Eq(bytes(c.msg.data, c.msg.len), want) {
+    return true
+  }
+  ovid/io.Eprint(io, "got ")
+  ovid/io.Eprint(io, bytes(c.msg.data, c.msg.len))
+  ovid/io.Eprint(io, "\n")
+  return false
+}
+
+// A failure says what failed, and only the first one is kept.
+func TestFailMessage(io *ovid/io.Cap) i64 {
+  var c *C = ovid/io.Alloc(io, sizeof(C)) as *C
+  c.io = io
+  if OffsetOf(c, "i64", "a") != -1 {
+    return 1
+  }
+  if !MsgIs(io, c, "field a on i64") {
+    return 2
+  }
+  Fail(c, "later")
+  Add(c, " and more")
+  if !MsgIs(io, c, "field a on i64") {
+    return 3
+  }
+  return 0
+}
+
+// Stmt is a statement of kind op, followed by next.
+func Stmt(io *ovid/io.Cap, op i64, next *ovid/parse.Node) *ovid/parse.Node {
+  var n *ovid/parse.Node = ovid/io.Alloc(io, sizeof(ovid/parse.Node)) as *ovid/parse.Node
+  n.op = op
+  n.next = next
+  return n
+}
+
+// Var declares name of type t, followed by next.
+func Var(io *ovid/io.Cap, name bytes, t bytes, next *ovid/parse.Node) *ovid/parse.Node {
+  var n *ovid/parse.Node = Stmt(io, ovid/parse.OP_VAR, next)
+  n.name = name
+  n.typ = t
+  return n
+}
+
+// I64 declares name of type i64, followed by next.
+func I64(io *ovid/io.Cap, name bytes, next *ovid/parse.Node) *ovid/parse.Node {
+  return Var(io, name, "i64", next)
+}
+
+// Use is an expression statement naming name, followed by next.
+func Use(io *ovid/io.Cap, name bytes, next *ovid/parse.Node) *ovid/parse.Node {
+  var n *ovid/parse.Node = Stmt(io, ovid/parse.OP_EXPR, next)
+  var e *ovid/parse.Node = Stmt(io, ovid/parse.OP_NAME, 0 as *ovid/parse.Node)
+  e.name = name
+  n.val = e
+  return n
+}
+
+// Each declaration has its own local and type, a name resolves to the
+// declaration in scope, and sibling blocks reuse slots, so a frame holds
+// the most locals in scope at once: the same body as the Go compiler's
+// TestBind.
+func TestBind(io *ovid/io.Cap) i64 {
+  var none *ovid/parse.Node = 0 as *ovid/parse.Node
+  var last *ovid/parse.Node = I64(io, "f", none)
+  var inner *ovid/parse.Node = Stmt(io, ovid/parse.OP_IF, none)
+  inner.then = I64(io, "e", none)
+  var loop *ovid/parse.Node = Stmt(io, ovid/parse.OP_WHILE, last)
+  loop.body = I64(io, "d", inner)
+  var if2 *ovid/parse.Node = Stmt(io, ovid/parse.OP_IF, loop)
+  if2.then = I64(io, "b", none)
+  var useT *ovid/parse.Node = Use(io, "b", none)
+  var bT *ovid/parse.Node = Var(io, "b", "*T", I64(io, "c", useT))
+  var useBool *ovid/parse.Node = Use(io, "b", none)
+  var bBool *ovid/parse.Node = Var(io, "b", "bool", useBool)
+  var if1 *ovid/parse.Node = Stmt(io, ovid/parse.OP_IF, if2)
+  if1.then = bT
+  if1.els = bBool
+  var body *ovid/parse.Node = I64(io, "a", if1)
+  var c *C = ovid/io.Alloc(io, sizeof(C)) as *C
+  c.io = io
+  c.locs = ovid/io.Alloc(io, MAXLOC * LOCSIZE)
+  c.scope = ovid/io.Alloc(io, MAXLOC * 8)
+  AddLoc(c, none, "p", "i64")
+  BindStmts(c, body)
+  if c.nloc != 9 {
+    return 1
+  }
+  // In scope at once at most: p, a, and the then branch's b and c, or p,
+  // a, and the loop's d and e. 9 would mean siblings did not share slots.
+  if c.live != 4 {
+    return 2
+  }
+  var i i64 = LocOf(c, useT.val)
+  var j i64 = LocOf(c, useBool.val)
+  if i != LocOf(c, bT) || j != LocOf(c, bBool) || i == j {
+    return 3
+  }
+  if !ovid/mem.Eq(bytes(load64(i + 24), load64(i + 32)), "*T") {
+    return 4
+  }
+  if !ovid/mem.Eq(bytes(load64(j + 24), load64(j + 32)), "bool") {
+    return 5
+  }
+  if load64(i + 16) != load64(j + 16) {
+    return 6
+  }
+  return 0
+}

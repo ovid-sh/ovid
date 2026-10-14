@@ -1,0 +1,10 @@
+{
+  "check": true,
+  "inject": {
+    "shop/zz_goal_test.ov": "package shop\n\nimport ovid/io\n\nfunc TestGoalBulk(io *ovid/io.Cap) i64 {\n  if Bulk(3, 105) != 345 || Bulk(10, 105) != 1100 || Bulk(9, 105) != 1035 || Bulk(0, 105) != 0 {\n    return 1\n  }\n  if WithTax(100) != 110 || Order(2, 150) != 330 {\n    return 2\n  }\n  return 0\n}\n"
+  },
+  "tests": ["TestGoalBulk"],
+  "runs": [{"stdout": "330\n1320\n"}],
+  "contains": [{"re": "^func WithTax\\(gross i64\\) i64", "count": 1}, {"re": "^func Bulk\\(n i64, each i64\\) i64", "count": 1}],
+  "lacks": [{"re": "\\bCalc\\("}]
+}
