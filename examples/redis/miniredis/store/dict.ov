@@ -1,0 +1,178 @@
+package miniredis/store
+
+import ovid/mem
+
+// Entry is one key and its string value. expire is the clock value, in
+// milliseconds, at which the key stops existing; 0 for never.
+type Entry struct {
+  next *Entry
+  hash i64
+  key i64
+  keyn i64
+  val i64
+  valn i64
+  expire i64
+}
+
+// Dict is a hash table with chaining: size buckets (a power of two), each
+// the head of a list of entries, grown when there are more entries than
+// buckets.
+type Dict struct {
+  heap *Heap
+  table i64
+  size i64
+  count i64
+}
+
+func zero(p i64, n i64) i64 {
+  var i i64 = 0
+  while i < n {
+    store64(p + i, 0)
+    i = i + 8
+  }
+  return 0
+}
+
+func NewDict(h *Heap) *Dict {
+  var d *Dict = Alloc(h, sizeof(Dict)) as *Dict
+  d.heap = h
+  d.size = 1024
+  d.count = 0
+  d.table = Alloc(h, d.size * 8)
+  zero(d.table, d.size * 8)
+  return d
+}
+
+// Hash is FNV-1a over the bytes, folded so the low bits depend on all of it.
+func Hash(p i64, n i64) i64 {
+  var h i64 = (0xcbf29ce4 << 32) | 0x84222325
+  var i i64 = 0
+  while i < n {
+    h = (h ^ load8(p + i)) * 0x100000001b3
+    i = i + 1
+  }
+  return h ^ (h >> 29)
+}
+
+// Find is the entry for the key, or 0.
+func Find(d *Dict, key i64, keyn i64) *Entry {
+  var h i64 = Hash(key, keyn)
+  var e *Entry = load64(d.table + ((h & (d.size - 1)) * 8)) as *Entry
+  while e != 0 as *Entry {
+    if e.hash == h && ovid/mem.Eq(e.key, e.keyn, key, keyn) {
+      return e
+    }
+    e = e.next
+  }
+  return e
+}
+
+// SetVal replaces e's value with a copy of the valn bytes at val, in the
+// block it has when they fit.
+func SetVal(d *Dict, e *Entry, val i64, valn i64) i64 {
+  if valn > Room(e.val) {
+    Free(d.heap, e.val)
+    e.val = Alloc(d.heap, valn)
+  }
+  ovid/mem.Copy(e.val, val, valn)
+  e.valn = valn
+  return 0
+}
+
+// Put sets the key to a copy of the value, with no expiry, and returns
+// its entry.
+func Put(d *Dict, key i64, keyn i64, val i64, valn i64) *Entry {
+  var e *Entry = Find(d, key, keyn)
+  if e != 0 as *Entry {
+    SetVal(d, e, val, valn)
+    e.expire = 0
+    return e
+  }
+  if d.count >= d.size {
+    grow(d)
+  }
+  e = Alloc(d.heap, sizeof(Entry)) as *Entry
+  e.hash = Hash(key, keyn)
+  e.key = Alloc(d.heap, keyn)
+  e.keyn = keyn
+  ovid/mem.Copy(e.key, key, keyn)
+  e.val = Alloc(d.heap, valn)
+  e.valn = valn
+  ovid/mem.Copy(e.val, val, valn)
+  e.expire = 0
+  var slot i64 = d.table + ((e.hash & (d.size - 1)) * 8)
+  e.next = load64(slot) as *Entry
+  store64(slot, e as i64)
+  d.count = d.count + 1
+  return e
+}
+
+func drop(d *Dict, e *Entry) i64 {
+  Free(d.heap, e.key)
+  Free(d.heap, e.val)
+  Free(d.heap, e as i64)
+  d.count = d.count - 1
+  return 0
+}
+
+// Remove deletes the key and reports whether it was there.
+func Remove(d *Dict, key i64, keyn i64) bool {
+  var h i64 = Hash(key, keyn)
+  var slot i64 = d.table + ((h & (d.size - 1)) * 8)
+  var prev *Entry = 0 as *Entry
+  var e *Entry = load64(slot) as *Entry
+  while e != 0 as *Entry {
+    if e.hash == h && ovid/mem.Eq(e.key, e.keyn, key, keyn) {
+      if prev == 0 as *Entry {
+        store64(slot, e.next as i64)
+      } else {
+        prev.next = e.next
+      }
+      drop(d, e)
+      return true
+    }
+    prev = e
+    e = e.next
+  }
+  return false
+}
+
+// Clear deletes every key.
+func Clear(d *Dict) i64 {
+  var i i64 = 0
+  while i < d.size {
+    var e *Entry = load64(d.table + (i * 8)) as *Entry
+    while e != 0 as *Entry {
+      var after *Entry = e.next
+      drop(d, e)
+      e = after
+    }
+    store64(d.table + (i * 8), 0)
+    i = i + 1
+  }
+  return 0
+}
+
+// grow doubles the buckets and moves every entry to its new one. It is
+// done in one go; a server that must not pause would spread it out.
+func grow(d *Dict) i64 {
+  var size i64 = d.size * 2
+  var table i64 = Alloc(d.heap, size * 8)
+  zero(table, size * 8)
+  var i i64 = 0
+  while i < d.size {
+    var e *Entry = load64(d.table + (i * 8)) as *Entry
+    while e != 0 as *Entry {
+      var after *Entry = e.next
+      var slot i64 = table + ((e.hash & (size - 1)) * 8)
+      e.next = load64(slot) as *Entry
+      store64(slot, e as i64)
+      e = after
+    }
+    i = i + 1
+  }
+  Free(d.heap, d.table)
+  d.table = table
+  d.size = size
+  return 0
+}
