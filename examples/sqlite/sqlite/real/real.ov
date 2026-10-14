@@ -1,0 +1,570 @@
+package sqlite/real
+
+import ovid/io
+
+// The language has no floating point, so a REAL is printed from its IEEE
+// 754 bits with integer arithmetic. The output is what sqlite3 prints for
+// a REAL ("%!.17g"), digit for digit, so the first half of this file ports
+// sqlite3's own conversion (util.c: powerOfTen, sqlite3Fp2Convert10,
+// sqlite3FpDecode), including where it is a little inexact: 18 or 19
+// digits come from one 64x64-bit multiply by a tabulated power of ten, and
+// are then cut to 17, or to fewer when a shorter decimal still reads back
+// as the same double. That last test is done exactly, on big integers.
+
+const Base i64 = 1000000000
+const Limbs i64 = 100
+
+// Big is a non-negative integer: n base-1e9 limbs, least first.
+type Big struct {
+  limbs i64
+  n i64
+}
+
+// Fmt is the scratch space Format reuses: three integers and the digits.
+type Fmt struct {
+  a *Big
+  b *Big
+  q *Big
+  digits i64
+  base i64
+  scale i64
+  scalelo i64
+  lo i64
+}
+
+func newBig(io *ovid/io.Cap) *Big {
+  var b *Big = ovid/io.Alloc(io, sizeof(Big)) as *Big
+  b.limbs = ovid/io.Alloc(io, Limbs * 8)
+  return b
+}
+
+// New allocates the scratch once.
+func New(io *ovid/io.Cap) *Fmt {
+  var f *Fmt = ovid/io.Alloc(io, sizeof(Fmt)) as *Fmt
+  f.a = newBig(io)
+  f.b = newBig(io)
+  f.q = newBig(io)
+  f.digits = ovid/io.Alloc(io, 32)
+  f.base = ovid/io.Alloc(io, 27 * 8)
+  f.scale = ovid/io.Alloc(io, 26 * 8)
+  f.scalelo = ovid/io.Alloc(io, 26 * 8)
+  tables(f)
+  return f
+}
+
+// u64 is the 64-bit pattern with the given halves. The functions below
+// treat i64 as unsigned: + and * wrap the same way, and lsr is the shift.
+func u64(hi i64, lo i64) i64 {
+  return (hi << 32) | lo
+}
+
+// lsr is x shifted right by n with zeros coming in (>> keeps the sign).
+func lsr(x i64, n i64) i64 {
+  if n == 0 {
+    return x
+  }
+  return (x >> n) & ((1 << (64 - n)) - 1)
+}
+
+// mulhi is the high 64 bits of the unsigned 128-bit product a * b.
+func mulhi(a i64, b i64) i64 {
+  var a0 i64 = a & 0xffffffff
+  var a1 i64 = lsr(a, 32)
+  var b0 i64 = b & 0xffffffff
+  var b1 i64 = lsr(b, 32)
+  var a0b1 i64 = a0 * b1
+  var a1b0 i64 = a1 * b0
+  var t i64 = (lsr(a0 * b0, 32) + (a0b1 & 0xffffffff)) + (a1b0 & 0xffffffff)
+  return (((a1 * b1) + lsr(a0b1, 32)) + lsr(a1b0, 32)) + lsr(t, 32)
+}
+
+// mul160 multiplies the 96-bit (a << 32) + alo by b and returns the top 64
+// bits of the 160-bit product; f.lo gets the 32 bits below them.
+func mul160(f *Fmt, a i64, alo i64, b i64) i64 {
+  var x2 i64 = lsr(a, 32)
+  var x1 i64 = a & 0xffffffff
+  var y1 i64 = lsr(b, 32)
+  var y0 i64 = b & 0xffffffff
+  var x2y1 i64 = x2 * y1
+  var x2y0 i64 = x2 * y0
+  var x1y1 i64 = x1 * y1
+  var x1y0 i64 = x1 * y0
+  var x0y1 i64 = alo * y1
+  var r3 i64 = ((x2y1 & 0xffffffff) + lsr(x2y0, 32)) + lsr(x1y1, 32)
+  var r2 i64 = (((x2y0 & 0xffffffff) + (x1y1 & 0xffffffff)) + lsr(x1y0, 32)) + lsr(x0y1, 32)
+  var r1 i64 = ((x1y0 & 0xffffffff) + (x0y1 & 0xffffffff)) + lsr(alo * y0, 32)
+  r2 = r2 + lsr(r1, 32)
+  r3 = r3 + lsr(r2, 32)
+  f.lo = r2 & 0xffffffff
+  return (lsr(x2y1, 32) << 32) + r3
+}
+
+// pow10hi is the most significant 64 bits of 10^p, for p from -348 to
+// 347: from the base table for 0 to 26, else a scale entry (every 27th
+// power) times a base entry.
+func pow10hi(f *Fmt, p i64) i64 {
+  var g i64 = p / 27
+  var n i64 = p % 27
+  if p < 0 {
+    if p == -1 {
+      return load64(f.scale + (13 * 8))
+    }
+    if n != 0 {
+      g = g - 1
+      n = n + 27
+    }
+  } else if p < 27 {
+    return load64(f.base + (p * 8))
+  }
+  var s i64 = load64(f.scale + ((g + 13) * 8))
+  if n == 0 {
+    return s
+  }
+  var x i64 = mul160(f, s, load64(f.scalelo + ((g + 13) * 8)), load64(f.base + (n * 8)))
+  if x >= 0 {
+    x = (x << 1) | ((f.lo >> 31) & 1)
+  }
+  return x
+}
+
+// tables fills base (10^0 to 10^26), scale (10^-351 to 10^324 by 27s, and
+// 10^-1 at 13), and scalelo (the next 32 bits of each scale entry): the
+// values of aBase, aScale, and aScaleLo in sqlite3's util.c.
+func tables(f *Fmt) i64 {
+  store64(f.base + 0, u64(0x80000000, 0x00000000))
+  store64(f.base + 8, u64(0xa0000000, 0x00000000))
+  store64(f.base + 16, u64(0xc8000000, 0x00000000))
+  store64(f.base + 24, u64(0xfa000000, 0x00000000))
+  store64(f.base + 32, u64(0x9c400000, 0x00000000))
+  store64(f.base + 40, u64(0xc3500000, 0x00000000))
+  store64(f.base + 48, u64(0xf4240000, 0x00000000))
+  store64(f.base + 56, u64(0x98968000, 0x00000000))
+  store64(f.base + 64, u64(0xbebc2000, 0x00000000))
+  store64(f.base + 72, u64(0xee6b2800, 0x00000000))
+  store64(f.base + 80, u64(0x9502f900, 0x00000000))
+  store64(f.base + 88, u64(0xba43b740, 0x00000000))
+  store64(f.base + 96, u64(0xe8d4a510, 0x00000000))
+  store64(f.base + 104, u64(0x9184e72a, 0x00000000))
+  store64(f.base + 112, u64(0xb5e620f4, 0x80000000))
+  store64(f.base + 120, u64(0xe35fa931, 0xa0000000))
+  store64(f.base + 128, u64(0x8e1bc9bf, 0x04000000))
+  store64(f.base + 136, u64(0xb1a2bc2e, 0xc5000000))
+  store64(f.base + 144, u64(0xde0b6b3a, 0x76400000))
+  store64(f.base + 152, u64(0x8ac72304, 0x89e80000))
+  store64(f.base + 160, u64(0xad78ebc5, 0xac620000))
+  store64(f.base + 168, u64(0xd8d726b7, 0x177a8000))
+  store64(f.base + 176, u64(0x87867832, 0x6eac9000))
+  store64(f.base + 184, u64(0xa968163f, 0x0a57b400))
+  store64(f.base + 192, u64(0xd3c21bce, 0xcceda100))
+  store64(f.base + 200, u64(0x84595161, 0x401484a0))
+  store64(f.base + 208, u64(0xa56fa5b9, 0x9019a5c8))
+  store64(f.scale + 0, u64(0x8049a4ac, 0x0c5811ae))
+  store64(f.scale + 8, u64(0xcf42894a, 0x5dce35ea))
+  store64(f.scale + 16, u64(0xa76c5823, 0x38ed2621))
+  store64(f.scale + 24, u64(0x873e4f75, 0xe2224e68))
+  store64(f.scale + 32, u64(0xda7f5bf5, 0x90966848))
+  store64(f.scale + 40, u64(0xb080392c, 0xc4349dec))
+  store64(f.scale + 48, u64(0x8e938662, 0x882af53e))
+  store64(f.scale + 56, u64(0xe65829b3, 0x046b0afa))
+  store64(f.scale + 64, u64(0xba121a46, 0x50e4ddeb))
+  store64(f.scale + 72, u64(0x964e858c, 0x91ba2655))
+  store64(f.scale + 80, u64(0xf2d56790, 0xab41c2a2))
+  store64(f.scale + 88, u64(0xc428d05a, 0xa4751e4c))
+  store64(f.scale + 96, u64(0x9e74d1b7, 0x91e07e48))
+  store64(f.scale + 104, u64(0xcccccccc, 0xcccccccc))
+  store64(f.scale + 112, u64(0xcecb8f27, 0xf4200f3a))
+  store64(f.scale + 120, u64(0xa70c3c40, 0xa64e6c51))
+  store64(f.scale + 128, u64(0x86f0ac99, 0xb4e8dafd))
+  store64(f.scale + 136, u64(0xda01ee64, 0x1a708de9))
+  store64(f.scale + 144, u64(0xb01ae745, 0xb101e9e4))
+  store64(f.scale + 152, u64(0x8e41ade9, 0xfbebc27d))
+  store64(f.scale + 160, u64(0xe5d3ef28, 0x2a242e81))
+  store64(f.scale + 168, u64(0xb9a74a06, 0x37ce2ee1))
+  store64(f.scale + 176, u64(0x95f83d0a, 0x1fb69cd9))
+  store64(f.scale + 184, u64(0xf24a01a7, 0x3cf2dccf))
+  store64(f.scale + 192, u64(0xc3b83581, 0x09e84f07))
+  store64(f.scale + 200, u64(0x9e19db92, 0xb4e31ba9))
+  store64(f.scalelo + 0, 0x205b896d)
+  store64(f.scalelo + 8, 0x52064cad)
+  store64(f.scalelo + 16, 0xaf2af2b8)
+  store64(f.scalelo + 24, 0x5a7744a7)
+  store64(f.scalelo + 32, 0xaf39a475)
+  store64(f.scalelo + 40, 0xbd8d794e)
+  store64(f.scalelo + 48, 0x547eb47b)
+  store64(f.scalelo + 56, 0x0cb4a5a3)
+  store64(f.scalelo + 64, 0x92f34d62)
+  store64(f.scalelo + 72, 0x3a6a07f9)
+  store64(f.scalelo + 80, 0xfae27299)
+  store64(f.scalelo + 88, 0xaa97e14c)
+  store64(f.scalelo + 96, 0x775ea265)
+  store64(f.scalelo + 104, 0xcccccccc)
+  store64(f.scalelo + 112, 0x00000000)
+  store64(f.scalelo + 120, 0x999090b6)
+  store64(f.scalelo + 128, 0x69a028bb)
+  store64(f.scalelo + 136, 0xe80e6f48)
+  store64(f.scalelo + 144, 0x5ec05dd0)
+  store64(f.scalelo + 152, 0x14588f14)
+  store64(f.scalelo + 160, 0x8f1668c9)
+  store64(f.scalelo + 168, 0x6d953e2c)
+  store64(f.scalelo + 176, 0x4abdaf10)
+  store64(f.scalelo + 184, 0xbc633b39)
+  store64(f.scalelo + 192, 0x0a862f81)
+  store64(f.scalelo + 200, 0x6c07a2c2)
+  return 0
+}
+
+// set makes b equal v (v >= 0).
+func set(b *Big, v i64) i64 {
+  b.n = 0
+  while v > 0 || b.n == 0 {
+    store64(b.limbs + (b.n * 8), v % Base)
+    b.n = b.n + 1
+    v = v / Base
+  }
+  return 0
+}
+
+// mul multiplies b by m (0 < m <= Base, so the carry stays a limb).
+func mul(b *Big, m i64) i64 {
+  var carry i64 = 0
+  var i i64 = 0
+  while i < b.n {
+    var t i64 = (load64(b.limbs + (i * 8)) * m) + carry
+    store64(b.limbs + (i * 8), t % Base)
+    carry = t / Base
+    i = i + 1
+  }
+  if carry > 0 {
+    store64(b.limbs + (b.n * 8), carry)
+    b.n = b.n + 1
+  }
+  return 0
+}
+
+// pow2 multiplies b by 2^k.
+func pow2(b *Big, k i64) i64 {
+  while k >= 29 {
+    mul(b, 1 << 29)
+    k = k - 29
+  }
+  if k > 0 {
+    mul(b, 1 << k)
+  }
+  return 0
+}
+
+// pow10 multiplies b by 10^k.
+func pow10(b *Big, k i64) i64 {
+  while k >= 9 {
+    mul(b, Base)
+    k = k - 9
+  }
+  while k > 0 {
+    mul(b, 10)
+    k = k - 1
+  }
+  return 0
+}
+
+// cmp is -1, 0, or 1 as a is below, equal to, or above b.
+func cmp(a *Big, b *Big) i64 {
+  if a.n != b.n {
+    if a.n < b.n {
+      return -1
+    }
+    return 1
+  }
+  var i i64 = a.n - 1
+  while i >= 0 {
+    var x i64 = load64(a.limbs + (i * 8))
+    var y i64 = load64(b.limbs + (i * 8))
+    if x < y {
+      return -1
+    }
+    if x > y {
+      return 1
+    }
+    i = i - 1
+  }
+  return 0
+}
+
+// sub sets a to a - b; a must not be below b.
+func sub(a *Big, b *Big) i64 {
+  var borrow i64 = 0
+  var i i64 = 0
+  while i < a.n {
+    var t i64 = load64(a.limbs + (i * 8)) - borrow
+    if i < b.n {
+      t = t - load64(b.limbs + (i * 8))
+    }
+    borrow = 0
+    if t < 0 {
+      t = t + Base
+      borrow = 1
+    }
+    store64(a.limbs + (i * 8), t)
+    i = i + 1
+  }
+  while a.n > 1 && load64(a.limbs + ((a.n - 1) * 8)) == 0 {
+    a.n = a.n - 1
+  }
+  return 0
+}
+
+func lit(dst i64, o i64, s i64) i64 {
+  var i i64 = 0
+  while load8(s + i) != 0 {
+    store8((dst + o) + i, load8(s + i))
+    i = i + 1
+  }
+  return o + i
+}
+
+// roundTrips reports whether the decimal v * 10^e10 reads back as the
+// double m * 2^e2 (m the 53-bit mantissa), i.e. lies within half a unit in
+// the last place of it, ties going to an even mantissa. Everything is
+// scaled to integers in units of a quarter of that last place.
+func roundTrips(f *Fmt, m i64, e2 i64, v i64, e10 i64) bool {
+  var g i64 = e2 - 2
+  set(f.a, m * 4)
+  set(f.b, v)
+  set(f.q, 1)
+  if g > 0 {
+    pow2(f.a, g)
+    pow2(f.q, g)
+  } else {
+    pow2(f.b, 0 - g)
+  }
+  if e10 < 0 {
+    pow10(f.a, 0 - e10)
+    pow10(f.q, 0 - e10)
+  } else {
+    pow10(f.b, e10)
+  }
+  var c i64 = cmp(f.a, f.b)
+  if c == 0 {
+    return true
+  }
+  var diff *Big = f.a
+  if c > 0 {
+    sub(f.a, f.b)
+  } else {
+    sub(f.b, f.a)
+    diff = f.b
+  }
+  // Below a power of two the doubles are twice as dense, so the decimal
+  // may only be a quarter of a place under it.
+  if !(c > 0 && m == (1 << 52) && e2 > -1074) {
+    mul(f.q, 2)
+  }
+  c = cmp(diff, f.q)
+  if c == 0 {
+    return (m & 1) == 0
+  }
+  return c < 0
+}
+
+// prefix is the first n digits as an integer.
+func prefix(f *Fmt, n i64) i64 {
+  var v i64 = 0
+  var i i64 = 0
+  while i < n {
+    v = (v * 10) + (load8(f.digits + i) - 48)
+    i = i + 1
+  }
+  return v
+}
+
+// roundAt cuts the digits to n, rounding half up on digit n. It returns 1
+// when the carry ran off the front (the digits are then 1 and zeros, and
+// the value's exponent is one higher), else 0.
+func roundAt(f *Fmt, n i64) i64 {
+  var d i64 = f.digits
+  if load8(d + n) < 53 {
+    return 0
+  }
+  var i i64 = n - 1
+  while i >= 0 && load8(d + i) == 57 {
+    store8(d + i, 48)
+    i = i - 1
+  }
+  if i >= 0 {
+    store8(d + i, load8(d + i) + 1)
+    return 0
+  }
+  store8(d, 49)
+  return 1
+}
+
+// FormatInt writes the integer v as the REAL it stands for: sqlite3 stores
+// a whole-number REAL as an integer and prints it as a real.
+func FormatInt(f *Fmt, dst i64, v i64) i64 {
+  var a i64 = v
+  if v < 0 {
+    a = 0 - v
+  }
+  if a == 0 {
+    return lit(dst, 0, strptr("0.0"))
+  }
+  var top i64 = 62
+  while (a >> top) == 0 {
+    top = top - 1
+  }
+  var frac i64 = a
+  if top > 52 {
+    frac = a >> (top - 52)
+  } else {
+    frac = a << (52 - top)
+  }
+  var bits i64 = ((1023 + top) << 52) | (frac & 0xfffffffffffff)
+  if v < 0 {
+    bits = bits | (1 << 63)
+  }
+  return Format(f, dst, bits)
+}
+
+// Format writes the double whose bits are given at dst (40 bytes are
+// enough) and returns the length.
+func Format(f *Fmt, dst i64, bits i64) i64 {
+  var exp i64 = (bits >> 52) & 0x7ff
+  var m i64 = bits & 0xfffffffffffff
+  var o i64 = 0
+  if exp == 0x7ff {
+    if m != 0 {
+      return lit(dst, 0, strptr("NaN"))
+    }
+    if bits < 0 {
+      return lit(dst, 0, strptr("-Inf"))
+    }
+    return lit(dst, 0, strptr("Inf"))
+  }
+  var e i64 = -1074
+  if exp != 0 {
+    m = m | (1 << 52)
+    e = exp - 1075
+  }
+  if m == 0 {
+    return lit(dst, 0, strptr("0.0"))
+  }
+  if bits < 0 {
+    store8(dst, 45)
+    o = 1
+  }
+  // v * 2^ve is the value with the mantissa's top bit at bit 63.
+  var v i64 = m
+  var ve i64 = e
+  while v > 0 {
+    v = v << 1
+    ve = ve - 1
+  }
+  // dec is the value times 10^p, rounded: 18 or 19 digits.
+  var p i64 = 17 - (((ve + 63) * 78913) >> 18)
+  var h i64 = lsr(mulhi(v, pow10hi(f, p)), 0 - ((ve + ((p * 108853) >> 15)) + 2))
+  var dec i64 = lsr(h + ((h << 1) & 2), 1)
+  var n i64 = 18
+  if dec >= 1000000000000000000 {
+    n = 19
+  }
+  var d i64 = f.digits
+  var i i64 = n - 1
+  while i >= 0 {
+    store8(d + i, 48 + (dec % 10))
+    dec = dec / 10
+    i = i - 1
+  }
+  // x is the decimal exponent of the first digit.
+  var x i64 = (n - p) - 1
+  // Cut to 17 digits, or to fewer when the digits end in a run of 9s or
+  // 0s and the shorter decimal still reads back as this double.
+  var cut i64 = 17
+  var jj i64 = 14
+  if load8(d + 15) == 57 && load8(d + 14) == 57 {
+    while jj > 0 && load8((d + jj) - 1) == 57 {
+      jj = jj - 1
+    }
+    var up i64 = 1
+    if jj > 0 {
+      up = prefix(f, jj) + 1
+    }
+    if roundTrips(f, m, e, up, (x + 1) - jj) {
+      cut = jj + 1
+    }
+  } else if (x + 1) >= n || (load8(d + 15) == 48 && load8(d + 14) == 48 && load8(d + 13) == 48) {
+    jj = 13
+    while load8((d + jj) - 1) == 48 {
+      jj = jj - 1
+    }
+    if roundTrips(f, m, e, prefix(f, jj), (x + 1) - jj) {
+      cut = jj + 1
+    }
+  }
+  x = x + roundAt(f, cut)
+  var nd i64 = cut
+  while nd > 1 && load8((d + nd) - 1) == 48 {
+    nd = nd - 1
+  }
+  if x < -4 || x > 16 {
+    store8(dst + o, load8(d))
+    store8((dst + o) + 1, 46)
+    o = o + 2
+    if nd == 1 {
+      store8(dst + o, 48)
+      o = o + 1
+    }
+    i = 1
+    while i < nd {
+      store8(dst + o, load8(d + i))
+      o = o + 1
+      i = i + 1
+    }
+    store8(dst + o, 101)
+    store8((dst + o) + 1, 43)
+    if x < 0 {
+      store8((dst + o) + 1, 45)
+      x = 0 - x
+    }
+    o = o + 2
+    if x >= 100 {
+      store8(dst + o, 48 + (x / 100))
+      o = o + 1
+    }
+    store8(dst + o, 48 + ((x / 10) % 10))
+    store8((dst + o) + 1, 48 + (x % 10))
+    return o + 2
+  }
+  if x < 0 {
+    o = lit(dst, o, strptr("0."))
+    while x < -1 {
+      store8(dst + o, 48)
+      o = o + 1
+      x = x + 1
+    }
+    i = 0
+    while i < nd {
+      store8(dst + o, load8(d + i))
+      o = o + 1
+      i = i + 1
+    }
+    return o
+  }
+  // Fixed notation: x + 1 digits before the point, zero-filled past nd.
+  i = 0
+  while i <= x || i < nd {
+    if i == (x + 1) {
+      store8(dst + o, 46)
+      o = o + 1
+    }
+    if i < nd {
+      store8(dst + o, load8(d + i))
+    } else {
+      store8(dst + o, 48)
+    }
+    o = o + 1
+    i = i + 1
+  }
+  if nd <= (x + 1) {
+    o = lit(dst, o, strptr(".0"))
+  }
+  return o
+}
