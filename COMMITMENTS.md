@@ -66,7 +66,9 @@ check-time flow rule ("use only the handles your parameters carry") cannot
 close that, caught nothing in `prog/` and `std/` that typing does not, and
 would cost 160–220 lines in two checkers; it is not built. The boundary for
 distrusted code is a process (the receipt sandbox, #75 workers), not the
-type system, until #8.
+type system, until #220 decides otherwise. The network is #221, the `Cap`
+split #222, the sandbox that follows the grant #223, and the agent
+experiment that gates any further checker rule #224.
 
 Why: measured on main at fb595e3 (2026-10-07, on starship, before #214).
 Then 18 of `ovid/io`'s 40 funcs reached the kernel with no capability
